@@ -1,5 +1,10 @@
 # Status
 
+The harness build (`docs/PLAN_HARNESS.md`) is under way. Phase 1 is done: the backend has runs with a
+cap, a to-do list per run, failed claims going back in the queue (`needs_handler` after two failures),
+and a check for missed claims before a run finishes. After this change, delete `backend/undercover.db`
+once, because the claims table has a new column.
+
 The claims pilot, built from `docs/PLAN.md`. Phases 1 to 5 are done. In phase 6 the whole-queue run stopped after 10 of the 25 claims, when
 the OpenRouter account ran out of credits; the other 15 claims are still waiting.
 

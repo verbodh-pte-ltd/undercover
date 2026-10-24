@@ -32,8 +32,33 @@ class SignOff(BaseModel):
 
 
 class Step(BaseModel):
-    kind: Literal["tool_call", "tool_result", "reply"]
+    kind: Literal["tool_call", "tool_result", "reply", "error"]
     text: str
+
+
+class RunStart(BaseModel):
+    cap: int = Field(gt=0)
+
+
+class Todo(BaseModel):
+    claim_id: str
+    text: str
+    state: Literal["to_do", "in_progress", "done", "left_for_handler"]
+
+
+class RunFinish(BaseModel):
+    summary: str
+
+
+class ClaimStart(BaseModel):
+    run_id: int
+
+
+class Release(BaseModel):
+    error: str
+
+
+MAX_ATTEMPTS = 2
 
 
 def get_db() -> Iterator[sqlite3.Connection]:
@@ -83,7 +108,41 @@ def claim_view(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         "policy_section": row["policy_section"],
         "paid_amount": row["paid_amount"],
         "signed_off_by": row["signed_off_by"],
+        "attempts": row["attempts"],
     }
+
+
+def run_row(db: sqlite3.Connection, run_id: int) -> sqlite3.Row:
+    """Return the run's row, or raise 404."""
+    row = db.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"Run {run_id} not found")
+    return row
+
+
+def run_view(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+    """A run with its to-do list, its summary and the claims it has started."""
+    started = db.execute(
+        "SELECT claim_id FROM run_claims WHERE run_id = ? ORDER BY rowid",
+        (row["run_id"],),
+    ).fetchall()
+    return {
+        "run_id": row["run_id"],
+        "cap": row["cap"],
+        "todos": json.loads(row["todos"]),
+        "summary": row["summary"],
+        "claims_started": [r["claim_id"] for r in started],
+    }
+
+
+def release(db: sqlite3.Connection, claim_id: str) -> None:
+    """Put a claim back in the queue, or leave it for a handler after two failures."""
+    db.execute(
+        "UPDATE claims SET attempts = attempts + 1,"
+        " status = CASE WHEN attempts + 1 >= ? THEN 'needs_handler' ELSE 'waiting' END"
+        " WHERE claim_id = ?",
+        (MAX_ATTEMPTS, claim_id),
+    )
 
 
 @app.get("/api/health", operation_id="health")
@@ -98,6 +157,16 @@ def list_claims(db: Db) -> list[dict[str, Any]]:
     rows = db.execute("SELECT * FROM claims ORDER BY position").fetchall()
     fields = ["claim_id", "summary", "claim_type", "amount_claimed", "customer_name"]
     fields += ["status", "decision", "payout", "paid_amount"]
+    return [{f: v for f, v in claim_view(db, r).items() if f in fields} for r in rows]
+
+
+@app.get("/api/claims/waiting", operation_id="list_waiting_claims")
+def list_waiting_claims(db: Db) -> list[dict[str, Any]]:
+    """List the waiting claims in queue order, with their failed attempts."""
+    rows = db.execute(
+        "SELECT * FROM claims WHERE status = 'waiting' ORDER BY position"
+    ).fetchall()
+    fields = ["claim_id", "summary", "claim_type", "amount_claimed", "attempts"]
     return [{f: v for f, v in claim_view(db, r).items() if f in fields} for r in rows]
 
 
@@ -137,16 +206,89 @@ def list_handlers() -> list[dict[str, Any]]:
     return store.load("handlers.json")
 
 
-@app.post("/api/claims/{claim_id}/start", operation_id="start_claim")
-def start_claim(claim_id: str, db: Db) -> dict[str, Any]:
-    """Mark a claim as in progress and clear the steps of any earlier run."""
-    if claim_row(db, claim_id)["status"] not in {"waiting", "in_progress"}:
-        raise HTTPException(409, f"Claim {claim_id} has already been decided")
+@app.post("/api/runs", operation_id="start_run")
+def start_run(start: RunStart, db: Db) -> dict[str, Any]:
+    """Start a run capped at a number of claims; stuck claims go back in the queue."""
     with db:
+        stuck = db.execute(
+            "SELECT claim_id FROM claims WHERE status = 'in_progress'"
+        ).fetchall()
+        for row in stuck:
+            release(db, row["claim_id"])
+        run_id = db.execute("INSERT INTO runs (cap) VALUES (?)", (start.cap,)).lastrowid
+    return run_view(db, run_row(db, run_id or 0))
+
+
+@app.get("/api/runs/current", operation_id="get_current_run")
+def get_current_run(db: Db) -> dict[str, Any] | None:
+    """Get the latest run with its to-do list and summary, or null if there is none."""
+    row = db.execute("SELECT * FROM runs ORDER BY run_id DESC LIMIT 1").fetchone()
+    return None if row is None else run_view(db, row)
+
+
+@app.put("/api/runs/{run_id}/todos", operation_id="set_todos")
+def set_todos(run_id: int, todos: list[Todo], db: Db) -> dict[str, Any]:
+    """Replace the run's to-do list with the whole list as it now stands."""
+    run_row(db, run_id)
+    with db:
+        db.execute(
+            "UPDATE runs SET todos = ? WHERE run_id = ?",
+            (json.dumps([t.model_dump() for t in todos]), run_id),
+        )
+    return run_view(db, run_row(db, run_id))
+
+
+@app.post("/api/runs/{run_id}/finish", operation_id="finish_run")
+def finish_run(run_id: int, finish: RunFinish, db: Db) -> dict[str, Any]:
+    """Finish the run with a summary for the handlers, once no claim is missed."""
+    run = run_view(db, run_row(db, run_id))
+    under_cap = len(run["claims_started"]) < run["cap"]
+    waiting = [c["claim_id"] for c in list_waiting_claims(db)]
+    missed = [c for c in waiting if under_cap or c in run["claims_started"]]
+    if missed:
+        raise HTTPException(
+            409, f"These claims are still waiting within the cap: {', '.join(missed)}"
+        )
+    with db:
+        db.execute(
+            "UPDATE runs SET summary = ? WHERE run_id = ?", (finish.summary, run_id)
+        )
+    return run_view(db, run_row(db, run_id))
+
+
+@app.post("/api/claims/{claim_id}/start", operation_id="start_claim")
+def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
+    """Mark a claim as in progress in a run; a first try clears any old steps."""
+    row = claim_row(db, claim_id)
+    if row["status"] not in {"waiting", "in_progress"}:
+        raise HTTPException(409, f"Claim {claim_id} is not waiting")
+    run = run_view(db, run_row(db, start.run_id))
+    started = run["claims_started"]
+    if claim_id not in started and len(started) >= run["cap"]:
+        raise HTTPException(409, f"This run has reached its cap of {run['cap']} claims")
+    with db:
+        db.execute(
+            "INSERT OR IGNORE INTO run_claims VALUES (?, ?)", (start.run_id, claim_id)
+        )
         db.execute(
             "UPDATE claims SET status = 'in_progress' WHERE claim_id = ?", (claim_id,)
         )
-        db.execute("DELETE FROM steps WHERE claim_id = ?", (claim_id,))
+        if row["attempts"] == 0:
+            db.execute("DELETE FROM steps WHERE claim_id = ?", (claim_id,))
+    return get_claim(claim_id, db)
+
+
+@app.post("/api/claims/{claim_id}/release", operation_id="release_claim")
+def release_claim(claim_id: str, failure: Release, db: Db) -> dict[str, Any]:
+    """Release a claim that failed before its decision, recording the error."""
+    if claim_row(db, claim_id)["status"] != "in_progress":
+        raise HTTPException(409, f"Claim {claim_id} is not in progress")
+    with db:
+        db.execute(
+            "INSERT INTO steps (claim_id, kind, text) VALUES (?, 'error', ?)",
+            (claim_id, failure.error),
+        )
+        release(db, claim_id)
     return get_claim(claim_id, db)
 
 
