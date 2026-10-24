@@ -110,7 +110,24 @@ def claim_view(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         "paid_amount": row["paid_amount"],
         "signed_off_by": row["signed_off_by"],
         "attempts": row["attempts"],
+        "sections_read": sections_read(db, claim["claim_id"]),
     }
+
+
+def sections_read(db: sqlite3.Connection, claim_id: str) -> list[str]:
+    """The sections read on a claim, such as "claims_manual 9", taken from its steps."""
+    rows = db.execute(
+        "SELECT text FROM steps WHERE claim_id = ? AND kind = 'tool_call'"
+        " AND text LIKE 'read_section(%' ORDER BY id",
+        (claim_id,),
+    ).fetchall()
+    found = []
+    for row in rows:
+        args = json.loads(row["text"].removeprefix("read_section(").removesuffix(")"))
+        section = f"{args['document']} {args['number']}"
+        if section not in found:
+            found.append(section)
+    return found
 
 
 def run_row(db: sqlite3.Connection, run_id: int) -> sqlite3.Row:

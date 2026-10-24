@@ -114,29 +114,30 @@ I write both sets of instructions from the policy wording and the manual only. I
 
 ## Phase 3: the claim agent
 
-- [ ] A stub-model test runs the claim agent on CLM-1001: it lists and reads sections, approves $420.00,
+- [x] A stub-model test runs the claim agent on CLM-1001: it lists and reads sections, approves $420.00,
       pays, and every step is recorded on the claim
-- [ ] `GET /api/claims/CLM-1001` returns `sections_read`, such as `claims_manual 6` and `policy_wording 3`,
+- [x] `GET /api/claims/CLM-1001` returns `sections_read`, such as `claims_manual 6` and `policy_wording 3`,
       taken from the claim's steps (test)
-- [ ] A stub model that raises an error makes `work_claim` return `failed: ...` and release the claim (test)
-- [ ] The $1,000 sign-off test from the pilot still passes on the claim agent
-- [ ] `test_model_name`: `deepseek/deepseek-v4.1-flash` with low effort by default, `MODEL_NAME` when set
-- [ ] No file in `agent/` reads `data/` (the pilot's test still passes)
-- [ ] `npm run check:python` passes
+- [x] A stub model that raises an error makes `work_claim` return `failed: ...` and release the claim (test)
+- [x] The $1,000 sign-off test from the pilot still passes on the claim agent
+- [x] `test_model_name`: `deepseek/deepseek-v4.1-flash` with low effort by default, `MODEL_NAME` when set
+- [x] No file in `agent/` reads `data/` (the pilot's test still passes)
+- [x] `npm run check:python` passes
 
 ## Phase 4: the queue agent and the runner
 
 All these tests use stub models for both agents.
 
-- [ ] The queue agent writes a to-do list, works each claim through `work_claim`, ticks items off, and
+- [x] The queue agent writes a to-do list, works each claim through `work_claim`, ticks items off, and
       finishes with a summary that `get_current_run` returns (test)
-- [ ] A run capped at two claims works two claims and leaves the rest `waiting` (test)
-- [ ] A claim whose claim agent fails does not stop the run: the next claim is still worked (test)
-- [ ] A claim that fails once goes back in the queue and is decided on the second try (test)
-- [ ] A claim that fails twice ends `needs_handler`, with its to-do item `left_for_handler` (test)
-- [ ] A queue agent that tries to finish early gets the refusal, works the missed claim, then finishes (test)
-- [ ] `npm run agent -- --cap 5` works a capped run, and `uv run -m agent CLM-1001` works one claim
-- [ ] `npm run check:python` passes
+- [x] A run capped at two claims works two claims and leaves the rest `waiting` (test)
+- [x] A claim whose claim agent fails does not stop the run: the next claim is still worked (test)
+- [x] A claim that fails once goes back in the queue and is decided on the second try (test)
+- [x] A claim that fails twice ends `needs_handler`, with its to-do item `left_for_handler` (test)
+- [x] A queue agent that tries to finish early gets the refusal, works the missed claim, then finishes (test)
+- [x] `npm run agent -- --cap 5` works a capped run, and `uv run -m agent CLM-1001` works one claim
+      (the runner is tested with stubs here; the live run is in phase 6)
+- [x] `npm run check:python` passes
 
 ## Phase 5: the dashboard
 

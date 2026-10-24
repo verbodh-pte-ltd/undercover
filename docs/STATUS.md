@@ -1,6 +1,9 @@
 # Status
 
-The harness build (`docs/PLAN_HARNESS.md`) is under way. Phases 1 and 2 are done. The backend has runs with a
+The harness build (`docs/PLAN_HARNESS.md`) is under way. Phases 1 to 4 are done. The agent is now a
+queue agent that plans a run as a to-do list and hands each claim to a fresh claim agent through
+`work_claim`, on DeepSeek V4.1 Flash by default. Run it with `npm run agent -- --cap 5`, or name claims:
+`uv run -m agent CLM-1001`. The backend has runs with a
 cap, a to-do list per run, failed claims going back in the queue (`needs_handler` after two failures),
 and a check for missed claims before a run finishes. The agent reads the policy wording and the claims
 manual by numbered section (`/api/documents/...`), and its instructions are in `backend/instructions/`

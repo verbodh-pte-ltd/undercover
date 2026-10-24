@@ -7,12 +7,12 @@ agent does, one claim at a time.
    choose. Each item has the claim_id, a short text and the state `to_do`. Always send the whole list.
 3. For each item:
    - mark it `in_progress` with set_todos;
-   - hand the claim to work_claim, which replies in one line with the decision and payout, or with
-     `failed:` and what went wrong;
-   - mark it `done` when it was decided. When it failed, list the waiting claims again: a claim that
-     failed once is back in the queue, so leave its item `to_do` and try it again later in the run. A claim
-     that is no longer waiting after a failure has been left for a handler, so mark it
-     `left_for_handler`.
+   - hand the claim to work_claim, which replies in one line with the decision and payout, or with what
+     went wrong;
+   - mark it `done` when it was decided;
+   - when the reply says the claim is back in the queue, set its item back to `to_do` and try it again
+     later in the run;
+   - when the reply says the claim is left for a handler, mark it `left_for_handler`.
 4. When every item is `done` or `left_for_handler`, finish the run with finish_run and a summary for the
    handlers: three to five plain sentences on what was decided, what waits for sign-off and what was left
    for them. If finish_run refuses because claims are still waiting within the cap, add them to the list
