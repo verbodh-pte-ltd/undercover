@@ -13,7 +13,8 @@ from backend import store
 
 app = FastAPI(title="UnderCover")
 
-INSTRUCTIONS = Path(__file__).parent / "instructions.md"
+INSTRUCTIONS = Path(__file__).parent / "instructions"
+DOCUMENTS = {"policy_wording": "policy_wording.md", "claims_manual": "claims_manual.md"}
 
 
 class Decision(BaseModel):
@@ -194,10 +195,41 @@ def get_policy_wording() -> dict[str, str]:
     return {"text": (store.DATA / "policy_wording.md").read_text(encoding="utf-8")}
 
 
+def sections(document: str) -> list[dict[str, str]]:
+    """Split the policy wording or the claims manual into its numbered sections."""
+    if document not in DOCUMENTS:
+        raise HTTPException(404, f"Document {document} not found")
+    text = (store.DATA / DOCUMENTS[document]).read_text(encoding="utf-8")
+    found = []
+    for part in text.split("\n## ")[1:]:
+        heading = part.partition("\n")[0]
+        number, _, title = heading.partition(". ")
+        found.append({"number": number, "title": title, "text": f"## {part.strip()}"})
+    return found
+
+
+@app.get("/api/documents/{document}/sections", operation_id="list_sections")
+def list_sections(document: str) -> list[dict[str, str]]:
+    """List the numbered sections of policy_wording or claims_manual."""
+    return [{"number": s["number"], "title": s["title"]} for s in sections(document)]
+
+
+@app.get("/api/documents/{document}/sections/{number}", operation_id="read_section")
+def read_section(document: str, number: str) -> dict[str, str]:
+    """Read one numbered section of policy_wording or claims_manual."""
+    for section in sections(document):
+        if section["number"] == number:
+            return {"document": document, **section}
+    raise HTTPException(404, f"Section {number} of {document} not found")
+
+
 @app.get("/api/instructions", operation_id="get_instructions")
 def get_instructions() -> dict[str, str]:
-    """Get the UnderCover Agent's instructions."""
-    return {"text": INSTRUCTIONS.read_text(encoding="utf-8")}
+    """Get the agent's instructions for running the queue and for working a claim."""
+    return {
+        name: (INSTRUCTIONS / f"{name}.md").read_text(encoding="utf-8")
+        for name in ["queue", "claim"]
+    }
 
 
 @app.get("/api/handlers", operation_id="list_handlers")
@@ -259,14 +291,17 @@ def finish_run(run_id: int, finish: RunFinish, db: Db) -> dict[str, Any]:
 @app.post("/api/claims/{claim_id}/start", operation_id="start_claim")
 def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
     """Mark a claim as in progress in a run; a first try clears any old steps."""
-    row = claim_row(db, claim_id)
-    if row["status"] not in {"waiting", "in_progress"}:
-        raise HTTPException(409, f"Claim {claim_id} is not waiting")
-    run = run_view(db, run_row(db, start.run_id))
-    started = run["claims_started"]
-    if claim_id not in started and len(started) >= run["cap"]:
-        raise HTTPException(409, f"This run has reached its cap of {run['cap']} claims")
     with db:
+        # One write lock for the checks and writes, so two starts can't pass the cap.
+        db.execute("BEGIN IMMEDIATE")
+        row = claim_row(db, claim_id)
+        if row["status"] not in {"waiting", "in_progress"}:
+            raise HTTPException(409, f"Claim {claim_id} is not waiting")
+        run = run_view(db, run_row(db, start.run_id))
+        started = run["claims_started"]
+        if claim_id not in started and len(started) >= run["cap"]:
+            cap = run["cap"]
+            raise HTTPException(409, f"This run has reached its cap of {cap} claims")
         db.execute(
             "INSERT OR IGNORE INTO run_claims VALUES (?, ?)", (start.run_id, claim_id)
         )

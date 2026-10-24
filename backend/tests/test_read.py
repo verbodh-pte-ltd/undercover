@@ -89,9 +89,38 @@ def test_opening_twice_does_not_reseed():
 
 
 def test_instructions():
-    text = client.get("/api/instructions").json()["text"]
-    assert text == Path("backend/instructions.md").read_text(encoding="utf-8")
-    assert "section 10" in text
+    texts = client.get("/api/instructions").json()
+    assert set(texts) == {"queue", "claim"}
+    for name, text in texts.items():
+        path = Path(f"backend/instructions/{name}.md")
+        assert text == path.read_text(encoding="utf-8")
+    assert "read_section" in texts["claim"]
+    assert "claims_manual" in texts["claim"]
+    assert "set_todos" in texts["queue"]
+    assert "work_claim" in texts["queue"]
+    assert "finish_run" in texts["queue"]
+
+
+def test_list_sections():
+    manual = client.get("/api/documents/claims_manual/sections").json()
+    assert len(manual) == 14
+    assert manual[8] == {"number": "9", "title": "Repeat claims"}
+    wording = client.get("/api/documents/policy_wording/sections").json()
+    assert len(wording) == 12
+    assert wording[2] == {"number": "3", "title": "Trip Delay"}
+
+
+def test_read_section():
+    section = client.get("/api/documents/claims_manual/sections/9").json()
+    assert section["title"] == "Repeat claims"
+    assert section["text"].startswith("## 9. Repeat claims")
+    assert "third claim" in section["text"]
+    assert "Meals without receipts" not in section["text"]
+
+
+def test_unknown_document_or_section_is_404():
+    assert client.get("/api/documents/evals/sections").status_code == 404
+    assert client.get("/api/documents/claims_manual/sections/99").status_code == 404
 
 
 def test_connection_works_across_threads():

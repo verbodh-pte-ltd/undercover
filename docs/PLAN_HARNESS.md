@@ -102,15 +102,15 @@ I write both sets of instructions from the policy wording and the manual only. I
 
 ## Phase 2: documents by section, two sets of instructions and the spec
 
-- [ ] `list_sections` for `claims_manual` returns its 14 numbered sections, and for `policy_wording` its 12 (test)
-- [ ] `read_section` for `claims_manual` section 9 returns "Repeat claims" and nothing from section 10 (test)
-- [ ] An unknown document or section returns 404 (test)
-- [ ] `GET /api/instructions` returns `queue` and `claim` texts from `backend/instructions/` (test)
-- [ ] The claim instructions tell the agent to look up the manual and the wording by section, and the
+- [x] `list_sections` for `claims_manual` returns its 14 numbered sections, and for `policy_wording` its 12 (test)
+- [x] `read_section` for `claims_manual` section 9 returns "Repeat claims" and nothing from section 10 (test)
+- [x] An unknown document or section returns 404 (test)
+- [x] `GET /api/instructions` returns `queue` and `claim` texts from `backend/instructions/` (test)
+- [x] The claim instructions tell the agent to look up the manual and the wording by section, and the
       queue instructions describe the to-do list, `work_claim`, retries and the final check
-- [ ] `docs/SPEC.md` takes the claims manual out of "Not for now" and says decisions follow the wording
+- [x] `docs/SPEC.md` takes the claims manual out of "Not for now" and says decisions follow the wording
       and the manual
-- [ ] `npm run check:python` passes
+- [x] `npm run check:python` passes
 
 ## Phase 3: the claim agent
 

@@ -125,7 +125,7 @@ def run(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
         run_id = client.post("/api/runs", json={"cap": 1}).json()["run_id"]
         start = client.post(f"/api/claims/{claim_id}/start", json={"run_id": run_id})
         start.raise_for_status()
-        instructions = client.get("/api/instructions").json()["text"]
+        instructions = client.get("/api/instructions").json()["claim"]
         agent = create_agent(llm or model(), tools=TOOLS, system_prompt=instructions)
         reply = ""
         for update in agent.stream(
