@@ -179,7 +179,18 @@ def test_claim_agent_that_stops_without_a_decision_is_released():
 
 
 def test_work_claim_on_an_unknown_claim():
-    assert main.work_claim("CLM-0000", new_run(1), stub()).startswith("failed:")
+    assert main.work_claim("CLM-0000", new_run(1), stub()).startswith("not started:")
+
+
+def test_refused_start_leaves_another_runs_claim_alone():
+    other, run_id = new_run(1), new_run(1)
+    client.post("/api/claims/CLM-1001/start", json={"run_id": other})
+    client.post("/api/claims/CLM-1002/start", json={"run_id": run_id})
+    reply = main.work_claim("CLM-1001", run_id, stub())
+    assert reply.startswith("not started:")
+    assert "cap of 1" in reply
+    result = claim("CLM-1001")
+    assert (result["status"], result["attempts"]) == ("in_progress", 0)
 
 
 def test_queue_agent_works_the_queue():

@@ -123,8 +123,12 @@ def sections_read(db: sqlite3.Connection, claim_id: str) -> list[str]:
     ).fetchall()
     found = []
     for row in rows:
-        args = json.loads(row["text"].removeprefix("read_section(").removesuffix(")"))
-        section = f"{args['document']} {args['number']}"
+        # The step holds the model's own arguments, which can be malformed.
+        try:
+            args = json.loads(row["text"].removeprefix("read_section(")[:-1])
+            section = f"{args['document']} {args['number']}"
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
         if section not in found:
             found.append(section)
     return found

@@ -148,11 +148,9 @@ def steps(message: BaseMessage) -> list[dict[str, str]]:
     return found
 
 
-def run(claim_id: str, run_id: int, llm: BaseChatModel | None = None) -> str:
-    """Run a fresh claim agent on one claim, record each step, and return its reply."""
+def run(claim_id: str, llm: BaseChatModel | None = None) -> str:
+    """Run a fresh claim agent on a started claim and record each step."""
     with backend() as client:
-        start = client.post(f"/api/claims/{claim_id}/start", json={"run_id": run_id})
-        start.raise_for_status()
         instructions = client.get("/api/instructions").json()["claim"]
         agent = create_agent(
             llm or model(),
@@ -176,17 +174,18 @@ def run(claim_id: str, run_id: int, llm: BaseChatModel | None = None) -> str:
 
 def work_claim(claim_id: str, run_id: int, llm: BaseChatModel | None = None) -> str:
     """Work one claim on a fresh claim agent and say in one line how it went."""
+    with backend() as client:
+        start = client.post(f"/api/claims/{claim_id}/start", json={"run_id": run_id})
+    if not start.is_success:
+        return f"not started: {start.text}"
     error = "the claim agent stopped without a decision"
     reply = ""
     try:
-        reply = run(claim_id, run_id, llm)
+        reply = run(claim_id, llm)
     except Exception as exc:  # one bad claim must never stop the run
         error = f"{type(exc).__name__}: {exc}"[:RESULT_PREVIEW]
     with backend() as client:
-        response = client.get(f"/api/claims/{claim_id}")
-        if not response.is_success:
-            return f"failed: {error}"
-        claim = response.json()
+        claim = client.get(f"/api/claims/{claim_id}").json()
         if claim["status"] == "in_progress":
             release = {"error": error}
             claim = client.post(f"/api/claims/{claim_id}/release", json=release).json()

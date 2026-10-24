@@ -123,6 +123,20 @@ def test_finish_refuses_while_claims_are_missed():
     assert client.get("/api/runs/current").json()["summary"] == "Done."
 
 
+def test_sections_read_skips_malformed_steps():
+    for text in [
+        'read_section({"document": "claims_manual", "number": "9"})',
+        'read_section({"document": "claims_manual"})',
+        "read_section(not json)",
+    ]:
+        step = {"kind": "tool_call", "text": text}
+        client.post("/api/claims/CLM-1001/steps", json=step)
+    assert client.get("/api/claims/CLM-1001").json()["sections_read"] == [
+        "claims_manual 9"
+    ]
+    assert client.get("/api/claims").status_code == 200
+
+
 def test_finish_refuses_a_released_claim_in_the_run():
     run_id = new_run(1)["run_id"]
     start("CLM-1001", run_id)
