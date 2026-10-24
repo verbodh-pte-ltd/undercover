@@ -41,13 +41,15 @@ single-file run fail on coverage; pass `--no-cov` when running one test.
 - **Backend** (`backend/main.py`): FastAPI, with SQLite as the planned store. Every route has an
   `operation_id`, a one-line docstring and no optional inputs, because those become the agent's tool
   names and descriptions. Paying a claim is its own operation that takes the amount.
-- **Agent**: LangChain `create_agent` on OpenRouter through `ChatOpenAI`. The entry point is
-  `run(claim_id, thread_id, llm=None)`. The model is `MODEL_NAME` if set (for example
-  `openrouter/free`), else `openai/gpt-6-luna` with low reasoning effort. Needs `OPENROUTER_API_KEY`
-  in `.env`.
+- **Agent**: LangChain `create_agent` on OpenRouter through `ChatOpenAI`, as two agents.
+  `run_queue(cap, llm=None, claim_llm=None)` runs the queue agent; its `work_claim` tool calls
+  `work_claim(claim_id, run_id, llm=None)`, which starts the claim and runs a fresh claim agent on it.
+  The model is `MODEL_NAME` if set (for example `openrouter/free`), else `deepseek/deepseek-v4.1-flash`
+  with low reasoning effort. Needs `OPENROUTER_API_KEY` in `.env`.
 - **Test pattern.** Tests never call a model. `agent/tests/test_agent.py` shows the pattern to copy:
-  a `GenericFakeChatModel` subclass with scripted `AIMessage` replies passed as `llm`, and
-  `main.backend` monkeypatched to a FastAPI `TestClient(app)` so tools hit the real app in process.
+  a `GenericFakeChatModel` subclass fed a `Script` of `AIMessage` replies (an exception in the script
+  is raised as a model error), and `main.backend` monkeypatched to a FastAPI `TestClient(app)` so tools
+  hit the real app in process.
 - **Data.** `data/` is the business data the backend loads from. `data/evals/` is the answer key:
   the agent must never see it, and do not open it unless asked. `context/` is used from Week 3 Day 3.
 - **Python layout.** One root `pyproject.toml` for `backend/`, `agent/` and the notebooks in `labs/`.

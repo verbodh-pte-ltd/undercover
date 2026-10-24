@@ -148,22 +148,24 @@ All these tests use stub models for both agents.
 - [x] The instructions page shows the queue instructions and the claim instructions, read only (vitest)
 - [x] An e2e test drives a run through the API (no model): it starts a run, sets a to-do list, and sees
       it on the queue page without a reload
-- [ ] In the browser (Chrome DevTools MCP), light and dark mode: the run panel, the new chip and the
+- [x] In the browser (Chrome DevTools MCP), light and dark mode: the run panel, the new chip and the
       sections read look right
+      (checked with screenshots from Playwright's Chromium during the live run, as Chrome DevTools could
+      not connect to Chrome)
 - [x] `npm run check:ts` and `npm run e2e` pass, coverage at or above 80%
 
 ## Phase 6: a live run and the hand-over
 
 This is the only phase that calls the real model. It costs a few cents on DeepSeek V4.1 Flash.
 
-- [ ] Delete `backend/undercover.db`, start `npm run dev`, and run `npm run agent -- --cap 5`
-- [ ] In the browser, the to-do list fills in and is ticked off, and each claim's steps show the sections
+- [x] Delete `backend/undercover.db`, start `npm run dev`, and run `npm run agent -- --cap 5`
+- [x] In the browser, the to-do list fills in and is ticked off, and each claim's steps show the sections
       it read
-- [ ] Five claims end `decided`, `waiting_for_sign_off` or `needs_handler`, and the other 20 stay
+- [x] Five claims end `decided`, `waiting_for_sign_off` or `needs_handler`, and the other 20 stay
       `waiting` (checked with `GET /api/claims`)
-- [ ] The run's summary is on the queue page
-- [ ] `docs/TECH_STACK.md` and `docs/STATUS.md` describe the product as it now is
-- [ ] `npm run check` passes in full
+- [x] The run's summary is on the queue page
+- [x] `docs/TECH_STACK.md` and `docs/STATUS.md` describe the product as it now is
+- [x] `npm run check` passes in full
 
 ## Not in this build
 

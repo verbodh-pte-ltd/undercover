@@ -1,35 +1,45 @@
 # Status
 
-The harness build (`docs/PLAN_HARNESS.md`) is under way. Phases 1 to 4 are done. The agent is now a
-queue agent that plans a run as a to-do list and hands each claim to a fresh claim agent through
-`work_claim`, on DeepSeek V4.1 Flash by default. Run it with `npm run agent -- --cap 5`, or name claims:
-`uv run -m agent CLM-1001`. The backend has runs with a
-cap, a to-do list per run, failed claims going back in the queue (`needs_handler` after two failures),
-and a check for missed claims before a run finishes. The agent reads the policy wording and the claims
-manual by numbered section (`/api/documents/...`), and its instructions are in `backend/instructions/`
-(`queue.md` and `claim.md`). After this change, delete `backend/undercover.db` once, because the claims
-table has a new column.
-
-The claims pilot, built from `docs/PLAN.md`. Phases 1 to 5 are done. In phase 6 the whole-queue run stopped after 10 of the 25 claims, when
-the OpenRouter account ran out of credits; the other 15 claims are still waiting.
+The claims pilot (`docs/PLAN.md`) and the agent's harness (`docs/PLAN_HARNESS.md`) are built. In the
+harness's live run, capped at five claims on DeepSeek V4.1 Flash, the agent planned and worked five
+claims on its own: four decided and paid, one approved at $3,750 and waiting for sign-off. The other 20
+claims stayed waiting.
 
 - `backend/`: FastAPI on SQLite. `backend/store.py` creates `backend/undercover.db` (or the file in
   `UNDERCOVER_DB`) and seeds it from `data/` on first start: the 25 claims, the policies and the
-  customers. Read routes for claims, policies, claim history, the policy wording and the handlers,
-  and the write routes: start a claim, record steps, record a decision, pay and sign off. A payout
-  over $1,000 (`payout_approval_limit` in `data/company.json`) is refused until a handler signs off,
-  and sign-off pays it.
-- `backend/instructions.md`: the agent's instructions, served by `GET /api/instructions`.
-- `agent/`: the UnderCover Agent. Six tools (`get_claim`, `get_policy`, `get_claim_history`,
-  `get_policy_wording`, `record_decision`, `pay_claim`) that call the backend over HTTP. `run()`
-  starts the claim and posts each step to the backend. It has no sign-off tool.
-- `dashboard/`: the claims desk. The queue (`#/`) with a count per state, each claim in full
-  (`#/claims/CLM-1001`) with its decision, reasons, the agent's steps, the policy and earlier claims,
-  and the agent's instructions read only (`#/instructions`). Light and dark mode. A claim's page
-  checks for new steps every two seconds until the claim is decided, and the queue refreshes every five
-  seconds. A claim waiting for sign-off has a handler picker and a button that signs off and pays.
-- `e2e/`: Playwright tests on their own servers (backend :8001, dashboard :5174) and their own
-  database, `e2e/e2e.db`, which is deleted at the start of each run.
+  customers.
+  - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
+    wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
+  - Write routes: start a claim inside a run, record steps, record a decision, pay, sign off, and
+    release a claim that failed.
+  - Runs: `POST /api/runs` starts a run with a cap, `GET /api/runs/current` returns the latest run with
+    its to-do list and summary. The backend refuses a claim beyond the cap, and refuses to finish a run
+    while a claim is still waiting within the cap.
+  - A claim that fails before its decision goes back to `waiting`; after two failures it is
+    `needs_handler`. Claims stuck `in_progress` go back in the queue when a run starts.
+  - A payout over $1,000 (`payout_approval_limit` in `data/company.json`) is refused until a handler
+    signs off, and sign-off pays it.
+- `backend/instructions/`: `queue.md` for running the queue and `claim.md` for working a claim, served
+  by `GET /api/instructions`.
+- `agent/`: the UnderCover Agent.
+  - The queue agent has four tools (`list_waiting_claims`, `set_todos`, `work_claim`, `finish_run`).
+  - `work_claim` starts the claim and runs a fresh claim agent on it. On any error it releases the
+    claim and replies in one line, so one bad claim never stops the run.
+  - The claim agent has seven tools (`get_claim`, `get_policy`, `get_claim_history`, `list_sections`,
+    `read_section`, `record_decision`, `pay_claim`) and posts each step to its claim. It has no sign-off
+    tool.
+  - Model calls retry twice with backoff and time out after 60 seconds.
+- `dashboard/`: the claims desk.
+  - The queue (`#/`) has a count per state and the current run: its to-do list with each item's state,
+    and the summary when it finishes.
+  - Each claim (`#/claims/CLM-1001`) shows its decision, reasons, the agent's steps, the sections it
+    read, the policy and earlier claims.
+  - The instructions page (`#/instructions`) shows both sets of instructions, read only.
+  - Light and dark mode. A claim's page checks for new steps every two seconds until the claim is
+    decided, and the queue refreshes every five seconds. A claim waiting for sign-off has a handler
+    picker and a button that signs off and pays.
+- `e2e/`: Playwright tests, one at a time, on their own servers (backend :8001, dashboard :5174) and
+  their own database, `e2e/e2e.db`, which is deleted at the start of each run.
 
 ## Run it
 
@@ -37,15 +47,19 @@ the OpenRouter account ran out of credits; the other 15 claims are still waiting
 npm run dev      # backend on :8000, dashboard on :5173
 ```
 
-With the backend running, work the queue (every waiting claim) or chosen claims:
+With the backend running, start a run. With no cap it works every waiting claim:
 
 ```bash
-npm run agent              # or: uv run -m agent CLM-1001 CLM-1002
+npm run agent -- --cap 5   # a trial on five claims
+npm run agent              # every waiting claim
+uv run -m agent CLM-1001   # named claims only, without the queue agent
 ```
 
-The model is `openai/gpt-6-luna`, or `MODEL_NAME` from `.env` (such as `openrouter/free`).
+The model is `deepseek/deepseek-v4.1-flash` with low reasoning effort, or `MODEL_NAME` from `.env` (such
+as `openrouter/free`).
 
-To reset the data, stop the backend and delete `backend/undercover.db`.
+To reset the data, stop the backend and delete `backend/undercover.db`. A database from before the
+harness build needs this once, because the claims table has a new column.
 
 ## Check it
 
@@ -56,4 +70,5 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 ## Not built yet
 
 - Scoring the agent against `data/evals/`. The answer key stays unopened until that build.
-- The claims manual, sign-in, real payments and messages to customers, as `docs/SPEC.md` says.
+- Claim agents in parallel, and starting a run from the dashboard.
+- Sign-in, real payments and messages to customers, as `docs/SPEC.md` says.
