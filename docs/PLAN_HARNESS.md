@@ -141,16 +141,16 @@ All these tests use stub models for both agents.
 
 ## Phase 5: the dashboard
 
-- [ ] The queue page shows the current run: its cap, the to-do list with each item's state, and the
+- [x] The queue page shows the current run: its cap, the to-do list with each item's state, and the
       summary once it finishes. It refreshes with the queue every five seconds (vitest)
-- [ ] The queue counts and chips include "Left for a handler" (vitest)
-- [ ] The claim page lists the sections the agent read (vitest)
-- [ ] The instructions page shows the queue instructions and the claim instructions, read only (vitest)
-- [ ] An e2e test drives a run through the API (no model): it starts a run, sets a to-do list, and sees
+- [x] The queue counts and chips include "Left for a handler" (vitest)
+- [x] The claim page lists the sections the agent read (vitest)
+- [x] The instructions page shows the queue instructions and the claim instructions, read only (vitest)
+- [x] An e2e test drives a run through the API (no model): it starts a run, sets a to-do list, and sees
       it on the queue page without a reload
 - [ ] In the browser (Chrome DevTools MCP), light and dark mode: the run panel, the new chip and the
       sections read look right
-- [ ] `npm run check:ts` and `npm run e2e` pass, coverage at or above 80%
+- [x] `npm run check:ts` and `npm run e2e` pass, coverage at or above 80%
 
 ## Phase 6: a live run and the hand-over
 

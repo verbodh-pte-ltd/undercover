@@ -30,6 +30,8 @@ export const claim: Claim = {
   reason: null,
   policy_section: null,
   signed_off_by: null,
+  attempts: 0,
+  sections_read: [],
 };
 
 export const policy = {

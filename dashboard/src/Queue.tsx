@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
-import { listClaims, type ClaimSummary, type Status } from "./api";
-import { label, money, statusLabels } from "./format";
+import {
+  getCurrentRun,
+  listClaims,
+  type ClaimSummary,
+  type Run,
+  type Status,
+} from "./api";
+import { label, money, statusLabels, todoLabels } from "./format";
 
 const QUEUE_POLL_MS = 5000;
 
@@ -8,14 +14,47 @@ export function StatusChip({ status }: Readonly<{ status: Status }>) {
   return <span className={`chip ${status}`}>{statusLabels[status]}</span>;
 }
 
+function RunPanel({ run }: Readonly<{ run: Run }>) {
+  return (
+    <div className="panel stack-sm">
+      <h2>Current run</h2>
+      <p className="muted">
+        {run.claims_started.length} of {run.cap} claims started
+        {run.summary ? ", finished" : ""}
+      </p>
+      {run.todos.length === 0 ? (
+        <p className="muted">The agent has not planned this run yet.</p>
+      ) : (
+        <ol className="todos plain stack-sm">
+          {run.todos.map((todo) => (
+            <li key={todo.claim_id}>
+              <span className={`chip ${todo.state}`}>
+                {todoLabels[todo.state]}
+              </span>{" "}
+              <a className="mono" href={`#/claims/${todo.claim_id}`}>
+                {todo.claim_id}
+              </a>{" "}
+              {todo.text}
+            </li>
+          ))}
+        </ol>
+      )}
+      {run.summary && <p>{run.summary}</p>}
+    </div>
+  );
+}
+
 export function Queue() {
   const [claims, setClaims] = useState<ClaimSummary[] | null>(null);
+  const [run, setRun] = useState<Run | null>(null);
 
   useEffect(() => {
-    void listClaims().then(setClaims);
-    const timer = setInterval(() => {
+    const load = () => {
       void listClaims().then(setClaims);
-    }, QUEUE_POLL_MS);
+      void getCurrentRun().then(setRun);
+    };
+    load();
+    const timer = setInterval(load, QUEUE_POLL_MS);
     return () => {
       clearInterval(timer);
     };
@@ -37,6 +76,7 @@ export function Queue() {
           </li>
         ))}
       </ul>
+      {run && <RunPanel run={run} />}
       <div className="panel table-wrap">
         <table>
           <thead>

@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
-import { getInstructions } from "./api";
+import { getInstructions, type Instructions as Texts } from "./api";
 
 export function Instructions() {
-  const [text, setText] = useState<string | null>(null);
+  const [texts, setTexts] = useState<Texts | null>(null);
 
   useEffect(() => {
-    void getInstructions().then((loaded) => {
-      setText(loaded.text);
-    });
+    void getInstructions().then(setTexts);
   }, []);
 
   return (
@@ -16,7 +14,10 @@ export function Instructions() {
       <p className="muted">
         Read only. These are the instructions the agent works from.
       </p>
-      <pre className="panel instructions">{text ?? "Loading"}</pre>
+      <h2>Running the queue</h2>
+      <pre className="panel instructions">{texts?.queue ?? "Loading"}</pre>
+      <h2>Working a claim</h2>
+      <pre className="panel instructions">{texts?.claim ?? "Loading"}</pre>
     </section>
   );
 }
