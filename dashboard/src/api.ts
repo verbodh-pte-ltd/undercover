@@ -1,5 +1,9 @@
 export type Status =
-  "waiting" | "in_progress" | "waiting_for_sign_off" | "decided";
+  | "waiting"
+  | "in_progress"
+  | "waiting_for_sign_off"
+  | "decided"
+  | "needs_handler";
 
 export type Decision = "approve" | "decline" | "refer";
 
@@ -39,6 +43,8 @@ export interface Claim extends ClaimSummary {
   reason: string | null;
   policy_section: string | null;
   signed_off_by: string | null;
+  attempts: number;
+  sections_read: string[];
 }
 
 export interface Policy {
@@ -66,8 +72,29 @@ export interface PastClaim {
 
 export interface Step {
   id: number;
-  kind: "tool_call" | "tool_result" | "reply";
+  kind: "tool_call" | "tool_result" | "reply" | "error";
   text: string;
+}
+
+export type TodoState = "to_do" | "in_progress" | "done" | "left_for_handler";
+
+export interface Todo {
+  claim_id: string;
+  text: string;
+  state: TodoState;
+}
+
+export interface Run {
+  run_id: number;
+  cap: number;
+  todos: Todo[];
+  summary: string | null;
+  claims_started: string[];
+}
+
+export interface Instructions {
+  queue: string;
+  claim: string;
 }
 
 export interface Handler {
@@ -91,8 +118,8 @@ export const getClaimHistory = (id: string) =>
 export const listSteps = (id: string) =>
   getJson<Step[]>(`/api/claims/${id}/steps`);
 export const listHandlers = () => getJson<Handler[]>("/api/handlers");
-export const getInstructions = () =>
-  getJson<{ text: string }>("/api/instructions");
+export const getCurrentRun = () => getJson<Run | null>("/api/runs/current");
+export const getInstructions = () => getJson<Instructions>("/api/instructions");
 
 export async function signOff(claimId: string, handlerId: string) {
   const response = await fetch(`/api/claims/${claimId}/sign-off`, {

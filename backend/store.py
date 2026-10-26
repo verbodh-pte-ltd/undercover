@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS claims (
     reason TEXT,
     policy_section TEXT,
     paid_amount REAL,
-    signed_off_by TEXT
+    signed_off_by TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS policies (policy_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS customers (customer_id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -29,6 +30,17 @@ CREATE TABLE IF NOT EXISTS steps (
     claim_id TEXT NOT NULL,
     kind TEXT NOT NULL,
     text TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS runs (
+    run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cap INTEGER NOT NULL,
+    todos TEXT NOT NULL DEFAULT '[]',
+    summary TEXT
+);
+CREATE TABLE IF NOT EXISTS run_claims (
+    run_id INTEGER NOT NULL,
+    claim_id TEXT NOT NULL,
+    PRIMARY KEY (run_id, claim_id)
 );
 """
 

@@ -9,7 +9,7 @@ import {
   type Policy,
   type Step,
 } from "./api";
-import { label, money } from "./format";
+import { label, money, sectionLabel } from "./format";
 import { StatusChip } from "./Queue";
 import { SignOff } from "./SignOff";
 
@@ -187,6 +187,18 @@ export function ClaimView({ claimId }: Readonly<{ claimId: string }>) {
           <div className="panel stack-sm">
             <h2>What the agent did</h2>
             <Steps steps={steps} />
+          </div>
+          <div className="panel stack-sm">
+            <h2>Sections the agent read</h2>
+            {claim.sections_read.length === 0 ? (
+              <p className="muted">None yet.</p>
+            ) : (
+              <ul className="stack-sm plain">
+                {claim.sections_read.map((section) => (
+                  <li key={section}>{sectionLabel(section)}</li>
+                ))}
+              </ul>
+            )}
           </div>
           <div className="panel stack-sm">
             <h2>Policy</h2>

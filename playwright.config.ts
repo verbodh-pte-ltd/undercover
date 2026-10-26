@@ -6,6 +6,8 @@ export default defineConfig({
   testDir: "e2e",
   outputDir: "e2e/test-results",
   reporter: "list",
+  // One backend and database for every test, and a run is global state, so one at a time.
+  workers: 1,
   use: { baseURL: "http://localhost:5174" },
   webServer: [
     {

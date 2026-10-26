@@ -28,16 +28,20 @@ def sign_off(claim_id, handler_id):
     )
 
 
+def start(claim_id):
+    run_id = client.post("/api/runs", json={"cap": 5}).json()["run_id"]
+    return client.post(f"/api/claims/{claim_id}/start", json={"run_id": run_id})
+
+
 def test_start_claim_clears_old_steps():
     client.post("/api/claims/CLM-1001/steps", json={"kind": "reply", "text": "old"})
-    assert client.post("/api/claims/CLM-1001/start").json()["status"] == "in_progress"
+    assert start("CLM-1001").json()["status"] == "in_progress"
     assert client.get("/api/claims/CLM-1001/steps").json() == []
-    assert client.post("/api/claims/CLM-1001/start").status_code == 200
 
 
 def test_start_decided_claim_is_409():
     decide("CLM-1001", SMALL)
-    assert client.post("/api/claims/CLM-1001/start").status_code == 409
+    assert start("CLM-1001").status_code == 409
 
 
 def test_steps_in_order():

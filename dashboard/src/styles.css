@@ -196,8 +196,19 @@ main {
   background: var(--coral);
 }
 
-.chip.decided {
+.chip.decided,
+.chip.done {
   background: var(--cerulean);
+  color: #ffffff;
+}
+
+.chip.to_do {
+  background: var(--sea-green);
+}
+
+.chip.needs_handler,
+.chip.left_for_handler {
+  background: var(--raspberry);
   color: #ffffff;
 }
 
