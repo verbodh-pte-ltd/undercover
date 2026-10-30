@@ -142,6 +142,27 @@ def test_claim_agent_reads_sections_approves_and_pays():
     assert steps[-1]["text"] == "Approved, $420.00."
 
 
+def test_claim_agent_works_out_the_payout_with_the_tool():
+    line = {"description": "Hotel", "amount": 300, "quantity": 1, "kind": "expense"}
+    payout_args = {
+        "policy_id": "POL-2001",
+        "benefit": "trip_delay",
+        "lines": [{**line, "nights": 0, "hours": 0}],
+        "paid_by_others": 0,
+    }
+    replies = [
+        calls(("calculate_payout", payout_args)),
+        calls(("record_decision", decision("CLM-1001", 300.0))),
+        AIMessage(content="Approved, $300.00."),
+    ]
+    main.work_claim("CLM-1001", new_run(1), stub(*replies))
+    results = [s["text"] for s in client.get("/api/claims/CLM-1001/steps").json()]
+    assert any(
+        r.startswith("calculate_payout:") and '"payout":300.0' in r for r in results
+    )
+    assert claim("CLM-1001")["payout"] == 300.0
+
+
 def test_claim_agent_cannot_pay_over_the_limit():
     replies = [
         calls(("record_decision", decision("CLM-1001", 1250.0))),

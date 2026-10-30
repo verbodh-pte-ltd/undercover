@@ -13,7 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
 from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 load_dotenv(override=True)
 
@@ -27,6 +27,48 @@ RESULT_PREVIEW = 300
 RECURSION_LIMIT = 1000
 
 Document = Literal["policy_wording", "claims_manual"]
+Benefit = Literal[
+    "trip_cancellation",
+    "trip_interruption",
+    "trip_delay",
+    "baggage_delay",
+    "baggage",
+    "passport",
+    "emergency_medical",
+]
+
+
+class Line(BaseModel):
+    """One covered item or expense on a claim."""
+
+    description: str = Field(description="What the item or expense is")
+    amount: float = Field(
+        description="The total claimed for the line in US dollars, before any limits."
+        " For several items, the total for all of them"
+    )
+    quantity: int = Field(
+        description="How many separate items the line holds, such as 3 for three"
+        " shirts. A pair or a set is one item. 1 for an expense"
+    )
+    kind: Literal[
+        "item", "electronics", "cash", "expense", "hotel", "meals_without_receipts"
+    ] = Field(
+        description=(
+            "item: a belonging, or a pair or set that counts as one item. "
+            "electronics: only a phone, tablet, laptop, camera or its lens, e-reader"
+            " or smartwatch; any other device is an item. "
+            "cash: cash that was lost or stolen. "
+            "expense: any other cost with a receipt, such as a medical bill, a meal,"
+            " a taxi, a fee or a prepaid trip cost. "
+            "hotel: a hotel during a trip delay. "
+            "meals_without_receipts: meals during a trip delay with no receipts."
+        )
+    )
+    nights: int = Field(description="For a hotel, the number of nights; otherwise 0")
+    hours: float = Field(
+        description="For meals without receipts, the length of the delay in hours;"
+        " otherwise 0"
+    )
 
 
 class Todo(TypedDict):
@@ -80,6 +122,24 @@ def read_section(document: Document, number: str) -> str:
 
 
 @tool
+def calculate_payout(
+    policy_id: str, benefit: Benefit, lines: list[Line], paid_by_others: float
+) -> str:
+    """Work out the payout on an approved claim with UnderCover's payout rules.
+
+    Give one line for each covered item or expense, with excluded ones left out, and
+    anything a carrier, hotel or other party has paid or refunded in paid_by_others.
+    """
+    body = {
+        "policy_id": policy_id,
+        "benefit": benefit,
+        "lines": [line.model_dump() for line in lines],
+        "paid_by_others": paid_by_others,
+    }
+    return call("POST", "/api/payouts", body)
+
+
+@tool
 def record_decision(
     claim_id: str,
     decision: Literal["approve", "decline", "refer"],
@@ -109,6 +169,7 @@ CLAIM_TOOLS = [
     get_claim_history,
     list_sections,
     read_section,
+    calculate_payout,
     record_decision,
     pay_claim,
 ]

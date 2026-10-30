@@ -98,16 +98,16 @@ The store moves to SQLAlchemy Core. With `DATABASE_URL` set, it connects to Post
 
 ## Phase 1: the payout rules
 
-- [ ] `backend/payout.py` holds the rules, and `POST /api/payouts` returns the calculation, the payout
+- [x] `backend/payout.py` holds the rules, and `POST /api/payouts` returns the calculation, the payout
       and `needs_sign_off` (test)
-- [ ] For a lost suitcase where a camera and its lens are one set, the operation returns the plan's
+- [x] For a lost suitcase where a camera and its lens are one set, the operation returns the plan's
       per-item limit for that line, not two items (test)
-- [ ] The approval limit comes from `data/company.json`: a test that raises it changes `needs_sign_off`
-- [ ] The operation has an `operation_id`, a one-line docstring and no optional inputs (test reads the
+- [x] The approval limit comes from `data/company.json`: a test that raises it changes `needs_sign_off`
+- [x] The operation has an `operation_id`, a one-line docstring and no optional inputs (test reads the
       OpenAPI schema)
-- [ ] The claim agent has a `calculate_payout` tool, and `claim.md` tells it to use it for every approval
-- [ ] A stub-model test runs the claim agent through `calculate_payout` and `record_decision`
-- [ ] `npm run check:python` passes
+- [x] The claim agent has a `calculate_payout` tool, and `claim.md` tells it to use it for every approval
+- [x] A stub-model test runs the claim agent through `calculate_payout` and `record_decision`
+- [x] `npm run check:python` passes
 
 ## Phase 2: threads and tracing
 

@@ -17,6 +17,8 @@ claims stayed waiting.
     while a claim is still waiting within the cap.
   - A claim that fails before its decision goes back to `waiting`; after two failures it is
     `needs_handler`. Claims stuck `in_progress` go back in the queue when a run starts.
+  - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py` to a
+    policy, a benefit and the claim's lines, and says whether the payout needs sign-off.
   - A payout over $1,000 (`payout_approval_limit` in `data/company.json`) is refused until a handler
     signs off, and sign-off pays it.
 - `backend/instructions/`: `queue.md` for running the queue and `claim.md` for working a claim, served
@@ -25,8 +27,8 @@ claims stayed waiting.
   - The queue agent has four tools (`list_waiting_claims`, `set_todos`, `work_claim`, `finish_run`).
   - `work_claim` starts the claim and runs a fresh claim agent on it. On any error it releases the
     claim and replies in one line, so one bad claim never stops the run.
-  - The claim agent has seven tools (`get_claim`, `get_policy`, `get_claim_history`, `list_sections`,
-    `read_section`, `record_decision`, `pay_claim`) and posts each step to its claim. It has no sign-off
+  - The claim agent has eight tools (`get_claim`, `get_policy`, `get_claim_history`, `list_sections`,
+    `read_section`, `calculate_payout`, `record_decision`, `pay_claim`) and posts each step to its claim. It has no sign-off
     tool.
   - Model calls retry twice with backoff and time out after 60 seconds.
 - `dashboard/`: the claims desk.

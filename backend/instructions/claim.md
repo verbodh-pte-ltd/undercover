@@ -23,7 +23,9 @@ Work the claim in this order:
    the date it was filed, is referred whatever its merits.
 7. Decide:
    - approve when the wording covers the claim and the required documents are there, with the payout
-     worked out as manual section 6 and wording section 10 say;
+     worked out by calculate_payout. Give it one line for each covered item or expense, leaving out the
+     excluded ones (a pair or a set is one item), and anything a carrier, hotel or other party has paid in
+     paid_by_others. Use the payout it returns;
    - decline when the wording excludes it or does not cover it, or a required step was never taken;
    - refer only for the reasons in manual section 2: a missing document, a story that disagrees with the
      documents, a third claim in 12 months, or a question the wording and the manual do not settle.

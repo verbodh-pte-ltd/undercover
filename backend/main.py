@@ -9,7 +9,7 @@ from typing import Annotated, Any, Literal
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from backend import store
+from backend import payout, store
 
 app = FastAPI(title="UnderCover")
 
@@ -57,6 +57,13 @@ class ClaimStart(BaseModel):
 
 class Release(BaseModel):
     error: str
+
+
+class PayoutQuestion(BaseModel):
+    policy_id: str
+    benefit: payout.Benefit
+    lines: list[payout.Line]
+    paid_by_others: float = Field(ge=0)
 
 
 MAX_ATTEMPTS = 2
@@ -242,6 +249,15 @@ def read_section(document: str, number: str) -> dict[str, str]:
         if section["number"] == number:
             return {"document": document, **section}
     raise HTTPException(404, f"Section {number} of {document} not found")
+
+
+@app.post("/api/payouts", operation_id="work_out_payout")
+def work_out_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
+    """Work out the payout on an approved claim with UnderCover's payout rules."""
+    policy = record(db, "policies", "policy_id", question.policy_id)
+    return payout.work_out_payout(
+        policy, question.benefit, question.lines, question.paid_by_others
+    )
 
 
 @app.get("/api/instructions", operation_id="get_instructions")
