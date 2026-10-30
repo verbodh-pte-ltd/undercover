@@ -2,7 +2,6 @@
 
 import json
 import os
-import uuid
 from typing import Any, Literal, TypedDict
 
 import httpx
@@ -11,8 +10,10 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langchain_openai import ChatOpenAI
+from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel, Field, SecretStr
 
 load_dotenv(override=True)
@@ -194,6 +195,15 @@ def retry() -> ModelRetryMiddleware:
     )
 
 
+def traced(thread_id: str) -> RunnableConfig:
+    """The run config for a claim's thread, traced in Langfuse when its keys are set."""
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    if os.getenv("LANGFUSE_PUBLIC_KEY"):
+        config["callbacks"] = [CallbackHandler()]
+        config["metadata"] = {"langfuse_session_id": thread_id}
+    return config
+
+
 def steps(message: BaseMessage) -> list[dict[str, str]]:
     """Describe one message from the agent as steps for the dashboard."""
     if isinstance(message, ToolMessage):
@@ -209,7 +219,7 @@ def steps(message: BaseMessage) -> list[dict[str, str]]:
     return found
 
 
-def run(claim_id: str, llm: BaseChatModel | None = None) -> str:
+def run(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
     """Run a fresh claim agent on a started claim and record each step."""
     with backend() as client:
         instructions = client.get("/api/instructions").json()["claim"]
@@ -222,7 +232,7 @@ def run(claim_id: str, llm: BaseChatModel | None = None) -> str:
         reply = ""
         for update in agent.stream(
             {"messages": [{"role": "user", "content": f"Decide claim {claim_id}."}]},
-            config={"configurable": {"thread_id": f"{claim_id}-{uuid.uuid4().hex}"}},
+            config=traced(thread_id),
             stream_mode="updates",
         ):
             for node in update.values():
@@ -242,7 +252,7 @@ def work_claim(claim_id: str, run_id: int, llm: BaseChatModel | None = None) -> 
     error = "the claim agent stopped without a decision"
     reply = ""
     try:
-        reply = run(claim_id, llm)
+        reply = run(claim_id, start.json()["thread_id"], llm)
     except Exception as exc:  # one bad claim must never stop the run
         error = f"{type(exc).__name__}: {exc}"[:RESULT_PREVIEW]
     with backend() as client:

@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS claims (
     policy_section TEXT,
     paid_amount REAL,
     signed_off_by TEXT,
-    attempts INTEGER NOT NULL DEFAULT 0
+    attempts INTEGER NOT NULL DEFAULT 0,
+    thread_id TEXT
 );
 CREATE TABLE IF NOT EXISTS policies (policy_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS customers (customer_id TEXT PRIMARY KEY, data TEXT NOT NULL);

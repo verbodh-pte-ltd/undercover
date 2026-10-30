@@ -132,3 +132,19 @@ def test_sign_off_when_not_waiting_is_409():
 def test_sign_off_unknown_handler_is_404():
     decide("CLM-1001", LARGE)
     assert sign_off("CLM-1001", "HND-99").status_code == 404
+
+
+def test_start_gives_a_thread_that_a_second_start_keeps():
+    run_id = client.post("/api/runs", json={"cap": 5}).json()["run_id"]
+    first = client.post("/api/claims/CLM-1001/start", json={"run_id": run_id})
+    assert first.json()["thread_id"] == "CLM-1001-1"
+    again = client.post("/api/claims/CLM-1001/start", json={"run_id": run_id})
+    assert again.json()["thread_id"] == "CLM-1001-1"
+    assert again.json()["attempts"] == 0
+
+
+def test_a_released_claim_gets_a_new_thread():
+    start("CLM-1001")
+    client.post("/api/claims/CLM-1001/release", json={"error": "boom"})
+    assert client.get("/api/claims/CLM-1001").json()["thread_id"] is None
+    assert start("CLM-1001").json()["thread_id"] == "CLM-1001-2"

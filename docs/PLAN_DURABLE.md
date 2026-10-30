@@ -111,15 +111,15 @@ The store moves to SQLAlchemy Core. With `DATABASE_URL` set, it connects to Post
 
 ## Phase 2: threads and tracing
 
-- [ ] `start_claim` sets `thread_id` to `CLM-1001-1` on a first try, and keeps it on a second start while
+- [x] `start_claim` sets `thread_id` to `CLM-1001-1` on a first try, and keeps it on a second start while
       the claim is `in_progress` (test)
-- [ ] After `release_claim`, the next start gives `CLM-1001-2` and clears the old steps (test)
-- [ ] With Langfuse keys unset, the agent adds no Langfuse handler (test)
-- [ ] With keys set, the config for a claim carries a `CallbackHandler` and the session id `CLM-1001-1`
+- [x] After `release_claim`, the next start gives `CLM-1001-2` and clears the old steps (test)
+- [x] With Langfuse keys unset, the agent adds no Langfuse handler (test)
+- [x] With keys set, the config for a claim carries a `CallbackHandler` and the session id `CLM-1001-1`
       (test with the handler stubbed)
-- [ ] Live: one claim worked by `uv run -m agent CLM-1005` shows up in Langfuse under session
-      `CLM-1005-1`, read through Langfuse's API
-- [ ] `npm run check:python` passes
+- [x] Live: one claim worked by `uv run -m agent CLM-1005` shows up in Langfuse under session
+      `CLM-1005-1`, read through Langfuse's API (the v2 observations API, filtered by session)
+- [x] `npm run check:python` passes
 
 ## Phase 3: the database
 

@@ -117,6 +117,7 @@ def claim_view(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         "paid_amount": row["paid_amount"],
         "signed_off_by": row["signed_off_by"],
         "attempts": row["attempts"],
+        "thread_id": row["thread_id"],
         "sections_read": sections_read(db, claim["claim_id"]),
     }
 
@@ -167,7 +168,7 @@ def run_view(db: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
 def release(db: sqlite3.Connection, claim_id: str) -> None:
     """Put a claim back in the queue, or leave it for a handler after two failures."""
     db.execute(
-        "UPDATE claims SET attempts = attempts + 1,"
+        "UPDATE claims SET attempts = attempts + 1, thread_id = NULL,"
         " status = CASE WHEN attempts + 1 >= ? THEN 'needs_handler' ELSE 'waiting' END"
         " WHERE claim_id = ?",
         (MAX_ATTEMPTS, claim_id),
@@ -327,7 +328,7 @@ def finish_run(run_id: int, finish: RunFinish, db: Db) -> dict[str, Any]:
 
 @app.post("/api/claims/{claim_id}/start", operation_id="start_claim")
 def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
-    """Mark a claim as in progress in a run; a first try clears any old steps."""
+    """Start a claim in a run on its thread; a first try clears any old steps."""
     with db:
         # One write lock for the checks and writes, so two starts can't pass the cap.
         db.execute("BEGIN IMMEDIATE")
@@ -342,8 +343,12 @@ def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
         db.execute(
             "INSERT OR IGNORE INTO run_claims VALUES (?, ?)", (start.run_id, claim_id)
         )
+        # A new try gets a new thread; a claim already in progress keeps its own.
+        thread_id = row["thread_id"] or f"{claim_id}-{row['attempts'] + 1}"
         db.execute(
-            "UPDATE claims SET status = 'in_progress' WHERE claim_id = ?", (claim_id,)
+            "UPDATE claims SET status = 'in_progress', thread_id = ?"
+            " WHERE claim_id = ?",
+            (thread_id, claim_id),
         )
         if row["attempts"] == 0:
             db.execute("DELETE FROM steps WHERE claim_id = ?", (claim_id,))

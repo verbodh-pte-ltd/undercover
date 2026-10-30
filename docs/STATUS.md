@@ -31,6 +31,8 @@ claims stayed waiting.
     `read_section`, `calculate_payout`, `record_decision`, `pay_claim`) and posts each step to its claim. It has no sign-off
     tool.
   - Model calls retry twice with backoff and time out after 60 seconds.
+  - Each try at a claim has a thread, such as `CLM-1001-1`, set by `start_claim`. With the Langfuse keys
+    set, the claim is traced in Langfuse in a session named after its thread.
 - `dashboard/`: the claims desk.
   - The queue (`#/`) has a count per state and the current run: its to-do list with each item's state,
     and the summary when it finishes.

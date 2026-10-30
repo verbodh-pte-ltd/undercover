@@ -352,3 +352,24 @@ def test_model_name(monkeypatch):
     assert default.reasoning_effort == "low"
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
     assert main.model().model_name == "openrouter/free"
+
+
+def test_no_tracing_without_langfuse_keys():
+    config = main.traced("CLM-1001-1")
+    assert config == {"configurable": {"thread_id": "CLM-1001-1"}}
+
+
+def test_tracing_puts_the_claim_in_its_thread_session(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setattr(main, "CallbackHandler", lambda: "handler")
+    config = main.traced("CLM-1001-1")
+    assert config.get("callbacks") == ["handler"]
+    assert config.get("metadata") == {"langfuse_session_id": "CLM-1001-1"}
+
+
+def test_claim_agent_runs_on_the_claims_thread(monkeypatch):
+    seen = []
+    real = main.traced
+    monkeypatch.setattr(main, "traced", lambda t: seen.append(t) or real(t))
+    main.work_claim("CLM-1001", new_run(1), stub(*decide("CLM-1001")))
+    assert seen == ["CLM-1001-1"]
