@@ -2,6 +2,8 @@
 
 import sys
 
+from dotenv import load_dotenv
+
 from agent.main import backend, run_queue, work_claim
 
 
@@ -22,4 +24,5 @@ def main(args: list[str]) -> None:
 
 
 if __name__ == "__main__":
+    load_dotenv(override=True)
     main(sys.argv[1:])

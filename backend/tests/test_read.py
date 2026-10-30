@@ -1,14 +1,23 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import QueuePool, func, select
 
 from backend import store
 from backend.main import app
 
 client = TestClient(app)
+
+DECLINE = {
+    "decision": "decline",
+    "payout": 0,
+    "reason": "Not covered.",
+    "policy_section": "9. Exclusions",
+}
 
 
 def test_queue_is_seeded_from_claims_json():
@@ -80,12 +89,15 @@ def test_unknown_is_404(path):
     assert client.get(path).status_code == 404
 
 
+def count(conn, table):
+    return conn.scalar(select(func.count()).select_from(table))
+
+
 def test_opening_twice_does_not_reseed():
     store.connect().close()
-    conn = store.connect()
-    assert conn.execute("SELECT COUNT(*) FROM claims").fetchone()[0] == 25
-    assert conn.execute("SELECT COUNT(*) FROM policies").fetchone()[0] == 50
-    conn.close()
+    with store.connect() as conn:
+        assert count(conn, store.claims) == 25
+        assert count(conn, store.policies) == 50
 
 
 def test_instructions():
@@ -124,13 +136,9 @@ def test_unknown_document_or_section_is_404():
 
 
 def test_connection_works_across_threads():
-    conn = store.connect()
-    with ThreadPoolExecutor() as pool:
-        count = pool.submit(
-            lambda: conn.execute("SELECT COUNT(*) FROM claims").fetchone()
-        )
-    assert count.result()[0] == 25
-    conn.close()
+    with store.connect() as conn, ThreadPoolExecutor() as pool:
+        claims = pool.submit(count, conn, store.claims)
+        assert claims.result() == 25
 
 
 def test_concurrent_first_requests_seed_once():
@@ -138,3 +146,22 @@ def test_concurrent_first_requests_seed_once():
         responses = list(pool.map(lambda _: client.get("/api/claims"), range(8)))
     assert {r.status_code for r in responses} == {200}
     assert len(client.get("/api/claims").json()) == 25
+
+
+def test_reseed_puts_the_queue_back():
+    client.post("/api/claims/CLM-1001/decision", json={**DECLINE})
+    store.reseed()
+    assert client.get("/api/claims/CLM-1001").json()["status"] == "waiting"
+    with store.connect() as conn:
+        assert count(conn, store.claims) == 25
+
+
+def test_postgres_engine_has_a_pool_of_four():
+    engine = store.postgres_engine("postgresql+psycopg://u:p@127.0.0.1:1/db")
+    assert isinstance(engine.pool, QueuePool)
+    assert (engine.pool.size(), engine.pool._max_overflow) == (4, 0)
+
+
+def test_tests_never_see_the_database_in_dot_env():
+    assert "DATABASE_URL" not in os.environ
+    assert store.postgres_url() is None

@@ -5,9 +5,11 @@ harness's live run, capped at five claims on DeepSeek V4.1 Flash, the agent plan
 claims on its own: four decided and paid, one approved at $3,750 and waiting for sign-off. The other 20
 claims stayed waiting.
 
-- `backend/`: FastAPI on SQLite. `backend/store.py` creates `backend/undercover.db` (or the file in
-  `UNDERCOVER_DB`) and seeds it from `data/` on first start: the 25 claims, the policies and the
-  customers.
+- `backend/`: FastAPI with SQLAlchemy Core. With `DATABASE_URL` set (as `npm run dev` does from `.env`)
+  it uses local Postgres in Docker, in the `undercover` schema, with a pool of 4 connections. Without it,
+  it uses SQLite in `backend/undercover.db` (or the file in `UNDERCOVER_DB`), as the tests do.
+  `backend/store.py` seeds the database from `data/` on first start: the 25 claims, the policies and
+  the customers. `npm run seed` empties it, the agent's saved threads included, and seeds it again.
   - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
     wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
   - Write routes: start a claim inside a run, record steps, record a decision, pay, sign off, and
@@ -62,8 +64,8 @@ uv run -m agent CLM-1001   # named claims only, without the queue agent
 The model is `deepseek/deepseek-v4.1-flash` with low reasoning effort, or `MODEL_NAME` from `.env` (such
 as `openrouter/free`).
 
-To reset the data, stop the backend and delete `backend/undercover.db`. A database from before the
-harness build needs this once, because the claims table has a new column.
+To reset the data, run `npm run seed`. The `undercover-postgres` container must be running; the start
+cell in `labs/week2/week2day3.ipynb` makes it again from `.env` if Docker has lost it.
 
 ## Check it
 

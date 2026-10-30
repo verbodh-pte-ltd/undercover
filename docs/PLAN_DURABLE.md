@@ -123,15 +123,16 @@ The store moves to SQLAlchemy Core. With `DATABASE_URL` set, it connects to Post
 
 ## Phase 3: the database
 
-- [ ] The store uses SQLAlchemy Core, and every existing backend test passes unchanged on SQLite
-- [ ] `sqlalchemy` is a main dependency in `pyproject.toml`
-- [ ] With `DATABASE_URL` set, the backend creates the `undercover` schema and its tables in local
+- [x] The store uses SQLAlchemy Core, and every existing backend test passes on SQLite (the two
+      store tests that used a raw SQLite connection now use SQLAlchemy's)
+- [x] `sqlalchemy` is a main dependency in `pyproject.toml`
+- [x] With `DATABASE_URL` set, the backend creates the `undercover` schema and its tables in local
       Postgres (checked with `docker exec undercover-postgres psql -U postgres -c "\dt undercover.*"`)
-- [ ] `npm run seed` reseeds local Postgres: 25 claims, all `waiting`, and no checkpoints
-- [ ] The backend's pool is 4 with no overflow (test on the engine's settings)
-- [ ] `npm run check` passes with `.env` renamed, and `DATABASE_URL` is not in the environment of any
+- [x] `npm run seed` reseeds local Postgres: 25 claims, all `waiting`, and no checkpoints
+- [x] The backend's pool is 4 with no overflow (test on the engine's settings)
+- [x] `npm run check` passes with `.env` renamed, and `DATABASE_URL` is not in the environment of any
       test (test)
-- [ ] `npm run dev` serves the queue from local Postgres (`GET /api/claims` returns 25 claims)
+- [x] `npm run dev` serves the queue from local Postgres (`GET /api/claims` returns 25 claims)
 
 ## Phase 4: the backend for durable work
 
