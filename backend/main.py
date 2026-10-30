@@ -1,11 +1,14 @@
 """The UnderCover backend."""
 
 import json
+import os
 from collections.abc import Iterator
+from contextlib import suppress
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+import httpx
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection, RowMapping, case, delete, insert, select, update
 
@@ -16,6 +19,8 @@ app = FastAPI(title="UnderCover")
 
 INSTRUCTIONS = Path(__file__).parent / "instructions"
 DOCUMENTS = {"policy_wording": "policy_wording.md", "claims_manual": "claims_manual.md"}
+AGENT_URL = "http://127.0.0.1:8002"
+AGENT_TIMEOUT = 5
 
 
 class Decision(BaseModel):
@@ -214,6 +219,15 @@ def list_waiting_claims(db: Db) -> list[dict[str, Any]]:
     return [{f: v for f, v in claim_view(db, r).items() if f in fields} for r in rows]
 
 
+@app.get("/api/claims/unfinished", operation_id="list_unfinished_claims")
+def list_unfinished_claims(db: Db) -> list[dict[str, Any]]:
+    """List the claims in progress, stopped or signed off, for the agent to carry on."""
+    query = select(claims).where(claims.c.status == "in_progress")
+    rows = db.execute(query.order_by(claims.c.position)).mappings().all()
+    fields = ["claim_id", "thread_id", "attempts", "decision", "signed_off_by"]
+    return [{f: v for f, v in claim_view(db, r).items() if f in fields} for r in rows]
+
+
 @app.get("/api/claims/{claim_id}", operation_id="get_claim")
 def get_claim(claim_id: str, db: Db) -> dict[str, Any]:
     """Get one claim in full: the story, the items, the documents and its decision."""
@@ -292,12 +306,7 @@ def list_handlers() -> list[dict[str, Any]]:
 
 @app.post("/api/runs", operation_id="start_run")
 def start_run(start: RunStart, db: Db) -> dict[str, Any]:
-    """Start a run capped at a number of claims; stuck claims go back in the queue."""
-    stuck = db.scalars(
-        select(claims.c.claim_id).where(claims.c.status == "in_progress")
-    )
-    for claim_id in stuck.all():
-        release(db, claim_id)
+    """Start a run capped at a number of claims."""
     new_run = insert(runs).values(cap=start.cap).returning(runs.c.run_id)
     run_id = db.execute(new_run).scalar_one()
     db.commit()
@@ -365,8 +374,11 @@ def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
 @app.post("/api/claims/{claim_id}/release", operation_id="release_claim")
 def release_claim(claim_id: str, failure: Release, db: Db) -> dict[str, Any]:
     """Release a claim that failed before its decision, recording the error."""
-    if claim_row(db, claim_id, lock=True)["status"] != "in_progress":
-        raise HTTPException(409, f"Claim {claim_id} is not in progress")
+    row = claim_row(db, claim_id, lock=True)
+    if row["status"] != "in_progress" or row["decision"] is not None:
+        raise HTTPException(
+            409, f"Claim {claim_id} is not in progress before a decision"
+        )
     add_step_row(db, claim_id, "error", failure.error)
     release(db, claim_id)
     db.commit()
@@ -394,8 +406,15 @@ def list_steps(claim_id: str, db: Db) -> list[dict[str, Any]]:
 @app.post("/api/claims/{claim_id}/decision", operation_id="record_decision")
 def record_decision(claim_id: str, decision: Decision, db: Db) -> dict[str, Any]:
     """Approve, decline or refer a claim, with payout, reasons and policy section."""
-    if claim_row(db, claim_id, lock=True)["status"] not in {"waiting", "in_progress"}:
+    row = claim_row(db, claim_id, lock=True)
+    if row["decision"] is not None:
+        # A step run again after a restart repeats its decision, which is done.
+        same = (row["decision"], row["payout"]) == (decision.decision, decision.payout)
+        if same:
+            return get_claim(claim_id, db)
         raise HTTPException(409, f"Claim {claim_id} has already been decided")
+    if row["status"] not in {"waiting", "in_progress"}:
+        raise HTTPException(409, f"Claim {claim_id} is not waiting or in progress")
     if decision.decision != "approve" and decision.payout > 0:
         raise HTTPException(422, "Only an approved claim has a payout above zero")
     over_limit = decision.payout > store.load("company.json")["payout_approval_limit"]
@@ -412,6 +431,9 @@ def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
     if row["decision"] != "approve":
         raise HTTPException(409, f"Claim {claim_id} is not approved")
     if row["paid_amount"] is not None:
+        # A step run again after a restart repeats its payment, which is done.
+        if round(payment.amount, 2) == round(row["paid_amount"], 2):
+            return get_claim(claim_id, db)
         raise HTTPException(409, f"Claim {claim_id} has already been paid")
     limit = store.load("company.json")["payout_approval_limit"]
     if row["payout"] > limit and row["signed_off_by"] is None:
@@ -422,14 +444,26 @@ def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
         raise HTTPException(
             422, f"The amount must be the approved payout, ${row['payout']:,.2f}"
         )
-    set_claim(db, claim_id, paid_amount=row["payout"], paid_at=store.now())
+    set_claim(
+        db, claim_id, status="decided", paid_amount=row["payout"], paid_at=store.now()
+    )
     db.commit()
     return get_claim(claim_id, db)
 
 
+def tell_agent(claim_id: str) -> None:
+    """Ask the agent's service to carry on a signed-off claim; it may not be running."""
+    url = os.getenv("UNDERCOVER_AGENT", AGENT_URL)
+    # If it can't be reached, the agent carries on the claim the next time it runs.
+    with suppress(httpx.HTTPError):
+        httpx.post(f"{url}/claims/{claim_id}/resume", timeout=AGENT_TIMEOUT)
+
+
 @app.post("/api/claims/{claim_id}/sign-off", operation_id="sign_off")
-def sign_off(claim_id: str, sign_off: SignOff, db: Db) -> dict[str, Any]:
-    """Sign off a payout over $1,000 as a handler, which pays it."""
+def sign_off(
+    claim_id: str, sign_off: SignOff, db: Db, tasks: BackgroundTasks
+) -> dict[str, Any]:
+    """Sign off a payout over $1,000 as a handler; the agent then pays it."""
     handlers = {h["handler_id"] for h in store.load("handlers.json")}
     if sign_off.handler_id not in handlers:
         raise HTTPException(404, f"Handler {sign_off.handler_id} not found")
@@ -439,11 +473,10 @@ def sign_off(claim_id: str, sign_off: SignOff, db: Db) -> dict[str, Any]:
     set_claim(
         db,
         claim_id,
-        status="decided",
+        status="in_progress",
         signed_off_by=sign_off.handler_id,
         signed_off_at=store.now(),
-        paid_amount=row["payout"],
-        paid_at=store.now(),
     )
     db.commit()
+    tasks.add_task(tell_agent, claim_id)
     return get_claim(claim_id, db)

@@ -136,16 +136,16 @@ The store moves to SQLAlchemy Core. With `DATABASE_URL` set, it connects to Post
 
 ## Phase 4: the backend for durable work
 
-- [ ] Sign-off records who and when, sets `in_progress`, pays nothing, and a payment over $1,000 is still
+- [x] Sign-off records who and when, sets `in_progress`, pays nothing, and a payment over $1,000 is still
       403 before it (tests)
-- [ ] After sign-off, `pay_claim` pays, records `paid_at` and sets `decided` (test)
-- [ ] The same decision twice returns the claim; a different one is 409 (tests)
-- [ ] The same payment twice returns the claim, and the claim is paid once (test)
-- [ ] `start_run` leaves a stuck claim `in_progress` with its attempts unchanged, and
+- [x] After sign-off, `pay_claim` pays, records `paid_at` and sets `decided` (test)
+- [x] The same decision twice returns the claim; a different one is 409 (tests)
+- [x] The same payment twice returns the claim, and the claim is paid once (test)
+- [x] `start_run` leaves a stuck claim `in_progress` with its attempts unchanged, and
       `list_unfinished_claims` lists it (test)
-- [ ] Sign-off calls `UNDERCOVER_AGENT` at `/claims/{id}/resume` after saving, and still succeeds when
+- [x] Sign-off calls `UNDERCOVER_AGENT` at `/claims/{id}/resume` after saving, and still succeeds when
       nothing answers there (tests with a stubbed client)
-- [ ] `npm run check:python` passes
+- [x] `npm run check:python` passes
 
 ## Phase 5: the claim agent as a graph
 

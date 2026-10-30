@@ -104,11 +104,21 @@ def test_release_refuses_a_decided_claim():
     assert release("CLM-1002").status_code == 409
 
 
-def test_new_run_releases_stuck_claims():
+def test_new_run_leaves_a_stopped_claim_to_carry_on():
     start("CLM-1001", new_run(5)["run_id"])
     new_run(5)
     claim = client.get("/api/claims/CLM-1001").json()
-    assert (claim["status"], claim["attempts"]) == ("waiting", 1)
+    assert (claim["status"], claim["attempts"]) == ("in_progress", 0)
+    unfinished = client.get("/api/claims/unfinished").json()
+    assert unfinished == [
+        {
+            "claim_id": "CLM-1001",
+            "thread_id": "CLM-1001-1",
+            "attempts": 0,
+            "decision": None,
+            "signed_off_by": None,
+        }
+    ]
 
 
 def test_finish_refuses_while_claims_are_missed():
