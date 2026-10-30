@@ -1,12 +1,14 @@
 # Process
 
-`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend and the dashboard.
+`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend, the dashboard and the agent's service, with the settings in `.env`. `npm run seed` reseeds the database. On this machine the database is the `undercover-postgres` Docker container, which must be running.
 
 `npm run check` runs every check:
 
 - Python: ruff (lint and format), pyright, and pytest with 80% coverage
 - TypeScript: ESLint, Prettier, tsc, and vitest with 80% coverage
-- Playwright end-to-end tests
+- Playwright end-to-end tests, on their own SQLite database, with a stand-in for the agent's service on port 8003
+
+The checks never read `.env`, so they need no database, Langfuse or OpenRouter.
 
 The pre-commit hook runs the format, lint, type and unit test checks on every commit.
 

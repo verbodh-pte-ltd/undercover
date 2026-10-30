@@ -1,9 +1,14 @@
 # Status
 
-The claims pilot (`docs/PLAN.md`) and the agent's harness (`docs/PLAN_HARNESS.md`) are built. In the
-harness's live run, capped at five claims on DeepSeek V4.1 Flash, the agent planned and worked five
-claims on its own: four decided and paid, one approved at $3,750 and waiting for sign-off. The other 20
-claims stayed waiting.
+The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`) and durable state
+(`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) are built. We use Postgres in Docker on this
+machine, not Supabase.
+
+In the durable build's live run on local Postgres, capped at five claims on DeepSeek V4.1 Flash, the
+agent worked five claims: four approved and paid straight away, and CLM-1003 approved at $3,750 and
+held for sign-off. Signed off on the dashboard, it was paid by the agent with the handler and the time.
+A run killed partway through CLM-1006 carried on with the same thread the next time, with no new
+attempt and one decision. The most Postgres connections seen during the run was 8.
 
 - `backend/`: FastAPI with SQLAlchemy Core. With `DATABASE_URL` set (as `npm run dev` does from `.env`)
   it uses local Postgres in Docker, in the `undercover` schema, with a pool of 4 connections. Without it,
@@ -82,6 +87,8 @@ npm run agent -- CLM-1001  # named claims only, without the queue agent
 The model is `deepseek/deepseek-v4.1-flash` with low reasoning effort, or `MODEL_NAME` from `.env` (such
 as `openrouter/free`).
 
+The `undercover-postgres` container must be running for `npm run dev` and `npm run agent`.
+
 To reset the data, run `npm run seed`. The `undercover-postgres` container must be running; the start
 cell in `labs/week2/week2day3.ipynb` makes it again from `.env` if Docker has lost it.
 
@@ -91,8 +98,11 @@ cell in `labs/week2/week2day3.ipynb` makes it again from `.env` if Docker has lo
 npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 ```
 
+`npm run check` needs no `.env`: the tests run on SQLite, with no Postgres, Langfuse or OpenRouter.
+
 ## Not built yet
 
 - Scoring the agent against `data/evals/`. The answer key stays unopened until that build.
 - Claim agents in parallel, and starting a run from the dashboard.
+- Rejecting a held payout. A handler can only sign off for now.
 - Sign-in, real payments and messages to customers, as `docs/SPEC.md` says.

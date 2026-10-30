@@ -18,6 +18,16 @@ We want an AI agent, the UnderCover Agent, to work the queue the way a handler d
 
 Our goal is to handle claims straight through, as accurately as our handlers do.
 
+When the agent approves a payout that needs a handler's sign-off, it waits for the sign-off and keeps
+everything it has worked out. As soon as a handler signs off, it picks the claim up from where it stopped
+and pays it; until then the claim shows as waiting for sign-off, and between the sign-off and the
+payment as in progress. If the agent isn't running at that moment, it pays the claim the next time it
+runs. A handler can only sign off for now.
+
+If the agent is stopped partway through a claim, it carries on with that claim from where it got to the
+next time it runs. A claim that fails with an error goes back in the queue and starts afresh. No claim
+is ever decided or paid twice.
+
 ## What the team needs to see
 
 - The queue, with where each claim stands: waiting, in progress, waiting for sign-off or decided.

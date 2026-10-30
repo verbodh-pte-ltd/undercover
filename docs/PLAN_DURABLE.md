@@ -176,13 +176,27 @@ The store moves to SQLAlchemy Core. With `DATABASE_URL` set, it connects to Post
 
 ## Phase 7: live checks and the documents
 
-- [ ] After `npm run seed`, `npm run agent -- --cap 5` on the default model works five claims
-- [ ] A claim over the limit waits for sign-off; signed off on the dashboard through the Chrome DevTools
+- [x] After `npm run seed`, `npm run agent -- --cap 5` on the default model works five claims
+- [x] A claim over the limit waits for sign-off; signed off on the dashboard through the Chrome DevTools
       MCP server, it shows as paid within five seconds, with the handler and the time
-- [ ] A run killed after a claim's first steps carries on with the same thread the next time, with the
+- [x] A run killed after a claim's first steps carries on with the same thread the next time, with the
       attempts unchanged and one decision
-- [ ] During the live run, `pg_stat_activity` shows no more than 12 connections for user postgres
-- [ ] Through Langfuse's API, the held claim's session has traces from before and after the sign-off
-- [ ] `docs/SPEC.md` (its section on working the queue only), `docs/TECH_STACK.md`, `docs/PROCESS.md`
+- [x] During the live run, `pg_stat_activity` shows no more than 12 connections for user postgres
+      (the most seen was 8)
+- [x] Through Langfuse's API, the held claim's session has traces from before and after the sign-off
+      (CLM-1008-1: one trace at 07:46:19 UTC, one at 07:47:42 after the sign-off at 07:47:40)
+- [x] `docs/SPEC.md` (its section on working the queue only), `docs/TECH_STACK.md`, `docs/PROCESS.md`
       and `docs/STATUS.md` describe the product as it now is
-- [ ] `npm run check` passes
+- [x] `npm run check` passes
+
+## Notes from the build
+
+- **The first live sign-off took 13 seconds.** The agent reached the backend at `localhost`, and on
+  Windows each call tried IPv6 first and waited about a second. It now uses `127.0.0.1`, and the next
+  sign-off was paid 2 seconds after the handler signed off.
+- **Claims worked from the queue were missing from Langfuse.** The claim graph ran inside the queue
+  agent's tool call and inherited its run, so Langfuse dropped the claim's observations. Each claim graph
+  now runs in a fresh context and gets its own trace in its own session.
+- **`DATABASE_URL` can be set in the shell**, not only in `.env`. The end-to-end backend now sets it to
+  empty, so it always uses its own SQLite database.
+- **Two old store tests changed.** They opened a raw SQLite connection; they now use SQLAlchemy's.
