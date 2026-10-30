@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import __main__ as runner
-from agent import main
+from agent import main, service
 from backend.main import app
 
 client = TestClient(app)
@@ -456,3 +456,63 @@ def test_claim_agent_runs_on_the_claims_thread(monkeypatch):
     monkeypatch.setattr(main, "traced", lambda t: seen.append(t) or real(t))
     main.work_claim("CLM-1001", new_run(1), stub(*decide("CLM-1001")))
     assert seen == ["CLM-1001-1"]
+
+
+def test_the_service_resumes_a_signed_off_claim_and_pays_it(monkeypatch):
+    monkeypatch.setattr(main, "model", stub)
+    hold()
+    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-02"})
+    response = TestClient(service.app).post("/claims/CLM-1001/resume")
+    assert response.status_code == 202
+    result = claim("CLM-1001")
+    assert (result["status"], result["paid_amount"]) == ("decided", 1250.0)
+    assert TestClient(service.app).get("/health").json() == {"status": "ok"}
+
+
+def test_the_service_leaves_a_claim_that_is_not_in_progress(monkeypatch):
+    monkeypatch.setattr(main, "model", stub)
+    hold()
+    TestClient(service.app).post("/claims/CLM-1001/resume")
+    assert claim("CLM-1001")["status"] == "waiting_for_sign_off"
+
+
+def test_runner_carries_on_unfinished_claims_first(monkeypatch, capsys):
+    run_id = new_run(2)
+    first = [calls(("get_claim", {"claim_id": "CLM-1002"})), KeyboardInterrupt()]
+    with pytest.raises(KeyboardInterrupt):
+        main.run("CLM-1002", start("CLM-1002", run_id)["thread_id"], stub(*first))
+    hold("CLM-1001")
+    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-01"})
+    rest = [
+        calls(("record_decision", decision("CLM-1002", 0, "decline"))),
+        AIMessage(content="Declined."),
+    ]
+    monkeypatch.setattr(main, "model", lambda: stub(*rest))
+    runner.main(["--cap", "0"])
+    out = capsys.readouterr().out
+    assert "CLM-1001: " in out
+    assert "CLM-1002: Declined." in out
+    assert claim("CLM-1001")["paid_amount"] == 1250.0
+    assert (claim("CLM-1002")["status"], claim("CLM-1002")["attempts"]) == (
+        "decided",
+        0,
+    )
+
+
+def test_a_stopped_queue_run_is_finished_by_the_next_run():
+    stopped = [
+        calls(("set_todos", {"todos": todos(("CLM-1001", "to_do"))})),
+        KeyboardInterrupt(),
+    ]
+    with pytest.raises(KeyboardInterrupt):
+        main.run_queue(1, stub(*stopped))
+    run_id = client.get("/api/runs/current").json()["run_id"]
+    rest = [
+        calls(("work_claim", {"claim_id": "CLM-1001"})),
+        calls(("finish_run", {"summary": "One claim declined."})),
+        AIMessage(content="Done."),
+    ]
+    assert main.resume_queue(stub(*rest), stub(*decide("CLM-1001"))) == "Done."
+    run = client.get("/api/runs/current").json()
+    assert (run["run_id"], run["summary"]) == (run_id, "One claim declined.")
+    assert main.resume_queue(stub()) is None

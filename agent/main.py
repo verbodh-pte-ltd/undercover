@@ -420,29 +420,72 @@ def queue_tools(run_id: int, claim_llm: BaseChatModel | None) -> list[BaseTool]:
     return [list_waiting_claims, set_todos, work_claim_tool, finish_run]
 
 
+def queue_agent(
+    run_id: int, llm: BaseChatModel | None, claim_llm: BaseChatModel | None
+) -> CompiledStateGraph:
+    """The queue agent for one run, saving its progress like the claim agent."""
+    with backend() as client:
+        instructions = client.get("/api/instructions").json()["queue"]
+    return create_agent(
+        llm or model(),
+        tools=queue_tools(run_id, claim_llm),
+        system_prompt=instructions,
+        middleware=[retry()],
+        checkpointer=saver(),
+    )
+
+
+def stream_queue(agent: CompiledStateGraph, inputs: Any, run_id: int) -> str:
+    """Run the queue agent on its run's thread, printing each step."""
+    config: RunnableConfig = {
+        "configurable": {"thread_id": f"run-{run_id}"},
+        "recursion_limit": RECURSION_LIMIT,
+    }
+    reply = ""
+    for update in agent.stream(
+        inputs, config=config, stream_mode="updates", durability="sync"
+    ):
+        for node in update.values():
+            for message in (node or {}).get("messages", []):
+                for step in steps(message):
+                    print(f"[{step['kind']}] {step['text']}")
+                reply = message.text
+    return reply
+
+
 def run_queue(
     cap: int, llm: BaseChatModel | None = None, claim_llm: BaseChatModel | None = None
 ) -> str:
     """Start a run of up to cap claims and let the queue agent work it."""
     with backend() as client:
         run_id = client.post("/api/runs", json={"cap": cap}).json()["run_id"]
-        instructions = client.get("/api/instructions").json()["queue"]
-    agent = create_agent(
-        llm or model(),
-        tools=queue_tools(run_id, claim_llm),
-        system_prompt=instructions,
-        middleware=[retry()],
-    )
     prompt = f"Please work the queue. This run is capped at {cap} claims."
-    reply = ""
-    for update in agent.stream(
-        {"messages": [{"role": "user", "content": prompt}]},
-        config={"recursion_limit": RECURSION_LIMIT},
-        stream_mode="updates",
-    ):
-        for node in update.values():
-            for message in node["messages"]:
-                for step in steps(message):
-                    print(f"[{step['kind']}] {step['text']}")
-                reply = message.text
-    return reply
+    inputs = {"messages": [{"role": "user", "content": prompt}]}
+    return stream_queue(queue_agent(run_id, llm, claim_llm), inputs, run_id)
+
+
+def resume_queue(
+    llm: BaseChatModel | None = None, claim_llm: BaseChatModel | None = None
+) -> str | None:
+    """Finish the latest run if its queue agent was stopped partway, or return None."""
+    with backend() as client:
+        run = client.get("/api/runs/current").json()
+    if run is None or run["summary"] is not None:
+        return None
+    agent = queue_agent(run["run_id"], llm, claim_llm)
+    config: RunnableConfig = {"configurable": {"thread_id": f"run-{run['run_id']}"}}
+    if not agent.get_state(config).next:
+        return None
+    return stream_queue(agent, None, run["run_id"])
+
+
+def carry_on_unfinished(llm: BaseChatModel | None = None) -> list[str]:
+    """Carry on every claim that was stopped or signed off while the agent was away."""
+    with backend() as client:
+        unfinished = client.get("/api/claims/unfinished").json()
+    lines = []
+    for claim in unfinished:
+        claim_id = claim["claim_id"]
+        thread_id = claim["thread_id"] or f"{claim_id}-{claim['attempts'] + 1}"
+        lines.append(f"{claim_id}: {carry_on(claim_id, thread_id, llm)}")
+    return lines

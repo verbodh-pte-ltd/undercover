@@ -164,15 +164,15 @@ The store moves to SQLAlchemy Core. With `DATABASE_URL` set, it connects to Post
 
 ## Phase 6: the agent service, the runner and the dashboard
 
-- [ ] `resume_claim` on the service resumes a signed-off claim and pays it (test with a stub model)
-- [ ] `uv run -m agent` carries on unfinished claims first, then a run with no summary on its
+- [x] `resume_claim` on the service resumes a signed-off claim and pays it (test with a stub model)
+- [x] `uv run -m agent` carries on unfinished claims first, then a run with no summary on its
       `run-<id>` thread, before starting a new run (tests)
-- [ ] `npm run dev` starts the backend, the dashboard and the agent service on :8002
-- [ ] The dashboard's button reads "Sign off $1,250.00", and a signed-off claim shows "In progress" with
+- [x] `npm run dev` starts the backend, the dashboard and the agent service on :8002
+- [x] The dashboard's button reads "Sign off $1,250.00", and a signed-off claim shows "In progress" with
       the handler and the time, then "Paid" once paid (vitest)
-- [ ] The end-to-end test signs off on the dashboard and the stand-in on :8003 receives the call for that
+- [x] The end-to-end test signs off on the dashboard and the stand-in on :8003 receives the call for that
       claim
-- [ ] `npm run check` passes with `.env` renamed
+- [x] `npm run check` passes with `.env` renamed
 
 ## Phase 7: live checks and the documents
 

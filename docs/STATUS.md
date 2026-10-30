@@ -45,6 +45,12 @@ claims stayed waiting.
     stopped partway carries on from its last step on the same thread.
   - Each try at a claim has a thread, such as `CLM-1001-1`, set by `start_claim`. With the Langfuse keys
     set, the claim is traced in Langfuse in a session named after its thread.
+  - Model calls retry twice with backoff and time out after 60 seconds.
+  - The queue agent is still `create_agent`, and saves its progress on the thread `run-<run_id>`.
+  - `uv run -m agent` first carries on every claim stopped or signed off while it was away, then
+    finishes a queue run that was stopped, and only then starts a new run.
+  - The agent's service (`agent/service.py`, port 8002) has `resume_claim`: the backend calls it after a
+    sign-off, and it carries on that claim and pays it.
 - `dashboard/`: the claims desk.
   - The queue (`#/`) has a count per state and the current run: its to-do list with each item's state,
     and the summary when it finishes.
@@ -53,14 +59,16 @@ claims stayed waiting.
   - The instructions page (`#/instructions`) shows both sets of instructions, read only.
   - Light and dark mode. A claim's page checks for new steps every two seconds until the claim is
     decided, and the queue refreshes every five seconds. A claim waiting for sign-off has a handler
-    picker and a button that signs off and pays.
+    picker and a "Sign off" button. A signed-off claim shows "In progress" with who signed off and when,
+    then "Paid" with the time once the agent pays it.
 - `e2e/`: Playwright tests, one at a time, on their own servers (backend :8001, dashboard :5174) and
-  their own database, `e2e/e2e.db`, which is deleted at the start of each run.
+  their own SQLite database, `e2e/e2e.db`, which is deleted at the start of each run. A stand-in for the
+  agent's service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls.
 
 ## Run it
 
 ```bash
-npm run dev      # backend on :8000, dashboard on :5173
+npm run dev      # backend on :8000, dashboard on :5173, agent service on :8002
 ```
 
 With the backend running, start a run. With no cap it works every waiting claim:
@@ -68,7 +76,7 @@ With the backend running, start a run. With no cap it works every waiting claim:
 ```bash
 npm run agent -- --cap 5   # a trial on five claims
 npm run agent              # every waiting claim
-uv run -m agent CLM-1001   # named claims only, without the queue agent
+npm run agent -- CLM-1001  # named claims only, without the queue agent
 ```
 
 The model is `deepseek/deepseek-v4.1-flash` with low reasoning effort, or `MODEL_NAME` from `.env` (such

@@ -68,7 +68,7 @@ it("stops checking once the claim is decided", async () => {
   expect(fetchMock.mock.calls).toHaveLength(calls);
 });
 
-it("signs off a large payout and shows it paid", async () => {
+it("signs off a large payout, then shows it paid once the agent pays", async () => {
   const waiting: Claim = {
     ...claim,
     status: "waiting_for_sign_off",
@@ -81,9 +81,9 @@ it("signs off a large payout and shows it paid", async () => {
     ...claimRoutes(waiting),
     "/api/claims/CLM-1001/sign-off": {
       ...waiting,
-      status: "decided",
-      paid_amount: 1250,
+      status: "in_progress",
       signed_off_by: "HND-01",
+      signed_off_at: "2026-10-30T06:41:00+00:00",
     },
   });
   render(<ClaimView claimId="CLM-1001" />);
@@ -91,12 +91,24 @@ it("signs off a large payout and shows it paid", async () => {
   expect(screen.getByText("Not paid yet")).toBeDefined();
   expect(screen.getByLabelText("Handler")).toHaveProperty("value", "HND-01");
 
-  fireEvent.click(
-    screen.getByRole("button", { name: "Sign off and pay $1,250.00" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Sign off $1,250.00" }));
   await wait(0);
-  expect(screen.getByText("Paid $1,250.00")).toBeDefined();
+  expect(screen.getByText(/^Signed off by Dana Whitfield on /)).toBeDefined();
+  expect(screen.getByText("Not paid yet")).toBeDefined();
   expect(screen.queryByRole("button")).toBeNull();
+
+  fakeBackend({
+    ...claimRoutes({
+      ...waiting,
+      status: "decided",
+      signed_off_by: "HND-01",
+      signed_off_at: "2026-10-30T06:41:00+00:00",
+      paid_amount: 1250,
+      paid_at: "2026-10-30T06:41:03+00:00",
+    }),
+  });
+  await wait(POLL_MS);
+  expect(screen.getByText(/^Paid \$1,250\.00 on /)).toBeDefined();
   expect(fetchMock).toHaveBeenCalledWith("/api/claims/CLM-1001/sign-off", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

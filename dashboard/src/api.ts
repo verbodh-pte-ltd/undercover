@@ -43,6 +43,8 @@ export interface Claim extends ClaimSummary {
   reason: string | null;
   policy_section: string | null;
   signed_off_by: string | null;
+  signed_off_at: string | null;
+  paid_at: string | null;
   attempts: number;
   sections_read: string[];
 }

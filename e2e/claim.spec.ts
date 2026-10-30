@@ -21,7 +21,10 @@ test("steps appear on the claim while the agent works", async ({
   await expect(page.getByText("In progress", { exact: true })).toBeVisible();
 });
 
-test("a handler signs off a payout over $1,000", async ({ page, request }) => {
+test("a handler's sign-off reaches the agent, which then pays", async ({
+  page,
+  request,
+}) => {
   await request.post("/api/claims/CLM-1003/decision", {
     data: {
       decision: "approve",
@@ -39,9 +42,22 @@ test("a handler signs off a payout over $1,000", async ({ page, request }) => {
   await expect(page.getByText("Waiting for sign-off")).toBeVisible();
   await expect(page.getByText("Not paid yet")).toBeVisible();
   await page.getByLabel("Handler").selectOption({ label: "Dana Whitfield" });
-  await page
-    .getByRole("button", { name: "Sign off and pay $1,250.00" })
-    .click();
-  await expect(page.getByText("Paid $1,250.00")).toBeVisible();
+  await page.getByRole("button", { name: "Sign off $1,250.00" }).click();
+  await expect(
+    page.getByText(/^Signed off by Dana Whitfield on /),
+  ).toBeVisible();
+  await expect(page.getByText("In progress", { exact: true })).toBeVisible();
+  await expect(page.getByText("Not paid yet")).toBeVisible();
+
+  await expect(async () => {
+    const calls = await request.get("http://127.0.0.1:8003/calls");
+    expect(await calls.json()).toContain("POST /claims/CLM-1003/resume");
+  }).toPass();
+
+  // The stand-in doesn't pay, so the test pays as the agent would.
+  await request.post("/api/claims/CLM-1003/payment", {
+    data: { amount: 1250 },
+  });
+  await expect(page.getByText(/^Paid \$1,250\.00 on /)).toBeVisible();
   await expect(page.getByText("Decided", { exact: true })).toBeVisible();
 });

@@ -4,16 +4,28 @@ import sys
 
 from dotenv import load_dotenv
 
-from agent.main import backend, run_queue, work_claim
+from agent.main import (
+    backend,
+    carry_on_unfinished,
+    resume_queue,
+    run_queue,
+    work_claim,
+)
 
 
 def main(args: list[str]) -> None:
-    """Run the queue agent up to a cap (default: all waiting), or the named claims."""
+    """Carry on unfinished work, then run the queue up to a cap, or the named claims."""
+    for line in carry_on_unfinished():
+        print(line)
     if args and args[0] != "--cap":
         with backend() as client:
             run = client.post("/api/runs", json={"cap": len(args)}).json()
         for claim_id in args:
             print(f"{claim_id}: {work_claim(claim_id, run['run_id'])}")
+        return
+    finished = resume_queue()
+    if finished is not None:
+        print(finished)
         return
     if args:
         cap = int(args[1])

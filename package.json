@@ -7,9 +7,10 @@
   },
   "scripts": {
     "prepare": "lefthook install && playwright install chromium",
-    "dev": "concurrently -k -n backend,dashboard npm:dev:backend npm:dev:dashboard",
+    "dev": "concurrently -k -n backend,dashboard,agent npm:dev:backend npm:dev:dashboard npm:dev:agent",
     "dev:backend": "uv run --env-file .env -m uvicorn backend.main:app --reload --reload-dir backend",
     "dev:dashboard": "vite dashboard",
+    "dev:agent": "uv run --env-file .env -m uvicorn agent.service:app --port 8002",
     "check": "npm run check:python && npm run check:ts && npm run e2e",
     "check:python": "uv run ruff format --check && uv run ruff check && pyright && uv run pytest -q",
     "check:ts": "prettier --check -u dashboard e2e *.config.* && eslint dashboard e2e *.config.* && tsc && vitest run --root dashboard --coverage",

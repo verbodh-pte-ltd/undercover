@@ -3,17 +3,45 @@ import {
   getClaim,
   getClaimHistory,
   getPolicy,
+  listHandlers,
   listSteps,
   type Claim,
+  type Handler,
   type PastClaim,
   type Policy,
   type Step,
 } from "./api";
-import { label, money, sectionLabel } from "./format";
+import { label, money, sectionLabel, when } from "./format";
 import { StatusChip } from "./Queue";
 import { SignOff } from "./SignOff";
 
-function Decision({ claim }: Readonly<{ claim: Claim }>) {
+function Payment({
+  claim,
+  handlers,
+}: Readonly<{ claim: Claim; handlers: Handler[] }>) {
+  const handler = handlers.find((h) => h.handler_id === claim.signed_off_by);
+  return (
+    <>
+      {claim.signed_off_by && claim.signed_off_at && (
+        <p className="muted">
+          Signed off by {handler?.name ?? claim.signed_off_by} on{" "}
+          {when(claim.signed_off_at)}
+        </p>
+      )}
+      <p className="muted">
+        {claim.paid_amount === null
+          ? "Not paid yet"
+          : `Paid ${money(claim.paid_amount)}`}
+        {claim.paid_at && ` on ${when(claim.paid_at)}`}
+      </p>
+    </>
+  );
+}
+
+function Decision({
+  claim,
+  handlers,
+}: Readonly<{ claim: Claim; handlers: Handler[] }>) {
   if (!claim.decision) {
     return <p className="muted">The agent has not decided this claim yet.</p>;
   }
@@ -28,11 +56,7 @@ function Decision({ claim }: Readonly<{ claim: Claim }>) {
       <p>{claim.reason}</p>
       <p className="muted">Policy section: {claim.policy_section}</p>
       {claim.decision === "approve" && (
-        <p className="muted">
-          {claim.paid_amount === null
-            ? "Not paid yet"
-            : `Paid ${money(claim.paid_amount)}`}
-        </p>
+        <Payment claim={claim} handlers={handlers} />
       )}
     </div>
   );
@@ -103,6 +127,7 @@ export function ClaimView({ claimId }: Readonly<{ claimId: string }>) {
   const [steps, setSteps] = useState<Step[]>([]);
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [history, setHistory] = useState<PastClaim[]>([]);
+  const [handlers, setHandlers] = useState<Handler[]>([]);
 
   useEffect(() => {
     void loadClaim(claimId).then(([loaded, loadedSteps]) => {
@@ -111,6 +136,7 @@ export function ClaimView({ claimId }: Readonly<{ claimId: string }>) {
       void getPolicy(loaded.policy_id).then(setPolicy);
       void getClaimHistory(loaded.customer_id).then(setHistory);
     });
+    void listHandlers().then(setHandlers);
   }, [claimId]);
 
   // Until the agent has decided, keep checking for its new steps.
@@ -143,7 +169,7 @@ export function ClaimView({ claimId }: Readonly<{ claimId: string }>) {
         <div className="stack">
           <div className="panel stack-sm">
             <h2>Decision</h2>
-            <Decision claim={claim} />
+            <Decision claim={claim} handlers={handlers} />
             {claim.status === "waiting_for_sign_off" && (
               <SignOff claim={claim} onSigned={setClaim} />
             )}

@@ -7,6 +7,13 @@ const dollars = new Intl.NumberFormat("en-US", {
 
 export const money = (amount: number) => dollars.format(amount);
 
+const moments = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+export const when = (iso: string) => moments.format(new Date(iso));
+
 export const statusLabels: Record<Status, string> = {
   waiting: "Waiting",
   in_progress: "In progress",

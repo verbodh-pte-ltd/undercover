@@ -24,7 +24,10 @@ export function SignOff({
         void signOff(claim.claim_id, handlerId).then(onSigned);
       }}
     >
-      <p>This payout is over $1,000, so it waits for a handler's sign-off.</p>
+      <p>
+        This payout is over $1,000, so it waits for a handler's sign-off. The
+        agent pays it once a handler signs off.
+      </p>
       <label htmlFor="handler">Handler</label>
       <select
         id="handler"
@@ -40,7 +43,7 @@ export function SignOff({
         ))}
       </select>
       <button type="submit" disabled={!handlerId}>
-        Sign off and pay {money(claim.payout ?? 0)}
+        Sign off {money(claim.payout ?? 0)}
       </button>
     </form>
   );
