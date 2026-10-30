@@ -76,9 +76,9 @@ checkpointer and run with `max_concurrency` N.
   the waiting claims, oldest submitted first; for an evaluation, its copies. It leaves out any claim the
   service is already resuming after a sign-off.
 - `work_claim` calls `work(claim_id, run_id)` in the harness, the only place the dispatcher touches the
-  claim agent. Its `RetryPolicy` has `retry_on=(ModelRateLimitError, ModelTimeoutError)` and
-  `max_attempts=3`. Its `error_handler` records that the claim was left in progress and returns, so the
-  dispatch goes on.
+  claim agent. A `ModelRateLimitError` or `ModelTimeoutError` waits and carries the claim on, up to 3
+  tries; after that the claim is left in progress with an error step, and the dispatch goes on. (The
+  brief names a `RetryPolicy` and an `error_handler` for this; see the notes from the build.)
 - When every claim is back, the dispatcher marks the run finished (or, for an evaluation, clears the
   saved threads of copies held for sign-off).
 
@@ -115,83 +115,83 @@ Removed: `set_todos`, `start_run`'s cap, the run's free-text summary and `backen
 
 ## Phase 1: the default model, and cost and time
 
-- [ ] The default model is `openai/gpt-6-luna` with low effort; `MODEL_NAME` sets another with no
+- [x] The default model is `openai/gpt-6-luna` with low effort; `MODEL_NAME` sets another with no
       effort (test)
-- [ ] The claim graph's model node records each call's input and output tokens and its cost from
+- [x] The claim graph's model node records each call's input and output tokens and its cost from
       OpenRouter's `token_usage.cost`, with the run from the config or none (test with a stub reply)
-- [ ] The harness records each stretch of work's seconds with its run (test)
-- [ ] A claim held for sign-off, then resumed, has two stretches of work, and the wait between them is
+- [x] The harness records each stretch of work's seconds with its run (test)
+- [x] A claim held for sign-off, then resumed, has two stretches of work, and the wait between them is
       in neither (test)
-- [ ] A claim's cost and time from a failed attempt still count toward its run (test)
-- [ ] `record_model_call` and `record_work_time` follow the API rules (test reads the OpenAPI schema)
-- [ ] `npm run check:python` passes
+- [x] A claim's cost and time from a failed attempt still count toward its run (test)
+- [x] `record_model_call` and `record_work_time` follow the API rules (test reads the OpenAPI schema)
+- [x] `npm run check:python` passes
 
 ## Phase 2: the dispatcher in place of the queue agent
 
-- [ ] `agent/dispatcher.py` is a `StateGraph` with `list_claims` and `work_claim`, fanning out with
+- [x] `agent/dispatcher.py` is a `StateGraph` with `list_claims` and `work_claim`, fanning out with
       `Send`, and no model and no checkpointer
-- [ ] A dispatch works the claims in progress first, then the waiting claims oldest submitted first
+- [x] A dispatch works the claims in progress first, then the waiting claims oldest submitted first
       (test)
-- [ ] Never more than N claims are worked at once: a stub claim agent records its start and finish, and
+- [x] Never more than N claims are worked at once: a stub claim agent records its start and finish, and
       no moment has more than N (test, at N=3)
-- [ ] Each claim keeps its own thread, and a held claim waits for its sign-off as before (test)
-- [ ] A dispatch skips a claim the service is resuming after a sign-off (test)
-- [ ] The queue agent, its tools, `queue.md`, the to-do list and its table and test are gone; `uv run -m
+- [x] Each claim keeps its own thread, and a held claim waits for its sign-off as before (test)
+- [x] A dispatch skips a claim the service is resuming after a sign-off (test)
+- [x] The queue agent, its tools, `queue.md`, the to-do list and its table and test are gone; `uv run -m
       agent CLM-1001` still works one claim (tests)
-- [ ] `npm run check` passes
+- [x] `npm run check` passes
 
 ## Phase 3: problems are put right
 
-- [ ] A claim that hits a rate limit carries on from its last saved step as the same attempt, with one
+- [x] A claim that hits a rate limit carries on from its last saved step as the same attempt, with one
       decision (test with a stub that raises `ModelRateLimitError` once)
-- [ ] A claim still hitting rate limits after 3 tries stays in progress, and the dispatch works the
+- [x] A claim still hitting rate limits after 3 tries stays in progress, and the dispatch works the
       other claims and finishes (test)
-- [ ] A claim that fails with another error goes back to the queue and the same dispatch tries it once
+- [x] A claim that fails with another error goes back to the queue and the same dispatch tries it once
       more; one that fails twice is left for a handler (tests)
-- [ ] Each claim run gets its own `PostgresSaver` on the process's shared pool of 4 (test on the saver
+- [x] Each claim run gets its own `PostgresSaver` on the process's shared pool of 4 (test on the saver
       and pool settings)
-- [ ] No claim is decided or paid twice across a retry (test counts decisions and payments)
-- [ ] `npm run check:python` passes
+- [x] No claim is decided or paid twice across a retry (test counts decisions and payments)
+- [x] `npm run check:python` passes
 
 ## Phase 4: starting a dispatch from the dashboard
 
-- [ ] `start_dispatch` asks the service with N and returns at once; a second start while one runs is
+- [x] `start_dispatch` asks the service with N and returns at once; a second start while one runs is
       409 (tests)
-- [ ] With no service listening, `start_dispatch` returns 503 and the dashboard says the agent's service
+- [x] With no service listening, `start_dispatch` returns 503 and the dashboard says the agent's service
       isn't running (tests)
-- [ ] When the service starts, any run still marked running is marked stopped (test)
-- [ ] The run panel's summary is built from the records: counts by decision, payouts waiting for
+- [x] When the service starts, any run still marked running is marked stopped (test)
+- [x] The run panel's summary is built from the records: counts by decision, payouts waiting for
       sign-off, claims left for a handler or still in progress, model cost and time (test)
-- [ ] The queue page has the N picker (1 to 25, default 3) and the start button (vitest)
-- [ ] The end-to-end test starts a dispatch on the dashboard and the stand-in on :8003 receives N
-- [ ] `npm run check` passes
+- [x] The queue page has the N picker (1 to 25, default 3) and the start button (vitest)
+- [x] The end-to-end test starts a dispatch on the dashboard and the stand-in on :8003 receives N
+- [x] `npm run check` passes
 
 ## Phase 5: evaluations
 
-- [ ] Seeding stores the held-out claims and both sets' handler decisions in tables no claim operation
+- [x] Seeding stores the held-out claims and both sets' handler decisions in tables no claim operation
       reads, and drops the old to-do table (test)
-- [ ] `start_evaluation` makes copies with new ids (such as `E7-CLM-1001`) and works them through the
+- [x] `start_evaluation` makes copies with new ids (such as `E7-CLM-1001`) and works them through the
       same dispatcher; the queue's counts are the same before and after (test)
-- [ ] `get_claim` on a copy holds nothing from the handlers' decisions (test)
-- [ ] A copy approved over the limit counts as finished, its saved thread is cleared, and a sign-off on
+- [x] `get_claim` on a copy holds nothing from the handlers' decisions (test)
+- [x] A copy approved over the limit counts as finished, its saved thread is cleared, and a sign-off on
       it is refused (tests)
-- [ ] Each evaluation records its set, `tiny`, N, model and effort, and each claim's decision, payout,
+- [x] Each evaluation records its set, `tiny`, N, model and effort, and each claim's decision, payout,
       reason, cost and time (test)
-- [ ] An evaluation that stopped partway shows as stopped (test)
-- [ ] The measures match ones worked out by hand for a scripted evaluation, with an undecided claim
+- [x] An evaluation that stopped partway shows as stopped (test)
+- [x] The measures match ones worked out by hand for a scripted evaluation, with an undecided claim
       counted as a referral (test)
-- [ ] `npm run check:python` passes
+- [x] `npm run check:python` passes
 
 ## Phase 6: the scoreboard and Langfuse tags
 
-- [ ] The Scoreboard page lists evaluations newest first, with every measure (vitest)
-- [ ] An evaluation's page shows each claim with the handler's decision and payout beside the agent's,
+- [x] The Scoreboard page lists evaluations newest first, with every measure (vitest)
+- [x] An evaluation's page shows each claim with the handler's decision and payout beside the agent's,
       misses marked, and a link to the claim (vitest)
-- [ ] Starting an evaluation on the dashboard reaches the stand-in with N, the set and `tiny` (e2e)
-- [ ] The scoreboard shows an evaluation the test plays out through the API (e2e)
-- [ ] A copy's claim page has no sign-off form (vitest)
-- [ ] Each claim's trace carries its run's tag through `langfuse_tags` (test with the handler stubbed)
-- [ ] `npm run check` passes with `.env` renamed
+- [x] Starting an evaluation on the dashboard reaches the stand-in with N, the set and `tiny` (e2e)
+- [x] The scoreboard shows an evaluation the test plays out through the API (e2e)
+- [x] A copy's claim page has no sign-off form (vitest)
+- [x] Each claim's trace carries its run's tag through `langfuse_tags` (test with the handler stubbed)
+- [x] `npm run check` passes with `.env` renamed
 
 ## Phase 7: live checks and the documents
 
@@ -210,3 +210,17 @@ Removed: `set_todos`, `start_run`'s cap, the run's free-text summary and `backen
       `docs/PROCESS.md` (these runs replace the five-claim cap), `docs/CODE_STANDARDS.md` and
       `docs/STATUS.md` describe the product as it now is
 - [ ] `npm run check` passes
+
+## Notes from the build
+
+- **The worker retries rate limits itself, not with `RetryPolicy` and `error_handler`.** In LangGraph
+  1.2.12 a node's `error_handler` doesn't catch a failure when several `Send` tasks run in parallel: the
+  handler runs, but the error still stops the graph (checked with a small script, with and without a
+  checkpointer). A dispatch must never stop for one claim, so `work_claim` catches the two errors itself,
+  waits (1, then 2 seconds) and calls the harness again, which carries the claim on from its last saved
+  step as the same attempt. After 3 tries it leaves the claim in progress. The result is what the brief
+  asks for; only the mechanism differs.
+- **The claim agent's own retry wrapper is gone**, as choice 3 says. Other model errors fail the claim at
+  once, and the harness tries it once more on a new thread.
+- **Phases 1 to 6 were built together and committed as one change**, because the run tables, the
+  dispatcher and the dashboard all changed shape at once; each phase's checks were run before the commit.

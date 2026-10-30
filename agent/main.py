@@ -1,15 +1,15 @@
-"""The UnderCover Agent: a queue agent that hands each claim to a claim agent graph."""
+"""The UnderCover Agent: the claim agent graph, its tools and its harness."""
 
 import contextvars
 import json
 import os
+import time
 from functools import cache
 from typing import Annotated, Any, Literal, TypedDict
 
 import httpx
 import psycopg
-from langchain.agents import create_agent
-from langchain.agents.middleware import ModelRetryMiddleware
+from langchain_core.exceptions import ModelRateLimitError, ModelTimeoutError
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -20,7 +20,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.runnables import RunnableConfig
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langfuse.langchain import CallbackHandler
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -37,7 +37,8 @@ from pydantic import BaseModel, Field, SecretStr
 
 BACKEND_URL = "http://127.0.0.1:8000"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+DEFAULT_MODEL = "openai/gpt-6-luna"
+DEFAULT_EFFORT = "low"
 MODEL_TIMEOUT = 60
 MODEL_RETRIES = 2
 RETRY_DELAY = 1.0
@@ -45,7 +46,9 @@ RESULT_PREVIEW = 300
 RECURSION_LIMIT = 1000
 MAX_MODEL_CALLS = 30
 SCHEMA = "undercover"
-POOL_SIZE = 2
+POOL_SIZE = 4
+POOL_WAIT = 120
+MAX_TRIES = 2
 
 Document = Literal["policy_wording", "claims_manual"]
 Benefit = Literal[
@@ -90,12 +93,6 @@ class Line(BaseModel):
         description="For meals without receipts, the length of the delay in hours;"
         " otherwise 0"
     )
-
-
-class Todo(TypedDict):
-    claim_id: str
-    text: str
-    state: Literal["to_do", "in_progress", "done", "left_for_handler"]
 
 
 def backend() -> httpx.Client:
@@ -197,37 +194,40 @@ class ClaimState(TypedDict):
     model_calls: int
 
 
+def model_name() -> str:
+    """The model in MODEL_NAME, or GPT-6 Luna by default."""
+    return os.getenv("MODEL_NAME") or DEFAULT_MODEL
+
+
+def effort() -> str:
+    """The reasoning effort: low for the default model, none for one in MODEL_NAME."""
+    return "none" if os.getenv("MODEL_NAME") else DEFAULT_EFFORT
+
+
 def model() -> ChatOpenAI:
-    """Return the model named in MODEL_NAME, or DeepSeek V4.1 Flash by default."""
-    name = os.getenv("MODEL_NAME")
+    """Return the model in MODEL_NAME, or GPT-6 Luna with low effort by default."""
     return ChatOpenAI(
-        model=name or DEFAULT_MODEL,
+        model=model_name(),
         base_url=OPENROUTER_BASE_URL,
         api_key=SecretStr(os.environ["OPENROUTER_API_KEY"]),
-        reasoning_effort=None if name else "low",
+        reasoning_effort=None if effort() == "none" else effort(),
         timeout=MODEL_TIMEOUT,
-    )
-
-
-def retry() -> ModelRetryMiddleware:
-    """Retry a failed model call with backoff, then raise the error."""
-    return ModelRetryMiddleware(
-        max_retries=MODEL_RETRIES, initial_delay=RETRY_DELAY, on_failure="error"
+        max_retries=MODEL_RETRIES,
     )
 
 
 @cache
-def saver() -> BaseCheckpointSaver:
-    """Postgres in DATABASE_URL saves each claim's progress, or memory without it."""
-    url = os.getenv("DATABASE_URL")
-    if not url:
-        return InMemorySaver()
+def pool() -> ConnectionPool[Any]:
+    """The process's shared Postgres connections for saving claims' progress."""
+    url = os.environ["DATABASE_URL"]
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
-    pool = ConnectionPool(
+    shared = ConnectionPool(
         url,
         min_size=1,
         max_size=POOL_SIZE,
+        # Claim agents wait for a free connection rather than fail.
+        timeout=POOL_WAIT,
         kwargs={
             "autocommit": True,
             "prepare_threshold": 0,
@@ -235,9 +235,28 @@ def saver() -> BaseCheckpointSaver:
             "options": f"-c search_path={SCHEMA}",
         },
     )
-    checkpointer = PostgresSaver(pool)  # pyright: ignore[reportArgumentType]
-    checkpointer.setup()
-    return checkpointer
+    PostgresSaver(shared).setup()  # pyright: ignore[reportArgumentType]
+    return shared
+
+
+@cache
+def memory() -> InMemorySaver:
+    """Where progress is saved without DATABASE_URL."""
+    return InMemorySaver()
+
+
+def saver() -> BaseCheckpointSaver:
+    """A saver of its own for one claim run, on the shared pool, or memory."""
+    # PostgresSaver holds a lock around every read and write, so claim agents
+    # sharing one saver would take turns; each run gets its own.
+    if not os.getenv("DATABASE_URL"):
+        return memory()
+    return PostgresSaver(pool())  # pyright: ignore[reportArgumentType]
+
+
+def clock() -> float:
+    """Seconds on a clock that only goes forward, for timing work."""
+    return time.perf_counter()
 
 
 def record_step(claim_id: str, kind: str, text: str) -> None:
@@ -245,19 +264,33 @@ def record_step(claim_id: str, kind: str, text: str) -> None:
     call("POST", f"/api/claims/{claim_id}/steps", {"kind": kind, "text": text})
 
 
-def claim_graph(llm: BaseChatModel, instructions: str) -> CompiledStateGraph:
+def record_model_call(claim_id: str, run_id: int | None, reply: BaseMessage) -> None:
+    """Record a model call's tokens and its cost, as OpenRouter reports them."""
+    usage = reply.usage_metadata if isinstance(reply, AIMessage) else None
+    cost = reply.response_metadata.get("token_usage", {}).get("cost") or 0.0
+    body = {
+        "run_id": run_id,
+        "input_tokens": usage["input_tokens"] if usage else 0,
+        "output_tokens": usage["output_tokens"] if usage else 0,
+        "cost": cost,
+    }
+    call("POST", f"/api/claims/{claim_id}/model-calls", body)
+
+
+def claim_graph(
+    llm: BaseChatModel, instructions: str, checkpointer: BaseCheckpointSaver
+) -> CompiledStateGraph:
     """The claim agent: the model and its tools, then sign-off and payment."""
-    model_with_tools = llm.bind_tools(CLAIM_TOOLS).with_retry(
-        stop_after_attempt=MODEL_RETRIES + 1,
-        exponential_jitter_params={"initial": RETRY_DELAY},
-    )
+    model_with_tools = llm.bind_tools(CLAIM_TOOLS)
     system = SystemMessage(instructions)
 
-    def agent(state: ClaimState) -> dict[str, Any]:
-        """Call the model with the conversation so far."""
+    def agent(state: ClaimState, config: RunnableConfig) -> dict[str, Any]:
+        """Call the model with the conversation so far, recording its cost."""
         if state["model_calls"] >= MAX_MODEL_CALLS:
             raise RuntimeError(f"the claim agent reached {MAX_MODEL_CALLS} model calls")
         reply = model_with_tools.invoke([system, *state["messages"]])
+        run_id = config.get("configurable", {}).get("run_id")
+        record_model_call(state["claim_id"], run_id, reply)
         return {"messages": [reply], "model_calls": state["model_calls"] + 1}
 
     def after_agent(state: ClaimState) -> Literal["tools", "settle"]:
@@ -271,7 +304,8 @@ def claim_graph(llm: BaseChatModel, instructions: str) -> CompiledStateGraph:
         if claim["decision"] != "approve" or claim["paid_amount"] is not None:
             return Command(goto="__end__")
         if claim["status"] == "waiting_for_sign_off":
-            return Command(goto="sign_off")
+            # Nobody signs off an evaluation's copy: held for sign-off, it's finished.
+            return Command(goto="__end__" if claim["run_id"] else "sign_off")
         return Command(goto="pay")
 
     def sign_off(state: ClaimState) -> dict[str, Any]:
@@ -301,15 +335,20 @@ def claim_graph(llm: BaseChatModel, instructions: str) -> CompiledStateGraph:
     builder.add_edge("tools", "agent")
     builder.add_edge("sign_off", "pay")
     builder.add_edge("pay", END)
-    return builder.compile(checkpointer=saver())
+    return builder.compile(checkpointer=checkpointer)
 
 
-def traced(thread_id: str) -> RunnableConfig:
+def traced(thread_id: str, run_id: int | None = None) -> RunnableConfig:
     """The run config for a claim's thread, traced in Langfuse when its keys are set."""
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    config: RunnableConfig = {
+        "configurable": {"thread_id": thread_id, "run_id": run_id}
+    }
     if os.getenv("LANGFUSE_PUBLIC_KEY"):
         config["callbacks"] = [CallbackHandler()]
-        config["metadata"] = {"langfuse_session_id": thread_id}
+        metadata: dict[str, Any] = {"langfuse_session_id": thread_id}
+        if run_id is not None:
+            metadata["langfuse_tags"] = [f"run-{run_id}"]
+        config["metadata"] = metadata
     return config
 
 
@@ -328,13 +367,19 @@ def steps(message: BaseMessage) -> list[dict[str, str]]:
     return found
 
 
-def run(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
+def run(
+    claim_id: str,
+    thread_id: str,
+    llm: BaseChatModel | None = None,
+    run_id: int | None = None,
+) -> str:
     """Run the claim agent on its thread: start, carry on, or resume after sign-off."""
     with backend() as client:
         instructions = client.get("/api/instructions").json()["claim"]
         claim = client.get(f"/api/claims/{claim_id}").json()
-    graph = claim_graph(llm or model(), instructions)
-    config = traced(thread_id)
+    checkpointer = saver()
+    graph = claim_graph(llm or model(), instructions, checkpointer)
+    config = traced(thread_id, run_id)
     config["recursion_limit"] = RECURSION_LIMIT
     saved = graph.get_state(config)
     inputs: Any = {
@@ -350,9 +395,20 @@ def run(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
         inputs = None  # carry on from the last saved step
     elif saved.values:
         return f"{claim_id} is {claim['status']}: {claim['decision']}"
-    # A fresh context, so a claim worked from the queue agent's tool starts its own
-    # trace in the claim's Langfuse session rather than joining the queue agent's run.
-    return contextvars.Context().run(stream_claim, graph, inputs, config, claim_id)
+    started = clock()
+    try:
+        # A fresh context, so a claim worked inside another run (a dispatcher's
+        # worker) starts its own trace in the claim's Langfuse session.
+        reply = contextvars.Context().run(stream_claim, graph, inputs, config, claim_id)
+    finally:
+        # The time spent working, which a wait for a sign-off falls outside of.
+        seconds = clock() - started
+        spent = {"run_id": run_id, "seconds": round(seconds, 3)}
+        call("POST", f"/api/claims/{claim_id}/work-times", spent)
+    if claim["run_id"] is not None:
+        # An evaluation's copy held for sign-off is finished; its progress goes.
+        checkpointer.delete_thread(thread_id)
+    return reply
 
 
 def stream_claim(
@@ -375,21 +431,19 @@ def stream_claim(
     return reply
 
 
-def work_claim(claim_id: str, run_id: int, llm: BaseChatModel | None = None) -> str:
-    """Work one claim on its thread and say in one line how it went."""
-    with backend() as client:
-        start = client.post(f"/api/claims/{claim_id}/start", json={"run_id": run_id})
-    if not start.is_success:
-        return f"not started: {start.text}"
-    return carry_on(claim_id, start.json()["thread_id"], llm)
-
-
-def carry_on(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
+def carry_on(
+    claim_id: str,
+    thread_id: str,
+    llm: BaseChatModel | None = None,
+    run_id: int | None = None,
+) -> str:
     """Run the claim agent on a started claim; release it if it fails undecided."""
     error = "the claim agent stopped without a decision"
     reply = ""
     try:
-        reply = run(claim_id, thread_id, llm)
+        reply = run(claim_id, thread_id, llm, run_id)
+    except (ModelRateLimitError, ModelTimeoutError):
+        raise  # the claim stays in progress, and a retry carries it on
     except Exception as exc:  # one bad claim must never stop the run
         error = f"{type(exc).__name__}: {exc}"[:RESULT_PREVIEW]
     with backend() as client:
@@ -404,98 +458,22 @@ def carry_on(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) ->
     return reply or f"{claim_id} is {claim['status']}: {claim['decision']}"
 
 
-def queue_tools(run_id: int, claim_llm: BaseChatModel | None) -> list[BaseTool]:
-    """The queue agent's tools, bound to its run."""
+def work(claim_id: str, run_id: int | None, llm: BaseChatModel | None = None) -> str:
+    """Work one claim in a run: carry it on if in progress, or start it if waiting.
 
-    @tool
-    def list_waiting_claims() -> str:
-        """List the waiting claims in queue order, with their failed attempts."""
-        return call("GET", "/api/claims/waiting")
-
-    @tool
-    def set_todos(todos: list[Todo]) -> str:
-        """Replace the run's to-do list with the whole list as it now stands."""
-        return call("PUT", f"/api/runs/{run_id}/todos", todos)
-
-    @tool("work_claim")
-    def work_claim_tool(claim_id: str) -> str:
-        """Hand one waiting claim to a fresh claim agent; it replies in one line."""
-        return work_claim(claim_id, run_id, claim_llm)
-
-    @tool
-    def finish_run(summary: str) -> str:
-        """Finish the run with a summary for the handlers, once no claim is missed."""
-        return call("POST", f"/api/runs/{run_id}/finish", {"summary": summary})
-
-    return [list_waiting_claims, set_todos, work_claim_tool, finish_run]
-
-
-def queue_agent(
-    run_id: int, llm: BaseChatModel | None, claim_llm: BaseChatModel | None
-) -> CompiledStateGraph:
-    """The queue agent for one run, saving its progress like the claim agent."""
-    with backend() as client:
-        instructions = client.get("/api/instructions").json()["queue"]
-    return create_agent(
-        llm or model(),
-        tools=queue_tools(run_id, claim_llm),
-        system_prompt=instructions,
-        middleware=[retry()],
-        checkpointer=saver(),
-    )
-
-
-def stream_queue(agent: CompiledStateGraph, inputs: Any, run_id: int) -> str:
-    """Run the queue agent on its run's thread, printing each step."""
-    config: RunnableConfig = {
-        "configurable": {"thread_id": f"run-{run_id}"},
-        "recursion_limit": RECURSION_LIMIT,
-    }
+    This is the only place the dispatcher touches the claim agent. A claim that fails
+    goes back to the queue and is tried once more here; a second failure leaves it
+    for a handler. A rate limit or a timeout is let through for the caller to retry.
+    """
     reply = ""
-    for update in agent.stream(
-        inputs, config=config, stream_mode="updates", durability="sync"
-    ):
-        for node in update.values():
-            for message in (node or {}).get("messages", []):
-                for step in steps(message):
-                    print(f"[{step['kind']}] {step['text']}")
-                reply = message.text
+    for _ in range(MAX_TRIES):
+        with backend() as client:
+            start = client.post(
+                f"/api/claims/{claim_id}/start", json={"run_id": run_id}
+            )
+        if not start.is_success:
+            return f"not started: {start.text}"
+        reply = carry_on(claim_id, start.json()["thread_id"], llm, run_id)
+        if not reply.startswith("failed: "):
+            return reply
     return reply
-
-
-def run_queue(
-    cap: int, llm: BaseChatModel | None = None, claim_llm: BaseChatModel | None = None
-) -> str:
-    """Start a run of up to cap claims and let the queue agent work it."""
-    with backend() as client:
-        run_id = client.post("/api/runs", json={"cap": cap}).json()["run_id"]
-    prompt = f"Please work the queue. This run is capped at {cap} claims."
-    inputs = {"messages": [{"role": "user", "content": prompt}]}
-    return stream_queue(queue_agent(run_id, llm, claim_llm), inputs, run_id)
-
-
-def resume_queue(
-    llm: BaseChatModel | None = None, claim_llm: BaseChatModel | None = None
-) -> str | None:
-    """Finish the latest run if its queue agent was stopped partway, or return None."""
-    with backend() as client:
-        run = client.get("/api/runs/current").json()
-    if run is None or run["summary"] is not None:
-        return None
-    agent = queue_agent(run["run_id"], llm, claim_llm)
-    config: RunnableConfig = {"configurable": {"thread_id": f"run-{run['run_id']}"}}
-    if not agent.get_state(config).next:
-        return None
-    return stream_queue(agent, None, run["run_id"])
-
-
-def carry_on_unfinished(llm: BaseChatModel | None = None) -> list[str]:
-    """Carry on every claim that was stopped or signed off while the agent was away."""
-    with backend() as client:
-        unfinished = client.get("/api/claims/unfinished").json()
-    lines = []
-    for claim in unfinished:
-        claim_id = claim["claim_id"]
-        thread_id = claim["thread_id"] or f"{claim_id}-{claim['attempts'] + 1}"
-        lines.append(f"{claim_id}: {carry_on(claim_id, thread_id, llm)}")
-    return lines

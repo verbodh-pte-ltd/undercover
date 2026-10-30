@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import main
+from backend import agent_service
 from backend.main import app
 
 client = TestClient(app)
@@ -30,8 +30,7 @@ def sign_off(claim_id, handler_id):
 
 
 def start(claim_id):
-    run_id = client.post("/api/runs", json={"cap": 5}).json()["run_id"]
-    return client.post(f"/api/claims/{claim_id}/start", json={"run_id": run_id})
+    return client.post(f"/api/claims/{claim_id}/start", json={"run_id": None})
 
 
 def test_start_claim_clears_old_steps():
@@ -156,7 +155,9 @@ def test_a_signed_off_claim_cannot_be_released():
 def test_sign_off_asks_the_agent_to_carry_on(monkeypatch):
     calls = []
     monkeypatch.setenv("UNDERCOVER_AGENT", "http://agent.test")
-    monkeypatch.setattr(main.httpx, "post", lambda url, **kw: calls.append(url))
+    monkeypatch.setattr(
+        agent_service.httpx, "post", lambda url, **kw: calls.append(url)
+    )
     decide("CLM-1001", LARGE)
     sign_off("CLM-1001", "HND-01")
     assert calls == ["http://agent.test/claims/CLM-1001/resume"]
@@ -180,10 +181,9 @@ def test_sign_off_unknown_handler_is_404():
 
 
 def test_start_gives_a_thread_that_a_second_start_keeps():
-    run_id = client.post("/api/runs", json={"cap": 5}).json()["run_id"]
-    first = client.post("/api/claims/CLM-1001/start", json={"run_id": run_id})
+    first = start("CLM-1001")
     assert first.json()["thread_id"] == "CLM-1001-1"
-    again = client.post("/api/claims/CLM-1001/start", json={"run_id": run_id})
+    again = start("CLM-1001")
     assert again.json()["thread_id"] == "CLM-1001-1"
     assert again.json()["attempts"] == 0
 

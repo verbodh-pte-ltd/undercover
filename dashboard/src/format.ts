@@ -1,4 +1,4 @@
-import type { Status, TodoState } from "./api";
+import type { Status } from "./api";
 
 const dollars = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -22,12 +22,20 @@ export const statusLabels: Record<Status, string> = {
   needs_handler: "Left for a handler",
 };
 
-export const todoLabels: Record<TodoState, string> = {
-  to_do: "To do",
-  in_progress: "In progress",
-  done: "Done",
-  left_for_handler: "Left for a handler",
-};
+const costs = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+});
+
+// Model costs are fractions of a cent, so they show four decimal places.
+export const cost = (amount: number) => costs.format(amount);
+
+export const seconds = (value: number | null) =>
+  value === null ? "Not finished" : `${value.toFixed(1)} s`;
+
+export const percent = (share: number) => `${String(Math.round(share * 100))}%`;
 
 const documentLabels: Record<string, string> = {
   policy_wording: "Policy wording",

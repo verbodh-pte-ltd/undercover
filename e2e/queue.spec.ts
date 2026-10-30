@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+const standIn = "http://127.0.0.1:8003/calls";
+
 test("the queue lists every claim and opens one", async ({ page }) => {
   await page.goto("/");
   await expect(
@@ -12,36 +14,39 @@ test("the queue lists every claim and opens one", async ({ page }) => {
   await expect(page.locator("tbody tr")).toHaveCount(25);
 });
 
-test("the instructions are shown read only", async ({ page }) => {
+test("the claim agent's instructions are shown read only", async ({ page }) => {
   await page.goto("/#/instructions");
-  await expect(page.getByText(/running the claims queue/)).toBeVisible();
   await expect(page.getByText(/You decide one travel insurance/)).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });
 
-test("the queue shows the run's to-do list as it changes", async ({
+test("starting a dispatch on the dashboard reaches the agent's service with N", async ({
   page,
   request,
 }) => {
-  const run = await request.post("/api/runs", { data: { cap: 2 } });
-  const { run_id } = (await run.json()) as { run_id: number };
   await page.goto("/");
-  await expect(
-    page.getByText("The agent has not planned this run yet."),
-  ).toBeVisible();
+  await page.getByLabel("Claim agents at once").selectOption("7");
+  await page.getByRole("button", { name: "Start dispatch" }).click();
+  await expect(async () => {
+    const calls = (await (await request.get(standIn)).json()) as string[];
+    expect(calls).toContain('POST /dispatches {"n":7}');
+  }).toPass();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
 
-  const todos = (state: string) => [
-    { claim_id: "CLM-1004", text: "Decide the delayed bag", state },
-  ];
-  await request.put(`/api/runs/${String(run_id)}/todos`, {
-    data: todos("to_do"),
-  });
-  // The queue page polls every five seconds.
-  const nextPoll = { timeout: 10_000 };
-  await expect(page.getByText("Decide the delayed bag")).toBeVisible(nextPoll);
-  await expect(page.getByText("To do", { exact: true })).toBeVisible();
-  await request.put(`/api/runs/${String(run_id)}/todos`, {
-    data: todos("done"),
-  });
-  await expect(page.getByText("Done", { exact: true })).toBeVisible(nextPoll);
+test("starting an evaluation on the dashboard reaches the agent's service", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/#/scoreboard");
+  await page.getByLabel("Set").selectOption("held_out");
+  await page.getByLabel("Only its five tiny claims").check();
+  await page.getByLabel("Claim agents at once").selectOption("5");
+  await page.getByRole("button", { name: "Start evaluation" }).click();
+  await expect(async () => {
+    const calls = (await (await request.get(standIn)).json()) as string[];
+    expect(calls).toContain(
+      'POST /evaluations {"n":5,"eval_set":"held_out","tiny":true}',
+    );
+  }).toPass();
 });

@@ -170,9 +170,16 @@ export function ClaimView({ claimId }: Readonly<{ claimId: string }>) {
           <div className="panel stack-sm">
             <h2>Decision</h2>
             <Decision claim={claim} handlers={handlers} />
-            {claim.status === "waiting_for_sign_off" && (
-              <SignOff claim={claim} onSigned={setClaim} />
+            {claim.run_id !== null && (
+              <p className="muted">
+                A copy of {claim.copied_from} for evaluation {claim.run_id}.
+                Nobody signs off a copy.
+              </p>
             )}
+            {claim.status === "waiting_for_sign_off" &&
+              claim.run_id === null && (
+                <SignOff claim={claim} onSigned={setClaim} />
+              )}
           </div>
           <div className="panel stack-sm">
             <h2>Story</h2>

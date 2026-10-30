@@ -47,6 +47,10 @@ export interface Claim extends ClaimSummary {
   paid_at: string | null;
   attempts: number;
   sections_read: string[];
+  run_id: number | null;
+  copied_from: string | null;
+  cost: number;
+  seconds: number;
 }
 
 export interface Policy {
@@ -78,24 +82,86 @@ export interface Step {
   text: string;
 }
 
-export type TodoState = "to_do" | "in_progress" | "done" | "left_for_handler";
-
-export interface Todo {
+export interface RunClaim {
   claim_id: string;
-  text: string;
-  state: TodoState;
+  status: Status;
+  decision: Decision | null;
+  payout: number | null;
+  cost: number;
+  seconds: number;
 }
+
+export interface RunSummary {
+  approved: number;
+  declined: number;
+  referred: number;
+  waiting_for_sign_off: { claim_id: string; payout: number }[];
+  left_for_handler: string[];
+  in_progress: string[];
+}
+
+export type RunStatus = "running" | "finished" | "stopped";
 
 export interface Run {
   run_id: number;
-  cap: number;
-  todos: Todo[];
-  summary: string | null;
-  claims_started: string[];
+  kind: "dispatch" | "evaluation";
+  n: number;
+  model: string;
+  effort: string;
+  status: RunStatus;
+  started_at: string;
+  finished_at: string | null;
+  claims: RunClaim[];
+  cost: number;
+  seconds: number;
+  run_seconds: number | null;
+  summary: RunSummary;
+}
+
+export type EvalSet = "evaluation" | "held_out";
+
+export interface Measures {
+  decision_accuracy: number;
+  accuracy: number;
+  cost_of_mistakes: number;
+  straight_through: number;
+  cost_per_claim: number;
+  seconds_per_claim: number;
+  run_seconds: number | null;
+}
+
+export interface EvaluationSummary extends Measures {
+  run_id: number;
+  eval_set: EvalSet;
+  tiny: boolean;
+  n: number;
+  model: string;
+  effort: string;
+  status: RunStatus;
+  started_at: string;
+}
+
+export interface EvaluationClaim {
+  claim_id: string;
+  copied_from: string;
+  status: Status;
+  agent: Decision;
+  agent_payout: number;
+  reason: string | null;
+  handler: Decision;
+  handler_payout: number;
+  decision_right: boolean;
+  right: boolean;
+  mistake_cost: number;
+  cost: number;
+  seconds: number;
+}
+
+export interface Evaluation extends EvaluationSummary {
+  claims: EvaluationClaim[];
 }
 
 export interface Instructions {
-  queue: string;
   claim: string;
 }
 
@@ -122,6 +188,28 @@ export const listSteps = (id: string) =>
 export const listHandlers = () => getJson<Handler[]>("/api/handlers");
 export const getCurrentRun = () => getJson<Run | null>("/api/runs/current");
 export const getInstructions = () => getJson<Instructions>("/api/instructions");
+export const listEvaluations = () =>
+  getJson<EvaluationSummary[]>("/api/evaluations");
+export const getEvaluation = (id: string) =>
+  getJson<Evaluation>(`/api/evaluations/${id}`);
+
+async function post(path: string, body: unknown): Promise<string | null> {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (response.ok) return null;
+  const { detail } = (await response.json()) as { detail: unknown };
+  return typeof detail === "string"
+    ? detail
+    : `Starting returned ${String(response.status)}`;
+}
+
+// Each returns null once started, or the reason it was refused.
+export const startDispatch = (n: number) => post("/api/dispatches", { n });
+export const startEvaluation = (n: number, evalSet: EvalSet, tiny: boolean) =>
+  post("/api/evaluations", { n, eval_set: evalSet, tiny });
 
 export async function signOff(claimId: string, handlerId: string) {
   const response = await fetch(`/api/claims/${claimId}/sign-off`, {

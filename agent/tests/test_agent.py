@@ -1,15 +1,17 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.exceptions import ModelRateLimitError
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import __main__ as runner
-from agent import main, service
+from agent import dispatcher, main, service
 from backend.main import app
 
 client = TestClient(app)
@@ -45,7 +47,6 @@ def stub(*items):
 @pytest.fixture(autouse=True)
 def in_process_backend(monkeypatch):
     monkeypatch.setattr(main, "backend", lambda: TestClient(app))
-    monkeypatch.setattr(runner, "backend", lambda: TestClient(app))
     monkeypatch.setattr(main, "RETRY_DELAY", 0)
     memory = InMemorySaver()
     monkeypatch.setattr(main, "saver", lambda: memory)
@@ -80,12 +81,16 @@ def decide(claim_id, verdict="decline"):
     ]
 
 
-def todos(*items):
-    return [{"claim_id": c, "text": f"Decide {c}", "state": s} for c, s in items]
-
-
-def new_run(cap):
-    return client.post("/api/runs", json={"cap": cap}).json()["run_id"]
+def new_run(kind="dispatch", eval_set=None, tiny=False, n=3):
+    body = {
+        "kind": kind,
+        "n": n,
+        "eval_set": eval_set,
+        "tiny": tiny,
+        "model": "stub",
+        "effort": "none",
+    }
+    return client.post("/api/runs", json=body).json()["run_id"]
 
 
 def claim(claim_id):
@@ -125,6 +130,10 @@ def test_refusal_comes_back_as_text():
     assert main.record_decision.invoke(args).startswith("Refused (422)")
 
 
+def steps_of(claim_id):
+    return [s["text"] for s in client.get(f"/api/claims/{claim_id}/steps").json()]
+
+
 def test_claim_agent_reads_sections_approves_and_pays():
     replies = [
         calls(
@@ -140,15 +149,14 @@ def test_claim_agent_reads_sections_approves_and_pays():
         calls(("record_decision", decision("CLM-1001", 420.0))),
         AIMessage(content="Approved, $420.00."),
     ]
-    reply = main.work_claim("CLM-1001", new_run(1), stub(*replies))
+    reply = main.work("CLM-1001", None, stub(*replies))
     assert reply == "Approved, $420.00."
     result = claim("CLM-1001")
     assert (result["status"], result["paid_amount"]) == ("decided", 420.0)
     assert result["sections_read"] == ["claims_manual 6", "policy_wording 3"]
-    steps = client.get("/api/claims/CLM-1001/steps").json()
-    assert steps[0]["text"] == 'get_claim({"claim_id": "CLM-1001"})'
-    assert steps[-2]["text"] == "Approved, $420.00."
-    assert steps[-1]["text"] == "pay_claim: Paid $420.00"
+    texts = steps_of("CLM-1001")
+    assert texts[0] == 'get_claim({"claim_id": "CLM-1001"})'
+    assert texts[-2:] == ["Approved, $420.00.", "pay_claim: Paid $420.00"]
 
 
 def test_claim_agent_works_out_the_payout_with_the_tool():
@@ -164,21 +172,21 @@ def test_claim_agent_works_out_the_payout_with_the_tool():
         calls(("record_decision", decision("CLM-1001", 300.0))),
         AIMessage(content="Approved, $300.00."),
     ]
-    main.work_claim("CLM-1001", new_run(1), stub(*replies))
-    results = [s["text"] for s in client.get("/api/claims/CLM-1001/steps").json()]
+    main.work("CLM-1001", None, stub(*replies))
     assert any(
-        r.startswith("calculate_payout:") and '"payout":300.0' in r for r in results
+        r.startswith("calculate_payout:") and '"payout":300.0' in r
+        for r in steps_of("CLM-1001")
     )
     assert claim("CLM-1001")["payout"] == 300.0
 
 
-def hold(claim_id="CLM-1001", payout=1250.0):
+def hold(claim_id="CLM-1001", payout=1250.0, run_id=None):
     """Work a claim to an approval over the limit, which waits for sign-off."""
     replies = [
         calls(("record_decision", decision(claim_id, payout))),
         AIMessage(content=f"Approved, ${payout:,.2f}."),
     ]
-    return main.work_claim(claim_id, new_run(1), stub(*replies))
+    return main.work(claim_id, run_id, stub(*replies))
 
 
 def test_claim_agent_has_no_pay_tool():
@@ -187,11 +195,9 @@ def test_claim_agent_has_no_pay_tool():
 
 
 def test_claim_agent_pauses_before_a_payout_over_the_limit():
-    reply = hold()
-    assert reply == "CLM-1001 is waiting for a handler's sign-off."
+    assert hold() == "CLM-1001 is waiting for a handler's sign-off."
     result = claim("CLM-1001")
-    assert result["status"] == "waiting_for_sign_off"
-    assert result["paid_amount"] is None
+    assert (result["status"], result["paid_amount"]) == ("waiting_for_sign_off", None)
     saved = main.saver().get_tuple({"configurable": {"thread_id": "CLM-1001-1"}})
     assert saved is not None
 
@@ -205,7 +211,7 @@ def test_sign_off_resumes_the_claim_and_pays_it_once():
     assert result["signed_off_by"] == "HND-01"
     assert result["paid_at"] >= result["signed_off_at"]
     main.run("CLM-1001", "CLM-1001-1", stub())
-    texts = [s["text"] for s in client.get("/api/claims/CLM-1001/steps").json()]
+    texts = steps_of("CLM-1001")
     assert "Signed off by HND-01" in texts
     assert len([t for t in texts if t.startswith("pay_claim:")]) == 1
 
@@ -218,209 +224,129 @@ def test_a_held_claim_without_a_sign_off_keeps_waiting():
 
 
 def test_a_stopped_claim_carries_on_from_its_last_step():
-    run_id = new_run(1)
     first = [calls(("get_claim", {"claim_id": "CLM-1001"})), KeyboardInterrupt()]
     with pytest.raises(KeyboardInterrupt):
-        main.run("CLM-1001", start("CLM-1001", run_id)["thread_id"], stub(*first))
+        main.run("CLM-1001", start("CLM-1001", None)["thread_id"], stub(*first))
     rest = [
         calls(("record_decision", decision("CLM-1001", 420.0))),
         AIMessage(content="Approved, $420.00."),
     ]
-    reply = main.work_claim("CLM-1001", run_id, stub(*rest))
-    assert reply == "Approved, $420.00."
+    assert main.work("CLM-1001", None, stub(*rest)) == "Approved, $420.00."
     result = claim("CLM-1001")
     assert (result["thread_id"], result["attempts"]) == ("CLM-1001-1", 0)
     assert (result["status"], result["paid_amount"]) == ("decided", 420.0)
-    texts = [s["text"] for s in client.get("/api/claims/CLM-1001/steps").json()]
+    texts = steps_of("CLM-1001")
     assert len([t for t in texts if t.startswith("get_claim(")]) == 1
     assert len([t for t in texts if t.startswith("record_decision(")]) == 1
 
 
-def test_a_claim_that_fails_starts_afresh_on_a_new_thread(monkeypatch):
-    monkeypatch.setattr(main, "MODEL_RETRIES", 0)
-    run_id = new_run(2)
-    first = [calls(("get_claim", {"claim_id": "CLM-1001"})), TimeoutError("no reply")]
-    main.work_claim("CLM-1001", run_id, stub(*first))
-    assert claim("CLM-1001")["status"] == "waiting"
-    second = [
-        calls(("record_decision", decision("CLM-1001", 0, "decline"))),
-        AIMessage(content="Declined."),
+def test_a_failed_claim_is_tried_once_more_afresh():
+    replies = [
+        calls(("get_claim", {"claim_id": "CLM-1001"})),
+        TimeoutError("no reply"),
+        *decide("CLM-1001"),
     ]
-    assert main.work_claim("CLM-1001", run_id, stub(*second)) == "Declined."
-    assert claim("CLM-1001")["thread_id"] == "CLM-1001-2"
+    assert main.work("CLM-1001", None, stub(*replies)) == "CLM-1001: decline, $0.00."
+    result = claim("CLM-1001")
+    assert (result["status"], result["attempts"]) == ("decided", 1)
+    assert result["thread_id"] == "CLM-1001-2"
     fresh = main.saver().get_tuple({"configurable": {"thread_id": "CLM-1001-2"}})
     assert fresh is not None
     assert fresh.checkpoint["channel_values"]["model_calls"] == 2
+    assert "TimeoutError: no reply" in steps_of("CLM-1001")
+
+
+def test_a_claim_that_fails_twice_is_left_for_a_handler():
+    reply = main.work("CLM-1001", None, stub(TimeoutError("one"), TimeoutError("two")))
+    assert reply.startswith("failed twice: TimeoutError: two")
+    result = claim("CLM-1001")
+    assert (result["status"], result["attempts"]) == ("needs_handler", 2)
 
 
 def test_a_31st_model_call_is_refused(monkeypatch):
     monkeypatch.setattr(main, "MAX_MODEL_CALLS", 3)
-    looping = [calls(("get_claim", {"claim_id": "CLM-1001"})) for _ in range(4)]
-    reply = main.work_claim("CLM-1001", new_run(1), stub(*looping))
-    assert reply.startswith("failed: RuntimeError: the claim agent reached 3 model")
-    assert claim("CLM-1001")["status"] == "waiting"
-
-
-def test_model_error_releases_the_claim(monkeypatch):
-    monkeypatch.setattr(main, "MODEL_RETRIES", 0)
-    reply = main.work_claim("CLM-1001", new_run(1), stub(TimeoutError("no reply")))
-    assert reply.startswith("failed: TimeoutError: no reply")
-    result = claim("CLM-1001")
-    assert (result["status"], result["attempts"]) == ("waiting", 1)
-    last = client.get("/api/claims/CLM-1001/steps").json()[-1]
-    assert (last["kind"], last["text"]) == ("error", "TimeoutError: no reply")
-
-
-def test_model_error_is_retried():
-    replies = [TimeoutError("no reply"), *decide("CLM-1001")]
-    reply = main.work_claim("CLM-1001", new_run(1), stub(*replies))
-    assert reply == "CLM-1001: decline, $0.00."
-    assert claim("CLM-1001")["attempts"] == 0
+    looping = [calls(("get_claim", {"claim_id": "CLM-1001"})) for _ in range(8)]
+    reply = main.work("CLM-1001", None, stub(*looping))
+    assert reply.startswith("failed twice: RuntimeError: the claim agent reached 3")
 
 
 def test_claim_agent_that_stops_without_a_decision_is_released():
-    reply = main.work_claim("CLM-1001", new_run(1), stub(AIMessage(content="Hmm.")))
-    assert reply.startswith("failed: the claim agent stopped without a decision")
+    reply = main.work("CLM-1001", None, stub(AIMessage(content="Hmm."), AIMessage("?")))
+    assert reply.startswith("failed twice: the claim agent stopped without a decision")
 
 
-def test_work_claim_on_an_unknown_claim():
-    assert main.work_claim("CLM-0000", new_run(1), stub()).startswith("not started:")
+def test_work_on_an_unknown_or_decided_claim():
+    assert main.work("CLM-0000", None, stub()).startswith("not started:")
+    main.work("CLM-1001", None, stub(*decide("CLM-1001")))
+    assert main.work("CLM-1001", None, stub()).startswith("not started:")
 
 
-def test_refused_start_leaves_another_runs_claim_alone():
-    other, run_id = new_run(1), new_run(1)
-    client.post("/api/claims/CLM-1001/start", json={"run_id": other})
-    client.post("/api/claims/CLM-1002/start", json={"run_id": run_id})
-    reply = main.work_claim("CLM-1001", run_id, stub())
-    assert reply.startswith("not started:")
-    assert "cap of 1" in reply
+def test_a_rate_limit_is_let_through_and_the_claim_stays_in_progress():
+    replies = [
+        calls(("get_claim", {"claim_id": "CLM-1001"})),
+        ModelRateLimitError("429"),
+    ]
+    with pytest.raises(ModelRateLimitError):
+        main.work("CLM-1001", None, stub(*replies))
     result = claim("CLM-1001")
     assert (result["status"], result["attempts"]) == ("in_progress", 0)
 
 
-def test_queue_agent_works_the_queue():
-    queue = stub(
-        calls(("list_waiting_claims", {})),
-        calls(
-            (
-                "set_todos",
-                {"todos": todos(("CLM-1001", "to_do"), ("CLM-1002", "to_do"))},
-            )
-        ),
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("work_claim", {"claim_id": "CLM-1002"})),
-        calls(
-            ("set_todos", {"todos": todos(("CLM-1001", "done"), ("CLM-1002", "done"))})
-        ),
-        calls(("finish_run", {"summary": "Two claims declined."})),
-        AIMessage(content="Two claims declined."),
+def test_cost_is_recorded_for_each_model_call_with_its_run():
+    run_id = new_run()
+    reply = AIMessage(
+        content="",
+        tool_calls=calls(
+            ("record_decision", decision("CLM-1001", 0, "decline"))
+        ).tool_calls,
+        usage_metadata={
+            "input_tokens": 1200,
+            "output_tokens": 80,
+            "total_tokens": 1280,
+        },
+        response_metadata={"token_usage": {"cost": 0.0021}},
     )
-    reply = main.run_queue(2, queue, stub(*decide("CLM-1001"), *decide("CLM-1002")))
-    assert reply == "Two claims declined."
+    main.work("CLM-1001", run_id, stub(reply, AIMessage(content="Declined.")))
     run = client.get("/api/runs/current").json()
-    assert run["summary"] == "Two claims declined."
-    assert run["todos"] == todos(("CLM-1001", "done"), ("CLM-1002", "done"))
-    assert [claim(c)["status"] for c in ["CLM-1001", "CLM-1002", "CLM-1003"]] == [
-        "decided",
-        "decided",
-        "waiting",
-    ]
+    assert run["cost"] == pytest.approx(0.0021)
+    assert run["claims"][0]["claim_id"] == "CLM-1001"
+    assert claim("CLM-1001")["cost"] == pytest.approx(0.0021)
 
 
-def test_cap_stops_a_third_claim():
-    queue = stub(
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("work_claim", {"claim_id": "CLM-1002"})),
-        calls(("work_claim", {"claim_id": "CLM-1003"})),
-        AIMessage(content="Done."),
-    )
-    main.run_queue(2, queue, stub(*decide("CLM-1001"), *decide("CLM-1002")))
-    assert claim("CLM-1003")["status"] == "waiting"
-    assert len(client.get("/api/claims/waiting").json()) == 23
-
-
-def test_failed_claim_does_not_stop_the_run_and_is_tried_again(monkeypatch):
-    monkeypatch.setattr(main, "MODEL_RETRIES", 0)
-    queue = stub(
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("work_claim", {"claim_id": "CLM-1002"})),
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("finish_run", {"summary": "Both declined."})),
-        AIMessage(content="Both declined."),
-    )
-    claims = stub(TimeoutError("no reply"), *decide("CLM-1002"), *decide("CLM-1001"))
-    main.run_queue(2, queue, claims)
-    first, second = claim("CLM-1001"), claim("CLM-1002")
-    assert (first["status"], first["attempts"]) == ("decided", 1)
-    assert second["status"] == "decided"
-    assert client.get("/api/runs/current").json()["summary"] == "Both declined."
-
-
-def test_claim_that_fails_twice_is_left_for_a_handler(monkeypatch):
-    monkeypatch.setattr(main, "MODEL_RETRIES", 0)
-    queue = stub(
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("set_todos", {"todos": todos(("CLM-1001", "left_for_handler"))})),
-        calls(("finish_run", {"summary": "CLM-1001 is left for a handler."})),
-        AIMessage(content="Done."),
-    )
-    main.run_queue(1, queue, stub(TimeoutError("one"), TimeoutError("two")))
-    result = claim("CLM-1001")
-    assert (result["status"], result["attempts"]) == ("needs_handler", 2)
+def test_time_is_recorded_with_its_run_and_leaves_out_a_sign_off_wait(monkeypatch):
+    ticks = iter([0.0, 7.0, 1000.0, 1002.0])
+    monkeypatch.setattr(main, "clock", lambda: next(ticks))
+    run_id = new_run()
+    hold(run_id=run_id)
+    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-01"})
+    main.run("CLM-1001", "CLM-1001-1", stub())
     run = client.get("/api/runs/current").json()
-    assert run["todos"][0]["state"] == "left_for_handler"
-    assert run["summary"] == "CLM-1001 is left for a handler."
+    assert run["seconds"] == pytest.approx(7.0)
+    assert claim("CLM-1001")["seconds"] == pytest.approx(9.0)
 
 
-def test_finishing_early_is_refused_and_the_missed_claim_is_worked():
-    queue = stub(
-        calls(("finish_run", {"summary": "Nothing to do."})),
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("finish_run", {"summary": "One claim declined."})),
-        AIMessage(content="One claim declined."),
+def test_a_failed_attempts_cost_and_time_count_toward_its_run():
+    run_id = new_run()
+    costly = AIMessage(
+        content="",
+        tool_calls=calls(("get_claim", {"claim_id": "CLM-1001"})).tool_calls,
+        response_metadata={"token_usage": {"cost": 0.01}},
     )
-    main.run_queue(1, queue, stub(*decide("CLM-1001")))
-    assert claim("CLM-1001")["status"] == "decided"
-    assert client.get("/api/runs/current").json()["summary"] == "One claim declined."
+    main.work("CLM-1001", run_id, stub(costly, TimeoutError("one"), TimeoutError("2")))
+    run = client.get("/api/runs/current").json()
+    assert run["cost"] == pytest.approx(0.01)
+    assert len(run["claims"]) == 1
+    assert run["seconds"] > 0
 
 
-def test_runner_with_a_cap(monkeypatch):
-    caps = []
-    monkeypatch.setattr(runner, "run_queue", caps.append)
-    runner.main(["--cap", "5"])
-    runner.main([])
-    assert caps == [5, 25]
-
-
-def test_runner_with_nothing_waiting(monkeypatch, capsys):
-    monkeypatch.setattr(runner, "backend", lambda: FakeClient([]))
-    runner.main([])
-    assert "No claims are waiting." in capsys.readouterr().out
-
-
-class FakeClient:
-    def __init__(self, waiting):
-        self.waiting = waiting
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-    def get(self, path):
-        return type("Response", (), {"json": lambda _: self.waiting})()
-
-
-def test_runner_works_named_claims(monkeypatch):
-    worked = []
-    monkeypatch.setattr(
-        runner, "work_claim", lambda claim_id, run_id: worked.append(claim_id)
-    )
-    runner.main(["CLM-1003", "CLM-1001"])
-    assert worked == ["CLM-1003", "CLM-1001"]
-    assert client.get("/api/runs/current").json()["cap"] == 2
+def test_an_evaluation_copy_held_for_sign_off_is_finished_and_cleared():
+    run_id = new_run("evaluation", "evaluation", tiny=True)
+    copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
+    hold(copy_id, run_id=run_id)
+    assert claim(copy_id)["status"] == "waiting_for_sign_off"
+    thread = claim(copy_id)["thread_id"]
+    assert main.saver().get_tuple({"configurable": {"thread_id": thread}}) is None
+    assert "is waiting for a handler" not in " ".join(steps_of(copy_id))
 
 
 def test_agent_never_reads_data():
@@ -432,31 +358,155 @@ def test_model_name(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.delenv("MODEL_NAME", raising=False)
     default = main.model()
-    assert default.model_name == "deepseek/deepseek-v4.1-flash"
-    assert default.reasoning_effort == "low"
+    assert default.model_name == "openai/gpt-6-luna"
+    assert (default.reasoning_effort, main.effort()) == ("low", "low")
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
-    assert main.model().model_name == "openrouter/free"
+    chosen = main.model()
+    assert (chosen.model_name, chosen.reasoning_effort) == ("openrouter/free", None)
+    assert main.effort() == "none"
 
 
 def test_no_tracing_without_langfuse_keys():
-    config = main.traced("CLM-1001-1")
-    assert config == {"configurable": {"thread_id": "CLM-1001-1"}}
+    config = main.traced("CLM-1001-1", 7)
+    assert config == {"configurable": {"thread_id": "CLM-1001-1", "run_id": 7}}
 
 
-def test_tracing_puts_the_claim_in_its_thread_session(monkeypatch):
+def test_tracing_puts_the_claim_in_its_session_tagged_with_its_run(monkeypatch):
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setattr(main, "CallbackHandler", lambda: "handler")
-    config = main.traced("CLM-1001-1")
+    config = main.traced("CLM-1001-1", 7)
     assert config.get("callbacks") == ["handler"]
-    assert config.get("metadata") == {"langfuse_session_id": "CLM-1001-1"}
+    assert config.get("metadata") == {
+        "langfuse_session_id": "CLM-1001-1",
+        "langfuse_tags": ["run-7"],
+    }
+    assert main.traced("CLM-1001-1").get("metadata") == {
+        "langfuse_session_id": "CLM-1001-1"
+    }
 
 
-def test_claim_agent_runs_on_the_claims_thread(monkeypatch):
-    seen = []
-    real = main.traced
-    monkeypatch.setattr(main, "traced", lambda t: seen.append(t) or real(t))
-    main.work_claim("CLM-1001", new_run(1), stub(*decide("CLM-1001")))
-    assert seen == ["CLM-1001-1"]
+def test_runner_works_named_claims_with_no_run(monkeypatch, capsys):
+    worked = []
+    monkeypatch.setattr(runner, "work", lambda c, run_id: worked.append((c, run_id)))
+    runner.main(["CLM-1003", "CLM-1001"])
+    assert worked == [("CLM-1003", None), ("CLM-1001", None)]
+    runner.main([])
+    assert "Usage: uv run -m agent CLAIM_ID" in capsys.readouterr().out
+
+
+# The dispatcher
+
+
+def fake_work(record, seconds=0.05):
+    """A stand-in for the harness that records when each claim starts and finishes."""
+
+    def work(claim_id, run_id, llm=None):
+        started = time.perf_counter()
+        time.sleep(seconds)
+        record.append((claim_id, started, time.perf_counter()))
+        return f"{claim_id}: done"
+
+    return work
+
+
+def most_at_once(record):
+    events = sorted([(s, 1) for _, s, _ in record] + [(f, -1) for _, _, f in record])
+    at_once = most = 0
+    for _, change in events:
+        at_once += change
+        most = max(most, at_once)
+    return most
+
+
+def test_never_more_than_n_claims_at_once(monkeypatch):
+    record = []
+    monkeypatch.setattr(main, "work", fake_work(record))
+    run_id = new_run(n=3)
+    results = dispatcher.dispatch(run_id, 3)
+    assert len(results) == 25
+    assert len(record) == 25
+    assert most_at_once(record) == 3
+    assert client.get("/api/runs/current").json()["status"] == "finished"
+
+
+def test_a_dispatch_works_claims_in_progress_first(monkeypatch):
+    record = []
+    monkeypatch.setattr(main, "work", fake_work(record, 0))
+    start("CLM-1020", None)
+    dispatcher.dispatch(new_run(n=1), 1)
+    assert record[0][0] == "CLM-1020"
+
+
+def test_a_dispatch_skips_a_claim_being_worked_here(monkeypatch):
+    record = []
+    monkeypatch.setattr(main, "work", fake_work(record, 0))
+    assert dispatcher.take("CLM-1001")
+    try:
+        dispatcher.dispatch(new_run(n=5), 5)
+    finally:
+        dispatcher.let_go("CLM-1001")
+    assert "CLM-1001" not in [c for c, _, _ in record]
+    assert len(record) == 24
+
+
+def test_a_rate_limit_carries_on_as_the_same_attempt_with_one_decision():
+    run_id = new_run(n=1)
+    stopped = start("CLM-1001", None)
+    # Work only CLM-1001: every other claim is taken, as if being worked here.
+    others = client.get(f"/api/runs/{run_id}/claims").json()[1:]
+    for other in others:
+        dispatcher.take(other)
+    replies = [
+        calls(("get_claim", {"claim_id": "CLM-1001"})),
+        ModelRateLimitError("429"),
+        calls(("record_decision", decision("CLM-1001", 0, "decline"))),
+        AIMessage(content="Declined."),
+    ]
+    try:
+        results = dispatcher.dispatch(run_id, 1, stub(*replies))
+    finally:
+        for other in others:
+            dispatcher.let_go(other)
+    assert results[0]["reply"] == "Declined."
+    result = claim("CLM-1001")
+    assert (result["thread_id"], result["attempts"]) == (stopped["thread_id"], 0)
+    texts = steps_of("CLM-1001")
+    assert len([t for t in texts if t.startswith("record_decision(")]) == 1
+    assert len([t for t in texts if t.startswith("get_claim(")]) == 1
+
+
+def test_a_claim_still_rate_limited_stays_in_progress_and_the_dispatch_goes_on(
+    monkeypatch,
+):
+    def work(claim_id, run_id, llm=None):
+        if claim_id == "CLM-1001":
+            main.call("POST", f"/api/claims/{claim_id}/start", {"run_id": run_id})
+            raise ModelRateLimitError("429")
+        return f"{claim_id}: done"
+
+    monkeypatch.setattr(main, "work", work)
+    results = dispatcher.dispatch(new_run(n=5), 5)
+    replies = {r["claim_id"]: r["reply"] for r in results}
+    assert replies["CLM-1001"].startswith("left in progress after 3 tries")
+    assert len(replies) == 25
+    assert claim("CLM-1001")["status"] == "in_progress"
+    assert client.get("/api/runs/current").json()["status"] == "finished"
+
+
+def test_an_evaluation_works_its_copies_and_leaves_the_queue_alone():
+    before = [(c["claim_id"], c["status"]) for c in client.get("/api/claims").json()]
+    run_id = new_run("evaluation", "evaluation", tiny=True, n=1)
+    copies = client.get(f"/api/runs/{run_id}/claims").json()
+    replies = [m for copy_id in copies for m in decide(copy_id)]
+    dispatcher.dispatch(run_id, 1, stub(*replies))
+    evaluation = client.get(f"/api/evaluations/{run_id}").json()
+    assert [c["agent"] for c in evaluation["claims"]] == ["decline"] * 5
+    assert evaluation["status"] == "finished"
+    after = [(c["claim_id"], c["status"]) for c in client.get("/api/claims").json()]
+    assert after == before
+
+
+# The agent's service
 
 
 def test_the_service_resumes_a_signed_off_claim_and_pays_it(monkeypatch):
@@ -477,61 +527,33 @@ def test_the_service_leaves_a_claim_that_is_not_in_progress(monkeypatch):
     assert claim("CLM-1001")["status"] == "waiting_for_sign_off"
 
 
-def test_runner_carries_on_unfinished_claims_first(monkeypatch, capsys):
-    run_id = new_run(2)
-    first = [calls(("get_claim", {"claim_id": "CLM-1002"})), KeyboardInterrupt()]
-    with pytest.raises(KeyboardInterrupt):
-        main.run("CLM-1002", start("CLM-1002", run_id)["thread_id"], stub(*first))
-    hold("CLM-1001")
-    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-01"})
-    rest = [
-        calls(("record_decision", decision("CLM-1002", 0, "decline"))),
-        AIMessage(content="Declined."),
-    ]
-    monkeypatch.setattr(main, "model", lambda: stub(*rest))
-    runner.main(["--cap", "0"])
-    out = capsys.readouterr().out
-    assert "CLM-1001: " in out
-    assert "CLM-1002: Declined." in out
-    assert claim("CLM-1001")["paid_amount"] == 1250.0
-    assert (claim("CLM-1002")["status"], claim("CLM-1002")["attempts"]) == (
-        "decided",
-        0,
-    )
+def test_the_service_starts_a_dispatch_and_refuses_a_second(monkeypatch):
+    started = []
+    finish = threading.Event()
 
+    def dispatch(run_id, n, llm=None):
+        started.append((run_id, n))
+        finish.wait(5)
 
-def test_a_stopped_queue_run_is_finished_by_the_next_run():
-    stopped = [
-        calls(("set_todos", {"todos": todos(("CLM-1001", "to_do"))})),
-        KeyboardInterrupt(),
-    ]
-    with pytest.raises(KeyboardInterrupt):
-        main.run_queue(1, stub(*stopped))
-    run_id = client.get("/api/runs/current").json()["run_id"]
-    rest = [
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("finish_run", {"summary": "One claim declined."})),
-        AIMessage(content="Done."),
-    ]
-    assert main.resume_queue(stub(*rest), stub(*decide("CLM-1001"))) == "Done."
+    monkeypatch.setattr(dispatcher, "dispatch", dispatch)
+    with TestClient(service.app) as agent:
+        assert agent.post("/dispatches", json={"n": 4}).status_code == 202
+        second = agent.post(
+            "/evaluations", json={"n": 2, "eval_set": "held_out", "tiny": True}
+        )
+        assert second.status_code == 409
+        finish.set()
+        for _ in range(100):
+            if not service.running.locked():
+                break
+            time.sleep(0.01)
     run = client.get("/api/runs/current").json()
-    assert (run["run_id"], run["summary"]) == (run_id, "One claim declined.")
-    assert main.resume_queue(stub()) is None
+    assert started == [(run["run_id"], 4)]
+    assert (run["n"], run["model"]) == (4, main.model_name())
 
 
-def test_a_claim_from_the_queue_runs_outside_the_queue_agents_context(monkeypatch):
-    parents = []
-    real = main.stream_claim
-
-    def spy(*args):
-        parents.append(var_child_runnable_config.get())
-        return real(*args)
-
-    monkeypatch.setattr(main, "stream_claim", spy)
-    queue = [
-        calls(("work_claim", {"claim_id": "CLM-1001"})),
-        calls(("finish_run", {"summary": "One claim declined."})),
-        AIMessage(content="Done."),
-    ]
-    main.run_queue(1, stub(*queue), stub(*decide("CLM-1001")))
-    assert parents == [None]
+def test_the_service_marks_a_stopped_run_when_it_starts():
+    new_run()
+    with TestClient(service.app):
+        pass
+    assert client.get("/api/runs/current").json()["status"] == "stopped"

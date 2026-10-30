@@ -1,8 +1,20 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { Claim } from "./api";
-import { claim, claimRoutes, fakeBackend, summary } from "./fixtures";
+import {
+  claim,
+  claimRoutes,
+  dispatchRun,
+  fakeBackend,
+  summary,
+} from "./fixtures";
 
 beforeEach(() => {
   window.location.hash = "";
@@ -37,53 +49,88 @@ it("shows the queue with a count per state", async () => {
   expect(screen.queryByText("Current run")).toBeNull();
 });
 
-it("shows the current run's to-do list and summary", async () => {
+it("shows the current dispatch, its claims and its summary", async () => {
   fakeBackend({
     "/api/claims": [summary],
-    "/api/runs/current": {
-      run_id: 1,
-      cap: 5,
-      claims_started: ["CLM-1001", "CLM-1002"],
-      summary: "Two claims decided.",
-      todos: [
-        { claim_id: "CLM-1001", text: "Decide the delay", state: "done" },
-        { claim_id: "CLM-1002", text: "Decide the bag", state: "in_progress" },
-        { claim_id: "CLM-1003", text: "Decide the passport", state: "to_do" },
-        {
-          claim_id: "CLM-1004",
-          text: "Decide the medical claim",
-          state: "left_for_handler",
-        },
-      ],
-    },
+    "/api/runs/current": dispatchRun,
   });
   render(<App />);
-  expect(await screen.findByText("Current run")).toBeDefined();
-  expect(screen.getByText(/2 of 5 claims started, finished/)).toBeDefined();
-  expect(screen.getByText("Decide the bag")).toBeDefined();
-  expect(screen.getByText("Done")).toBeDefined();
-  expect(screen.getByText("To do")).toBeDefined();
-  // once in the counts per state and once on the to-do item
-  expect(screen.getAllByText("Left for a handler")).toHaveLength(2);
-  expect(screen.getByText("Two claims decided.")).toBeDefined();
+  expect(await screen.findByText("Dispatch 4")).toBeDefined();
+  expect(
+    screen.getByText(/Finished, 3 claim agents at once, openai\/gpt-6-luna/),
+  ).toBeDefined();
+  expect(screen.getByText(/model cost \$0\.0123/)).toBeDefined();
+  expect(screen.getByText(/run time 12\.0 s/)).toBeDefined();
+  expect(screen.getByText("1 approved, 1 declined, 0 referred")).toBeDefined();
+  expect(screen.getByText(/waits for sign-off on \$1,250\.00/)).toBeDefined();
+  expect(screen.getByText(/is left for a handler/)).toBeDefined();
+  expect(screen.getByText(/is still in progress/)).toBeDefined();
 });
 
-it("shows a run the agent has not planned yet", async () => {
+it("shows a dispatch that has started no claims yet", async () => {
   fakeBackend({
     "/api/claims": [summary],
     "/api/runs/current": {
-      run_id: 1,
-      cap: 5,
-      claims_started: [],
-      summary: null,
-      todos: [],
+      ...dispatchRun,
+      status: "running",
+      claims: [],
+      run_seconds: null,
     },
   });
   render(<App />);
-  expect(
-    await screen.findByText("The agent has not planned this run yet."),
-  ).toBeDefined();
-  expect(screen.getByText("0 of 5 claims started")).toBeDefined();
+  expect(await screen.findByText("No claims started yet.")).toBeDefined();
+  expect(screen.queryByText(/approved,/)).toBeNull();
+});
+
+it("starts a dispatch with the chosen number of claim agents", async () => {
+  const fetchMock = fakeBackend({
+    "/api/claims": [summary],
+    "/api/runs/current": null,
+    "/api/dispatches": { status: "started" },
+  });
+  render(<App />);
+  const picker = await screen.findByLabelText("Claim agents at once");
+  expect(picker).toHaveProperty("value", "3");
+  fireEvent.change(picker, { target: { value: "25" } });
+  fireEvent.click(screen.getByRole("button", { name: "Start dispatch" }));
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith("/api/dispatches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ n: 25 }),
+    });
+  });
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("says when the agent's service isn't running", async () => {
+  fakeBackend({
+    "/api/claims": [summary],
+    "/api/runs/current": null,
+    "/api/dispatches": [503, { detail: "The agent's service isn't running" }],
+  });
+  render(<App />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Start dispatch" }),
+  );
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "The agent's service isn't running",
+  );
+});
+
+it("says why a start was refused when it has no reason", async () => {
+  fakeBackend({
+    "/api/claims": [summary],
+    "/api/runs/current": null,
+    "/api/dispatches": [422, { detail: [{ msg: "too many" }] }],
+  });
+  render(<App />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Start dispatch" }),
+  );
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "Starting returned 422",
+  );
 });
 
 it("shows a claim in full before it is decided", async () => {
@@ -128,19 +175,13 @@ it("shows the decision, its reasons and the steps", async () => {
   expect(screen.getByText("Policy wording, section 3")).toBeDefined();
 });
 
-it("shows the instructions for the queue and for a claim, read only", async () => {
-  fakeBackend({
-    "/api/instructions": {
-      queue: "You run the claims queue.",
-      claim: "You decide one claim.",
-    },
-  });
+it("shows the claim agent's instructions, read only", async () => {
+  fakeBackend({ "/api/instructions": { claim: "You decide one claim." } });
   window.location.hash = "#/instructions";
   render(<App />);
-  expect(await screen.findByText("You run the claims queue.")).toBeDefined();
-  expect(screen.getByText("You decide one claim.")).toBeDefined();
-  expect(screen.getByText("Running the queue")).toBeDefined();
+  expect(await screen.findByText("You decide one claim.")).toBeDefined();
   expect(screen.getByText("Working a claim")).toBeDefined();
+  expect(screen.queryByText("Running the queue")).toBeNull();
   expect(screen.queryByRole("textbox")).toBeNull();
 });
 

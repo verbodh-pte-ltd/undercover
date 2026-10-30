@@ -1,38 +1,24 @@
-"""Work the claims queue: uv run -m agent [--cap N | CLAIM_ID ...]."""
+"""Work named claims with no run: uv run -m agent CLAIM_ID [CLAIM_ID ...]."""
 
 import sys
 
 from dotenv import load_dotenv
 
-from agent.main import (
-    backend,
-    carry_on_unfinished,
-    resume_queue,
-    run_queue,
-    work_claim,
+from agent.main import work
+
+USAGE = (
+    "Usage: uv run -m agent CLAIM_ID [CLAIM_ID ...]."
+    " Start dispatches from the dashboard."
 )
 
 
 def main(args: list[str]) -> None:
-    """Carry on unfinished work, then run the queue up to a cap, or the named claims."""
-    for line in carry_on_unfinished():
-        print(line)
-    if args and args[0] != "--cap":
-        with backend() as client:
-            run = client.post("/api/runs", json={"cap": len(args)}).json()
-        for claim_id in args:
-            print(f"{claim_id}: {work_claim(claim_id, run['run_id'])}")
+    """Work each named claim through the harness, outside any dispatch."""
+    if not args:
+        print(USAGE)
         return
-    finished = resume_queue()
-    if finished is not None:
-        print(finished)
-        return
-    if args:
-        cap = int(args[1])
-    else:
-        with backend() as client:
-            cap = len(client.get("/api/claims/waiting").json())
-    print(run_queue(cap) if cap else "No claims are waiting.")
+    for claim_id in args:
+        print(f"{claim_id}: {work(claim_id, None)}")
 
 
 if __name__ == "__main__":

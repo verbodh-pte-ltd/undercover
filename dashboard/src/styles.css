@@ -356,3 +356,34 @@ button:disabled {
   outline: 2px solid var(--cerulean);
   outline-offset: 2px;
 }
+
+.start-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.start-form select,
+.start-form button {
+  font: inherit;
+}
+
+.start-form button {
+  background: var(--sea-green);
+  color: var(--midnight);
+  border: 0;
+  border-radius: 10px;
+  padding: 8px 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.refusal {
+  flex-basis: 100%;
+  color: var(--raspberry);
+}
+
+tr.miss td {
+  background: color-mix(in srgb, var(--raspberry) 10%, transparent);
+}

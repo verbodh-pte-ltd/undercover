@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     Column,
     Connection,
     Engine,
@@ -18,7 +19,6 @@ from sqlalchemy import (
     Table,
     Text,
     create_engine,
-    delete,
     event,
     func,
     insert,
@@ -52,6 +52,9 @@ claims = Table(
     Column("signed_off_at", String),
     Column("attempts", Integer, nullable=False, default=0),
     Column("thread_id", String),
+    # Set only on an evaluation's copy of a claim: its run and the claim it copies.
+    Column("run_id", Integer),
+    Column("copied_from", String),
 )
 policies = Table(
     "policies",
@@ -77,9 +80,15 @@ runs = Table(
     "runs",
     metadata,
     Column("run_id", Integer, primary_key=True, autoincrement=True),
-    Column("cap", Integer, nullable=False),
-    Column("todos", Text, nullable=False, default="[]"),
-    Column("summary", Text),
+    Column("kind", String, nullable=False),
+    Column("n", Integer, nullable=False),
+    Column("eval_set", String),
+    Column("tiny", Boolean, nullable=False, default=False),
+    Column("model", String, nullable=False),
+    Column("effort", String, nullable=False),
+    Column("status", String, nullable=False, default="running"),
+    Column("started_at", String, nullable=False),
+    Column("finished_at", String),
 )
 run_claims = Table(
     "run_claims",
@@ -88,6 +97,46 @@ run_claims = Table(
     Column("run_id", Integer, nullable=False),
     Column("claim_id", String, nullable=False),
 )
+
+model_calls = Table(
+    "model_calls",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("claim_id", String, nullable=False),
+    Column("run_id", Integer),
+    Column("input_tokens", Integer, nullable=False),
+    Column("output_tokens", Integer, nullable=False),
+    Column("cost", Float, nullable=False),
+)
+work_times = Table(
+    "work_times",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("claim_id", String, nullable=False),
+    Column("run_id", Integer),
+    Column("seconds", Float, nullable=False),
+)
+# The handlers' decisions on both labelled sets, and the held-out claims. No claim
+# operation reads these; only scoring an evaluation does.
+answer_key = Table(
+    "answer_key",
+    metadata,
+    Column("claim_id", String, primary_key=True),
+    Column("eval_set", String, nullable=False),
+    Column("decision", String, nullable=False),
+    Column("payout", Float, nullable=False),
+    Column("tiny", Boolean, nullable=False),
+)
+held_out_claims = Table(
+    "held_out_claims",
+    metadata,
+    Column("claim_id", String, primary_key=True),
+    Column("data", Text, nullable=False),
+)
+EVAL_SETS = {
+    "evaluation": ("claims.json", "evals/decisions.json"),
+    "held_out": ("evals/held_out_claims.json", "evals/held_out_decisions.json"),
+}
 
 engines: dict[str, Engine] = {}
 engines_lock = threading.Lock()
@@ -124,6 +173,27 @@ def seed(conn: Connection) -> None:
             for c in load("customers.json")
         ],
     )
+    conn.execute(
+        insert(held_out_claims),
+        [
+            {"claim_id": c["claim_id"], "data": json.dumps(c)}
+            for c in load("evals/held_out_claims.json")
+        ],
+    )
+    for eval_set, (_, decisions) in EVAL_SETS.items():
+        conn.execute(
+            insert(answer_key),
+            [
+                {
+                    "claim_id": d["claim_id"],
+                    "eval_set": eval_set,
+                    "decision": d["decision"],
+                    "payout": d["payout"],
+                    "tiny": d["tiny"],
+                }
+                for d in load(decisions)
+            ],
+        )
 
 
 def postgres_url() -> str | None:
@@ -185,10 +255,10 @@ def connect() -> Connection:
 
 
 def reseed() -> None:
-    """Empty every table, the checkpointer's included, and seed again from data/."""
+    """Rebuild every table, empty the checkpointer's, and seed again from data/."""
+    metadata.drop_all(engine())
+    metadata.create_all(engine())
     with engine().begin() as conn:
-        for table in reversed(metadata.sorted_tables):
-            conn.execute(delete(table))
         present = inspect(conn).get_table_names()
         for table in CHECKPOINT_TABLES:
             if table in present:
