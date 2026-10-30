@@ -42,3 +42,10 @@ When the last phase is done, run `npm run check` and report the results.
 - Never push.
 - Don't open `data/evals/` unless you're asked to.
 - Everything must work on Windows: write `package.json` scripts as `uv run` commands or `.mjs` files.
+
+## Live runs with the real model
+
+Reseed once with `npm run seed`, then use the runs the brief asks for: dispatches started from the queue
+page, and evaluations from the Scoreboard page, on the evaluation set or the held-out set's five tiny
+claims. These replace the old cap of five claims on a run. A live run calls GPT-6 Luna through OpenRouter
+and costs a fraction of a cent per claim.

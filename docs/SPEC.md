@@ -18,6 +18,13 @@ We want an AI agent, the UnderCover Agent, to work the queue the way a handler d
 
 Our goal is to handle claims straight through, as accurately as our handlers do.
 
+A handler starts a dispatch from the queue page and chooses how many claim agents work at once, from 1
+to 25. A dispatch works every claim left in progress and every waiting claim, oldest submitted first.
+Choosing the next claim is a fixed rule, with no model. Only one dispatch or evaluation runs at a time.
+A claim that hits a rate limit or a timeout waits and carries on; one that fails with any other error
+is tried once more in the same dispatch, and one that fails twice is left for a handler. One bad claim
+never stops the dispatch.
+
 When the agent approves a payout that needs a handler's sign-off, it waits for the sign-off and keeps
 everything it has worked out. As soon as a handler signs off, it picks the claim up from where it stopped
 and pays it; until then the claim shows as waiting for sign-off, and between the sign-off and the
@@ -33,6 +40,12 @@ is ever decided or paid twice.
 - The queue, with where each claim stands: waiting, in progress, waiting for sign-off or decided.
 - Each claim in full, with the agent's decision and its reasons.
 - What the agent is doing on a claim while it works, step by step.
+- The current dispatch: each of its claims and where it stands, and when it finishes, a summary built
+  from our records: how many were approved, declined and referred, each payout waiting for a sign-off,
+  and each claim left for a handler or still in progress, with the model cost and the time.
+- The model cost and the agent's working time on each claim, leaving out any wait for a sign-off.
+- A scoreboard of evaluations: the agent working copies of our labelled claims, scored against our
+  handlers' decisions, with each evaluation's claims beside the handlers' decisions.
 - The agent's instructions, read only.
 
 ## Rules

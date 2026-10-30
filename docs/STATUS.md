@@ -1,74 +1,92 @@
 # Status
 
-The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`) and durable state
-(`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) are built. We use Postgres in Docker on this
-machine, not Supabase.
+The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`), durable state
+(`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
+(`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built. We use Postgres in Docker on this machine, not
+Supabase.
 
-In the durable build's live run on local Postgres, capped at five claims on DeepSeek V4.1 Flash, the
-agent worked five claims: four approved and paid straight away, and CLM-1003 approved at $3,750 and
-held for sign-off. Signed off on the dashboard, it was paid by the agent with the handler and the time.
-A run killed partway through CLM-1006 carried on with the same thread the next time, with no new
-attempt and one decision. The most Postgres connections seen during the run was 8.
+In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
+
+- A dispatch at N=3, started on the dashboard, was killed partway by stopping everything on port 8002,
+  with 3 claims in progress. After `npm run dev` started again, the service marked it stopped.
+- A dispatch at N=25 carried on those 3 claims as the same attempts on the same threads, each with one
+  decision, and worked the 13 waiting claims at once (their first saved steps fell within 0.1 seconds).
+  The run took 35 seconds; its claims' working times add up to 364 seconds.
+- A claim worked from the start took 24.3 seconds on average at N=25, against 16.5 at N=3. The time
+  goes in the backend: with 25 agents, each of a claim's 30 to 40 backend calls waits for one of the
+  backend's 4 database connections (0.27 seconds a call at 25 at once, against 0.04 at 3).
+- A sign-off on the dashboard was paid within five seconds. No claim failed for want of a connection.
+  With the pool fix, Postgres showed at most 10 connections during the evaluation at N=25. (Before the
+  fix, 25 workers made 25 pools at once and it reached 26.)
+- An evaluation of the evaluation set at N=25: 80% right, 92% straight through, $2,175 cost of
+  mistakes, $0.0012 of model calls a claim, 43 seconds for the run. One of the held-out set's 5 tiny
+  claims at N=5: 100% right, 80% straight through, 23 seconds. The queue's counts were the same before
+  and after.
+- Through Langfuse's API, the 16 claims of the N=25 dispatch are found together by its tag, `run-2`.
+
+## The parts
 
 - `backend/`: FastAPI with SQLAlchemy Core. With `DATABASE_URL` set (as `npm run dev` does from `.env`)
-  it uses local Postgres in Docker, in the `undercover` schema, with a pool of 4 connections. Without it,
-  it uses SQLite in `backend/undercover.db` (or the file in `UNDERCOVER_DB`), as the tests do.
-  `backend/store.py` seeds the database from `data/` on first start: the 25 claims, the policies and
-  the customers. `npm run seed` empties it, the agent's saved threads included, and seeds it again.
+  it uses local Postgres in Docker, in the `undercover` schema, with a pool of 4 connections that
+  callers wait for. Without it, it uses SQLite in `backend/undercover.db` (or the file in
+  `UNDERCOVER_DB`), as the tests do. `backend/store.py` seeds the database from `data/` on first start:
+  the 25 claims, the policies, the customers, the held-out claims, and the handlers' decisions on both
+  labelled sets in `answer_key`, which no claim operation reads. `npm run seed` rebuilds every table,
+  empties the agent's saved threads and seeds again, so it empties the scoreboard too.
   - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
     wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
-  - Write routes: start a claim inside a run, record steps, record a decision, pay, sign off, and
-    release a claim that failed.
-  - Runs: `POST /api/runs` starts a run with a cap, `GET /api/runs/current` returns the latest run with
-    its to-do list and summary. The backend refuses a claim beyond the cap, and refuses to finish a run
-    while a claim is still waiting within the cap.
+  - Write routes: start a claim in a run or none, record steps, record a decision, pay, sign off,
+    release a claim that failed, and record a model call's tokens and cost or a stretch of work.
+  - Runs are dispatches or evaluations: `create_run`, `list_run_claims` (claims in progress first, then
+    waiting claims oldest submitted first, or an evaluation's copies), `finish_run`,
+    `stop_running_runs` and `get_current_run` (the latest dispatch, with its claims, summary, model cost
+    and time). Only one runs at a time.
+  - `start_dispatch` and `start_evaluation` ask the agent's service through `backend/agent_service.py`,
+    and pass on its refusal (409) or say it isn't running (503).
+  - An evaluation works copies of its set's claims, with ids such as `E3-CLM-1001`, out of the queue.
+    Nobody signs off a copy. `list_evaluations` and `get_evaluation` score each one against
+    `answer_key`: decision accuracy, accuracy (the payout within a dollar), the cost of mistakes, the
+    straight-through rate, model cost and time per claim, and the time for the run.
   - A claim that fails before its decision goes back to `waiting`; after two failures it is
-    `needs_handler`. A claim stopped `in_progress` stays there for the agent to carry on, and
-    `GET /api/claims/unfinished` lists those claims.
-  - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py` to a
-    policy, a benefit and the claim's lines, and says whether the payout needs sign-off.
+    `needs_handler`. A claim stopped `in_progress` stays there for the next dispatch.
+  - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py`.
   - A payout over $1,000 (`payout_approval_limit` in `data/company.json`) is refused until a handler
     signs off. A sign-off records who and when, puts the claim back `in_progress`, and asks the agent's
-    service (`UNDERCOVER_AGENT`, default `http://127.0.0.1:8002`) to carry on and pay it.
-  - The same decision or payment sent again counts as done and returns the claim; a different decision
-    is still refused. A payment records when it was made.
-- `backend/instructions/`: `queue.md` for running the queue and `claim.md` for working a claim, served
-  by `GET /api/instructions`.
-- `agent/`: the UnderCover Agent.
-  - The queue agent has four tools (`list_waiting_claims`, `set_todos`, `work_claim`, `finish_run`).
-  - `work_claim` starts the claim and runs the claim agent on it. On an error before a decision it
-    releases the claim and replies in one line, so one bad claim never stops the run.
-  - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`): `agent` and `tools` loop
-    until the model stops asking for tools, then `settle` reads the claim and goes to `sign_off`, `pay`
-    or the end. `sign_off` waits with `interrupt()` until a handler signs off. `pay` pays the approved
-    payout. The graph never applies the $1,000 limit itself; it follows the claim's status.
-  - The claim agent has seven tools (`get_claim`, `get_policy`, `get_claim_history`, `list_sections`,
-    `read_section`, `calculate_payout`, `record_decision`) and no pay or sign-off tool. Each step is
-    posted to its claim. At most 30 model calls per claim.
-  - Progress is saved after every step (`durability="sync"`) by LangGraph's `PostgresSaver` in the
-    `undercover` schema, with a pool of 2 connections, or in memory without `DATABASE_URL`. A claim
-    stopped partway carries on from its last step on the same thread.
-  - Each try at a claim has a thread, such as `CLM-1001-1`, set by `start_claim`. With the Langfuse keys
-    set, the claim is traced in Langfuse in a session named after its thread.
-  - Model calls retry twice with backoff and time out after 60 seconds.
-  - The queue agent is still `create_agent`, and saves its progress on the thread `run-<run_id>`.
-  - `uv run -m agent` first carries on every claim stopped or signed off while it was away, then
-    finishes a queue run that was stopped, and only then starts a new run.
-  - The agent's service (`agent/service.py`, port 8002) has `resume_claim`: the backend calls it after a
-    sign-off, and it carries on that claim and pays it.
+    service to carry on and pay it.
+  - The same decision or payment sent again counts as done; a different decision is still refused.
+- `backend/instructions/claim.md`: the claim agent's instructions, served by `GET /api/instructions`.
+- `agent/`: the UnderCover Agent, in five parts (`docs/CODE_STANDARDS.md`).
+  - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`) with seven tools and no pay
+    or sign-off tool, on `openai/gpt-6-luna` with low reasoning effort, or `MODEL_NAME` with none. At
+    most 30 model calls a claim. Each model call's tokens and cost are recorded with its run.
+  - Progress is saved after every step by `PostgresSaver`, a saver of its own for each claim run on the
+    process's shared pool of 4, or in memory without `DATABASE_URL`.
+  - `work(claim_id, run_id)` starts a waiting claim or carries on one in progress, tries a failed claim
+    once more on a new thread, and lets a rate limit or a timeout through. It is the only place the
+    dispatcher touches the claim agent. It records the working time of each stretch of work, so a wait
+    for a sign-off is never counted.
+  - `agent/dispatcher.py` lists a run's claims and fans out with `Send`, up to N at once. A rate limit or
+    timeout waits and carries the claim on, up to 3 tries, then leaves it in progress. It skips a claim
+    the service is already working.
+  - The agent's service (`agent/service.py`, port 8002) starts dispatches and evaluations (refusing a
+    second while one runs), resumes signed-off claims, and marks any run still running as stopped when
+    it starts.
+  - Each claim is traced in Langfuse in a session named after its thread, tagged `run-<run_id>`.
+  - `uv run -m agent CLM-1001` works named claims with no run.
 - `dashboard/`: the claims desk.
-  - The queue (`#/`) has a count per state and the current run: its to-do list with each item's state,
-    and the summary when it finishes.
+  - The queue (`#/`) has a count per state, a "Claim agents at once" picker (1 to 25, 3 to start) and a
+    "Start dispatch" button, and the latest dispatch: its claims and where each stands, its model cost
+    and time, and its summary once it has finished.
+  - The Scoreboard (`#/scoreboard`) starts an evaluation (set, whole or tiny, N) and lists evaluations
+    newest first with every measure. `#/scoreboard/<run_id>` shows its claims beside the handlers',
+    with the misses marked and each claim linked to its page.
   - Each claim (`#/claims/CLM-1001`) shows its decision, reasons, the agent's steps, the sections it
-    read, the policy and earlier claims.
-  - The instructions page (`#/instructions`) shows both sets of instructions, read only.
-  - Light and dark mode. A claim's page checks for new steps every two seconds until the claim is
-    decided, and the queue refreshes every five seconds. A claim waiting for sign-off has a handler
-    picker and a "Sign off" button. A signed-off claim shows "In progress" with who signed off and when,
-    then "Paid" with the time once the agent pays it.
+    read, the policy and earlier claims. A claim waiting for sign-off has a handler picker and a "Sign
+    off" button, except on an evaluation's copy.
+  - The instructions page (`#/instructions`) shows the claim agent's instructions, read only.
 - `e2e/`: Playwright tests, one at a time, on their own servers (backend :8001, dashboard :5174) and
-  their own SQLite database, `e2e/e2e.db`, which is deleted at the start of each run. A stand-in for the
-  agent's service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls.
+  their own SQLite database, `e2e/e2e.db`, deleted at the start of each run. A stand-in for the agent's
+  service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls with their bodies.
 
 ## Run it
 
@@ -76,21 +94,15 @@ attempt and one decision. The most Postgres connections seen during the run was 
 npm run dev      # backend on :8000, dashboard on :5173, agent service on :8002
 ```
 
-With the backend running, start a run. With no cap it works every waiting claim:
+Start a dispatch from the queue page and an evaluation from the Scoreboard page. To work named claims
+without a run:
 
 ```bash
-npm run agent -- --cap 5   # a trial on five claims
-npm run agent              # every waiting claim
-npm run agent -- CLM-1001  # named claims only, without the queue agent
+uv run --env-file .env -m agent CLM-1001
 ```
 
-The model is `deepseek/deepseek-v4.1-flash` with low reasoning effort, or `MODEL_NAME` from `.env` (such
-as `openrouter/free`).
-
-The `undercover-postgres` container must be running for `npm run dev` and `npm run agent`.
-
-To reset the data, run `npm run seed`. The `undercover-postgres` container must be running; the start
-cell in `labs/week2/week2day3.ipynb` makes it again from `.env` if Docker has lost it.
+The `undercover-postgres` container must be running. To reset the data, run `npm run seed`; the start
+cell in `labs/week2/week2day3.ipynb` makes the container again from `.env` if Docker has lost it.
 
 ## Check it
 
@@ -102,7 +114,5 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 ## Not built yet
 
-- Scoring the agent against `data/evals/`. The answer key stays unopened until that build.
-- Claim agents in parallel, and starting a run from the dashboard.
 - Rejecting a held payout. A handler can only sign off for now.
 - Sign-in, real payments and messages to customers, as `docs/SPEC.md` says.

@@ -195,21 +195,21 @@ Removed: `set_todos`, `start_run`'s cap, the run's free-text summary and `backen
 
 ## Phase 7: live checks and the documents
 
-- [ ] After one `npm run seed`, with `npm run dev` running, a dispatch at N=3 is stopped partway by
+- [x] After one `npm run seed`, with `npm run dev` running, a dispatch at N=3 is stopped partway by
       killing everything on port 8002, and `npm run dev` is started again
-- [ ] A dispatch at N=25 carries on the claims left in progress as the same attempts and works the rest
+- [x] A dispatch at N=25 carries on the claims left in progress as the same attempts and works the rest
       25 at once (start times), in well under the sum of its claims' times; per-claim time is close to
       N=3's, or the slowdown is explained
-- [ ] Claims held for sign-off wait, and a sign-off on the dashboard still pays within five seconds
-- [ ] No claim fails for want of a database connection, and `pg_stat_activity` never shows more than 12
+- [x] Claims held for sign-off wait, and a sign-off on the dashboard still pays within five seconds
+- [x] No claim fails for want of a database connection, and `pg_stat_activity` never shows more than 12
       connections for user postgres during the dispatch
-- [ ] An evaluation of the evaluation set at N=25 and one of the held-out set's 5 tiny claims at N=5
+- [x] An evaluation of the evaluation set at N=25 and one of the held-out set's 5 tiny claims at N=5
       show on the scoreboard with every measure, and the queue's counts are unchanged
-- [ ] Through Langfuse's API, the N=25 dispatch's claims are found together by its tag
-- [ ] `docs/SPEC.md` (working the queue, and what the team needs to see), `docs/TECH_STACK.md`,
+- [x] Through Langfuse's API, the N=25 dispatch's claims are found together by its tag
+- [x] `docs/SPEC.md` (working the queue, and what the team needs to see), `docs/TECH_STACK.md`,
       `docs/PROCESS.md` (these runs replace the five-claim cap), `docs/CODE_STANDARDS.md` and
       `docs/STATUS.md` describe the product as it now is
-- [ ] `npm run check` passes
+- [x] `npm run check` passes
 
 ## Notes from the build
 
@@ -224,3 +224,13 @@ Removed: `set_todos`, `start_run`'s cap, the run's free-text summary and `backen
   once, and the harness tries it once more on a new thread.
 - **Phases 1 to 6 were built together and committed as one change**, because the run tables, the
   dispatcher and the dashboard all changed shape at once; each phase's checks were run before the commit.
+- **The live N=25 dispatch found a race in the shared pool.** 25 workers asked for the pool at the same
+  moment and each made its own, so Postgres reached 26 connections. The pool is now made once under a
+  lock (with a test from 25 threads), and the N=25 evaluation afterwards peaked at 10.
+- **Where the time goes at N=25.** A claim worked from the start took 24.3 seconds on average at N=25,
+  against 16.5 at N=3. Timing the backend directly, a call takes about 0.27 seconds with 25 at once
+  against 0.04 with 3: the requests wait for the backend's 4 database connections, and a claim makes
+  30 to 40 of them (its steps, model calls and tools). Keeping to 4 connections, the way to win this
+  back would be fewer, larger backend calls per claim, such as posting a node's steps together.
+- **The start times** come from each claim's first saved checkpoint in Postgres, since the dispatcher
+  keeps none of its own.

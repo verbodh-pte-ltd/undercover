@@ -557,3 +557,37 @@ def test_the_service_marks_a_stopped_run_when_it_starts():
     with TestClient(service.app):
         pass
     assert client.get("/api/runs/current").json()["status"] == "stopped"
+
+
+def test_claim_agents_starting_together_share_one_pool(monkeypatch):
+    made = []
+
+    class FakePool:
+        def __init__(self, url, **kwargs):
+            time.sleep(0.05)
+            made.append(kwargs["max_size"])
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql):
+            return None
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:1/db")
+    monkeypatch.setattr(main, "ConnectionPool", FakePool)
+    monkeypatch.setattr(main.psycopg, "connect", lambda *a, **kw: FakeConnection())
+    monkeypatch.setattr(main.PostgresSaver, "setup", lambda self: None)
+    main.make_pool.cache_clear()
+    try:
+        workers = [threading.Thread(target=main.pool) for _ in range(25)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+    finally:
+        main.make_pool.cache_clear()
+    assert made == [4]

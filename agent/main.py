@@ -3,6 +3,7 @@
 import contextvars
 import json
 import os
+import threading
 import time
 from functools import cache
 from typing import Annotated, Any, Literal, TypedDict
@@ -216,9 +217,19 @@ def model() -> ChatOpenAI:
     )
 
 
-@cache
+pool_lock = threading.Lock()
+
+
 def pool() -> ConnectionPool[Any]:
     """The process's shared Postgres connections for saving claims' progress."""
+    # Claim agents start together; without the lock each would make its own pool.
+    with pool_lock:
+        return make_pool()
+
+
+@cache
+def make_pool() -> ConnectionPool[Any]:
+    """Make the shared pool and the checkpointer's tables, once per process."""
     url = os.environ["DATABASE_URL"]
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
