@@ -18,11 +18,15 @@ claims stayed waiting.
     its to-do list and summary. The backend refuses a claim beyond the cap, and refuses to finish a run
     while a claim is still waiting within the cap.
   - A claim that fails before its decision goes back to `waiting`; after two failures it is
-    `needs_handler`. Claims stuck `in_progress` go back in the queue when a run starts.
+    `needs_handler`. A claim stopped `in_progress` stays there for the agent to carry on, and
+    `GET /api/claims/unfinished` lists those claims.
   - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py` to a
     policy, a benefit and the claim's lines, and says whether the payout needs sign-off.
   - A payout over $1,000 (`payout_approval_limit` in `data/company.json`) is refused until a handler
-    signs off, and sign-off pays it.
+    signs off. A sign-off records who and when, puts the claim back `in_progress`, and asks the agent's
+    service (`UNDERCOVER_AGENT`, default `http://127.0.0.1:8002`) to carry on and pay it.
+  - The same decision or payment sent again counts as done and returns the claim; a different decision
+    is still refused. A payment records when it was made.
 - `backend/instructions/`: `queue.md` for running the queue and `claim.md` for working a claim, served
   by `GET /api/instructions`.
 - `agent/`: the UnderCover Agent.
