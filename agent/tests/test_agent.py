@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import __main__ as runner
 from agent import main
@@ -24,7 +25,7 @@ class Script:
 
     def __next__(self):
         item = self.items.pop(0)
-        if isinstance(item, Exception):
+        if isinstance(item, BaseException):
             raise item
         return item
 
@@ -45,6 +46,8 @@ def in_process_backend(monkeypatch):
     monkeypatch.setattr(main, "backend", lambda: TestClient(app))
     monkeypatch.setattr(runner, "backend", lambda: TestClient(app))
     monkeypatch.setattr(main, "RETRY_DELAY", 0)
+    memory = InMemorySaver()
+    monkeypatch.setattr(main, "saver", lambda: memory)
 
 
 def calls(*tool_calls):
@@ -88,6 +91,11 @@ def claim(claim_id):
     return client.get(f"/api/claims/{claim_id}").json()
 
 
+def start(claim_id, run_id):
+    body = {"run_id": run_id}
+    return client.post(f"/api/claims/{claim_id}/start", json=body).json()
+
+
 def test_get_claim():
     assert json.loads(main.get_claim.invoke({"claim_id": "CLM-1001"}))["policy_id"] == (
         "POL-2001"
@@ -112,8 +120,8 @@ def test_sections_tools():
 
 
 def test_refusal_comes_back_as_text():
-    reply = main.pay_claim.invoke({"claim_id": "CLM-1001", "amount": 420.0})
-    assert reply.startswith("Refused (409)")
+    args = decision("CLM-1001", 50.0, "decline")
+    assert main.record_decision.invoke(args).startswith("Refused (422)")
 
 
 def test_claim_agent_reads_sections_approves_and_pays():
@@ -129,7 +137,6 @@ def test_claim_agent_reads_sections_approves_and_pays():
             ("read_section", {"document": "policy_wording", "number": "3"}),
         ),
         calls(("record_decision", decision("CLM-1001", 420.0))),
-        calls(("pay_claim", {"claim_id": "CLM-1001", "amount": 420.0})),
         AIMessage(content="Approved, $420.00."),
     ]
     reply = main.work_claim("CLM-1001", new_run(1), stub(*replies))
@@ -139,7 +146,8 @@ def test_claim_agent_reads_sections_approves_and_pays():
     assert result["sections_read"] == ["claims_manual 6", "policy_wording 3"]
     steps = client.get("/api/claims/CLM-1001/steps").json()
     assert steps[0]["text"] == 'get_claim({"claim_id": "CLM-1001"})'
-    assert steps[-1]["text"] == "Approved, $420.00."
+    assert steps[-2]["text"] == "Approved, $420.00."
+    assert steps[-1]["text"] == "pay_claim: Paid $420.00"
 
 
 def test_claim_agent_works_out_the_payout_with_the_tool():
@@ -163,18 +171,93 @@ def test_claim_agent_works_out_the_payout_with_the_tool():
     assert claim("CLM-1001")["payout"] == 300.0
 
 
-def test_claim_agent_cannot_pay_over_the_limit():
+def hold(claim_id="CLM-1001", payout=1250.0):
+    """Work a claim to an approval over the limit, which waits for sign-off."""
     replies = [
-        calls(("record_decision", decision("CLM-1001", 1250.0))),
-        calls(("pay_claim", {"claim_id": "CLM-1001", "amount": 1250.0})),
-        AIMessage(content="Approved, $1,250.00, waiting for sign-off."),
+        calls(("record_decision", decision(claim_id, payout))),
+        AIMessage(content=f"Approved, ${payout:,.2f}."),
     ]
-    main.work_claim("CLM-1001", new_run(1), stub(*replies))
+    return main.work_claim(claim_id, new_run(1), stub(*replies))
+
+
+def test_claim_agent_has_no_pay_tool():
+    assert "pay_claim" not in [t.name for t in main.CLAIM_TOOLS]
+    assert "pay_claim" not in client.get("/api/instructions").json()["claim"]
+
+
+def test_claim_agent_pauses_before_a_payout_over_the_limit():
+    reply = hold()
+    assert reply == "CLM-1001 is waiting for a handler's sign-off."
     result = claim("CLM-1001")
     assert result["status"] == "waiting_for_sign_off"
     assert result["paid_amount"] is None
-    results = [s["text"] for s in client.get("/api/claims/CLM-1001/steps").json()]
-    assert any(r.startswith("pay_claim: Refused (403)") for r in results)
+    saved = main.saver().get_tuple({"configurable": {"thread_id": "CLM-1001-1"}})
+    assert saved is not None
+
+
+def test_sign_off_resumes_the_claim_and_pays_it_once():
+    hold()
+    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-01"})
+    assert main.run("CLM-1001", "CLM-1001-1", stub()) == ""
+    result = claim("CLM-1001")
+    assert (result["status"], result["paid_amount"]) == ("decided", 1250.0)
+    assert result["signed_off_by"] == "HND-01"
+    assert result["paid_at"] >= result["signed_off_at"]
+    main.run("CLM-1001", "CLM-1001-1", stub())
+    texts = [s["text"] for s in client.get("/api/claims/CLM-1001/steps").json()]
+    assert "Signed off by HND-01" in texts
+    assert len([t for t in texts if t.startswith("pay_claim:")]) == 1
+
+
+def test_a_held_claim_without_a_sign_off_keeps_waiting():
+    hold()
+    reply = main.run("CLM-1001", "CLM-1001-1", stub())
+    assert reply == "CLM-1001 is waiting for a handler's sign-off."
+    assert claim("CLM-1001")["paid_amount"] is None
+
+
+def test_a_stopped_claim_carries_on_from_its_last_step():
+    run_id = new_run(1)
+    first = [calls(("get_claim", {"claim_id": "CLM-1001"})), KeyboardInterrupt()]
+    with pytest.raises(KeyboardInterrupt):
+        main.run("CLM-1001", start("CLM-1001", run_id)["thread_id"], stub(*first))
+    rest = [
+        calls(("record_decision", decision("CLM-1001", 420.0))),
+        AIMessage(content="Approved, $420.00."),
+    ]
+    reply = main.work_claim("CLM-1001", run_id, stub(*rest))
+    assert reply == "Approved, $420.00."
+    result = claim("CLM-1001")
+    assert (result["thread_id"], result["attempts"]) == ("CLM-1001-1", 0)
+    assert (result["status"], result["paid_amount"]) == ("decided", 420.0)
+    texts = [s["text"] for s in client.get("/api/claims/CLM-1001/steps").json()]
+    assert len([t for t in texts if t.startswith("get_claim(")]) == 1
+    assert len([t for t in texts if t.startswith("record_decision(")]) == 1
+
+
+def test_a_claim_that_fails_starts_afresh_on_a_new_thread(monkeypatch):
+    monkeypatch.setattr(main, "MODEL_RETRIES", 0)
+    run_id = new_run(2)
+    first = [calls(("get_claim", {"claim_id": "CLM-1001"})), TimeoutError("no reply")]
+    main.work_claim("CLM-1001", run_id, stub(*first))
+    assert claim("CLM-1001")["status"] == "waiting"
+    second = [
+        calls(("record_decision", decision("CLM-1001", 0, "decline"))),
+        AIMessage(content="Declined."),
+    ]
+    assert main.work_claim("CLM-1001", run_id, stub(*second)) == "Declined."
+    assert claim("CLM-1001")["thread_id"] == "CLM-1001-2"
+    fresh = main.saver().get_tuple({"configurable": {"thread_id": "CLM-1001-2"}})
+    assert fresh is not None
+    assert fresh.checkpoint["channel_values"]["model_calls"] == 2
+
+
+def test_a_31st_model_call_is_refused(monkeypatch):
+    monkeypatch.setattr(main, "MAX_MODEL_CALLS", 3)
+    looping = [calls(("get_claim", {"claim_id": "CLM-1001"})) for _ in range(4)]
+    reply = main.work_claim("CLM-1001", new_run(1), stub(*looping))
+    assert reply.startswith("failed: RuntimeError: the claim agent reached 3 model")
+    assert claim("CLM-1001")["status"] == "waiting"
 
 
 def test_model_error_releases_the_claim(monkeypatch):

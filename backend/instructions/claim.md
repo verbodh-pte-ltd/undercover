@@ -32,8 +32,8 @@ Work the claim in this order:
 8. Record the decision with record_decision. The reason is two or three plain sentences a customer could
    follow. The policy section is the number and title of the section that settles it, such as
    "3. Trip Delay" from the wording or "Manual 9. Repeat claims". A decline or a referral has a payout of 0.
-9. If you approved, pay the claim with pay_claim, for exactly the approved payout. A payout over $1,000
-   is held for a handler's sign-off: the payment is refused, and that is expected. Do not try to pay it
-   another way.
+
+You do not pay claims. Once you have recorded an approval, the system pays it, after a handler's
+sign-off when the payout is over $1,000.
 
 Amounts are in US dollars. When you are done, reply with one line: the decision and the payout.

@@ -31,12 +31,18 @@ claims stayed waiting.
   by `GET /api/instructions`.
 - `agent/`: the UnderCover Agent.
   - The queue agent has four tools (`list_waiting_claims`, `set_todos`, `work_claim`, `finish_run`).
-  - `work_claim` starts the claim and runs a fresh claim agent on it. On any error it releases the
-    claim and replies in one line, so one bad claim never stops the run.
-  - The claim agent has eight tools (`get_claim`, `get_policy`, `get_claim_history`, `list_sections`,
-    `read_section`, `calculate_payout`, `record_decision`, `pay_claim`) and posts each step to its claim. It has no sign-off
-    tool.
-  - Model calls retry twice with backoff and time out after 60 seconds.
+  - `work_claim` starts the claim and runs the claim agent on it. On an error before a decision it
+    releases the claim and replies in one line, so one bad claim never stops the run.
+  - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`): `agent` and `tools` loop
+    until the model stops asking for tools, then `settle` reads the claim and goes to `sign_off`, `pay`
+    or the end. `sign_off` waits with `interrupt()` until a handler signs off. `pay` pays the approved
+    payout. The graph never applies the $1,000 limit itself; it follows the claim's status.
+  - The claim agent has seven tools (`get_claim`, `get_policy`, `get_claim_history`, `list_sections`,
+    `read_section`, `calculate_payout`, `record_decision`) and no pay or sign-off tool. Each step is
+    posted to its claim. At most 30 model calls per claim.
+  - Progress is saved after every step (`durability="sync"`) by LangGraph's `PostgresSaver` in the
+    `undercover` schema, with a pool of 2 connections, or in memory without `DATABASE_URL`. A claim
+    stopped partway carries on from its last step on the same thread.
   - Each try at a claim has a thread, such as `CLM-1001-1`, set by `start_claim`. With the Langfuse keys
     set, the claim is traced in Langfuse in a session named after its thread.
 - `dashboard/`: the claims desk.

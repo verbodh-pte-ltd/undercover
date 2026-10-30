@@ -365,7 +365,7 @@ def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
     # A new try gets a new thread; a claim already in progress keeps its own.
     thread_id = row["thread_id"] or f"{claim_id}-{row['attempts'] + 1}"
     set_claim(db, claim_id, status="in_progress", thread_id=thread_id)
-    if row["attempts"] == 0:
+    if row["attempts"] == 0 and row["thread_id"] is None:
         db.execute(delete(steps).where(steps.c.claim_id == claim_id))
     db.commit()
     return get_claim(claim_id, db)

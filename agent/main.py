@@ -1,18 +1,37 @@
-"""The UnderCover Agent: a queue agent that hands each claim to a fresh claim agent."""
+"""The UnderCover Agent: a queue agent that hands each claim to a claim agent graph."""
 
 import json
 import os
-from typing import Any, Literal, TypedDict
+from functools import cache
+from typing import Annotated, Any, Literal, TypedDict
 
 import httpx
+import psycopg
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from langchain_openai import ChatOpenAI
 from langfuse.langchain import CallbackHandler
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.prebuilt import ToolNode
+from langgraph.types import Command, interrupt
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field, SecretStr
 
 BACKEND_URL = "http://localhost:8000"
@@ -23,6 +42,9 @@ MODEL_RETRIES = 2
 RETRY_DELAY = 1.0
 RESULT_PREVIEW = 300
 RECURSION_LIMIT = 1000
+MAX_MODEL_CALLS = 30
+SCHEMA = "undercover"
+POOL_SIZE = 2
 
 Document = Literal["policy_wording", "claims_manual"]
 Benefit = Literal[
@@ -155,12 +177,6 @@ def record_decision(
     return call("POST", f"/api/claims/{claim_id}/decision", body)
 
 
-@tool
-def pay_claim(claim_id: str, amount: float) -> str:
-    """Pay an approved claim its payout. A payout over $1,000 needs sign-off first."""
-    return call("POST", f"/api/claims/{claim_id}/payment", {"amount": amount})
-
-
 CLAIM_TOOLS = [
     get_claim,
     get_policy,
@@ -169,8 +185,15 @@ CLAIM_TOOLS = [
     read_section,
     calculate_payout,
     record_decision,
-    pay_claim,
 ]
+
+
+class ClaimState(TypedDict):
+    """What the graph keeps for one claim."""
+
+    messages: Annotated[list[AnyMessage], add_messages]
+    claim_id: str
+    model_calls: int
 
 
 def model() -> ChatOpenAI:
@@ -190,6 +213,94 @@ def retry() -> ModelRetryMiddleware:
     return ModelRetryMiddleware(
         max_retries=MODEL_RETRIES, initial_delay=RETRY_DELAY, on_failure="error"
     )
+
+
+@cache
+def saver() -> BaseCheckpointSaver:
+    """Postgres in DATABASE_URL saves each claim's progress, or memory without it."""
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        return InMemorySaver()
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
+    pool = ConnectionPool(
+        url,
+        min_size=1,
+        max_size=POOL_SIZE,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
+            "options": f"-c search_path={SCHEMA}",
+        },
+    )
+    checkpointer = PostgresSaver(pool)  # pyright: ignore[reportArgumentType]
+    checkpointer.setup()
+    return checkpointer
+
+
+def record_step(claim_id: str, kind: str, text: str) -> None:
+    """Record one step on the claim."""
+    call("POST", f"/api/claims/{claim_id}/steps", {"kind": kind, "text": text})
+
+
+def claim_graph(llm: BaseChatModel, instructions: str) -> CompiledStateGraph:
+    """The claim agent: the model and its tools, then sign-off and payment."""
+    model_with_tools = llm.bind_tools(CLAIM_TOOLS).with_retry(
+        stop_after_attempt=MODEL_RETRIES + 1,
+        exponential_jitter_params={"initial": RETRY_DELAY},
+    )
+    system = SystemMessage(instructions)
+
+    def agent(state: ClaimState) -> dict[str, Any]:
+        """Call the model with the conversation so far."""
+        if state["model_calls"] >= MAX_MODEL_CALLS:
+            raise RuntimeError(f"the claim agent reached {MAX_MODEL_CALLS} model calls")
+        reply = model_with_tools.invoke([system, *state["messages"]])
+        return {"messages": [reply], "model_calls": state["model_calls"] + 1}
+
+    def after_agent(state: ClaimState) -> Literal["tools", "settle"]:
+        """Run the tools the model asked for, or settle the claim."""
+        last = state["messages"][-1]
+        return "tools" if isinstance(last, AIMessage) and last.tool_calls else "settle"
+
+    def settle(state: ClaimState) -> Command[Literal["sign_off", "pay", "__end__"]]:
+        """Follow the backend: wait for a sign-off, pay, or stop."""
+        claim = json.loads(call("GET", f"/api/claims/{state['claim_id']}"))
+        if claim["decision"] != "approve" or claim["paid_amount"] is not None:
+            return Command(goto="__end__")
+        if claim["status"] == "waiting_for_sign_off":
+            return Command(goto="sign_off")
+        return Command(goto="pay")
+
+    def sign_off(state: ClaimState) -> dict[str, Any]:
+        """Wait for a handler to sign off the payout."""
+        answer = interrupt({"claim_id": state["claim_id"]})
+        record_step(state["claim_id"], "reply", f"Signed off by {answer['handler_id']}")
+        return {}
+
+    def pay(state: ClaimState) -> dict[str, Any]:
+        """Pay the approved payout; the backend treats a repeat as done."""
+        claim_id = state["claim_id"]
+        payout = json.loads(call("GET", f"/api/claims/{claim_id}"))["payout"]
+        result = call("POST", f"/api/claims/{claim_id}/payment", {"amount": payout})
+        paid = f"Paid ${payout:,.2f}"
+        text = result[:RESULT_PREVIEW] if result.startswith("Refused") else paid
+        record_step(claim_id, "tool_result", f"pay_claim: {text}")
+        return {}
+
+    builder = StateGraph(ClaimState)
+    builder.add_node("agent", agent)
+    builder.add_node("tools", ToolNode(CLAIM_TOOLS))
+    builder.add_node("settle", settle)
+    builder.add_node("sign_off", sign_off)
+    builder.add_node("pay", pay)
+    builder.add_edge(START, "agent")
+    builder.add_conditional_edges("agent", after_agent, ["tools", "settle"])
+    builder.add_edge("tools", "agent")
+    builder.add_edge("sign_off", "pay")
+    builder.add_edge("pay", END)
+    return builder.compile(checkpointer=saver())
 
 
 def traced(thread_id: str) -> RunnableConfig:
@@ -217,44 +328,63 @@ def steps(message: BaseMessage) -> list[dict[str, str]]:
 
 
 def run(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
-    """Run a fresh claim agent on a started claim and record each step."""
+    """Run the claim agent on its thread: start, carry on, or resume after sign-off."""
     with backend() as client:
         instructions = client.get("/api/instructions").json()["claim"]
-        agent = create_agent(
-            llm or model(),
-            tools=CLAIM_TOOLS,
-            system_prompt=instructions,
-            middleware=[retry()],
-        )
-        reply = ""
-        for update in agent.stream(
-            {"messages": [{"role": "user", "content": f"Decide claim {claim_id}."}]},
-            config=traced(thread_id),
-            stream_mode="updates",
-        ):
-            for node in update.values():
-                for message in node["messages"]:
-                    for step in steps(message):
-                        client.post(f"/api/claims/{claim_id}/steps", json=step)
-                    reply = message.text
+        claim = client.get(f"/api/claims/{claim_id}").json()
+    graph = claim_graph(llm or model(), instructions)
+    config = traced(thread_id)
+    config["recursion_limit"] = RECURSION_LIMIT
+    saved = graph.get_state(config)
+    inputs: Any = {
+        "messages": [HumanMessage(f"Decide claim {claim_id}.")],
+        "claim_id": claim_id,
+        "model_calls": 0,
+    }
+    if saved.interrupts:
+        if claim["signed_off_by"] is None:
+            return f"{claim_id} is waiting for a handler's sign-off."
+        inputs = Command(resume={"handler_id": claim["signed_off_by"]})
+    elif saved.next:
+        inputs = None  # carry on from the last saved step
+    elif saved.values:
+        return f"{claim_id} is {claim['status']}: {claim['decision']}"
+    reply = ""
+    for update in graph.stream(
+        inputs, config=config, stream_mode="updates", durability="sync"
+    ):
+        if "__interrupt__" in update:
+            reply = f"{claim_id} is waiting for a handler's sign-off."
+            record_step(claim_id, "reply", reply)
+            continue
+        for node in update.values():
+            for message in (node or {}).get("messages", []):
+                for step in steps(message):
+                    record_step(claim_id, step["kind"], step["text"])
+                reply = message.text or reply
     return reply
 
 
 def work_claim(claim_id: str, run_id: int, llm: BaseChatModel | None = None) -> str:
-    """Work one claim on a fresh claim agent and say in one line how it went."""
+    """Work one claim on its thread and say in one line how it went."""
     with backend() as client:
         start = client.post(f"/api/claims/{claim_id}/start", json={"run_id": run_id})
     if not start.is_success:
         return f"not started: {start.text}"
+    return carry_on(claim_id, start.json()["thread_id"], llm)
+
+
+def carry_on(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
+    """Run the claim agent on a started claim; release it if it fails undecided."""
     error = "the claim agent stopped without a decision"
     reply = ""
     try:
-        reply = run(claim_id, start.json()["thread_id"], llm)
+        reply = run(claim_id, thread_id, llm)
     except Exception as exc:  # one bad claim must never stop the run
         error = f"{type(exc).__name__}: {exc}"[:RESULT_PREVIEW]
     with backend() as client:
         claim = client.get(f"/api/claims/{claim_id}").json()
-        if claim["status"] == "in_progress":
+        if claim["status"] == "in_progress" and claim["decision"] is None:
             release = {"error": error}
             claim = client.post(f"/api/claims/{claim_id}/release", json=release).json()
     if claim["status"] == "waiting":

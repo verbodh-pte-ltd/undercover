@@ -149,18 +149,18 @@ The store moves to SQLAlchemy Core. With `DATABASE_URL` set, it connects to Post
 
 ## Phase 5: the claim agent as a graph
 
-- [ ] The claim agent is a hand-written `StateGraph` with the nodes above, and has no `pay_claim` tool;
+- [x] The claim agent is a hand-written `StateGraph` with the nodes above, and has no `pay_claim` tool;
       `claim.md` no longer asks it to pay
-- [ ] Under the limit: a stub-model test decides CLM-1001 and the `pay` node pays it once
-- [ ] Over the limit: the graph stops at `sign_off` with the claim `waiting_for_sign_off` and nothing paid
+- [x] Under the limit: a stub-model test decides CLM-1001 and the `pay` node pays it once
+- [x] Over the limit: the graph stops at `sign_off` with the claim `waiting_for_sign_off` and nothing paid
       (test)
-- [ ] A sign-off, then a resume, pays the claim once, with the handler and the time on it (test)
-- [ ] A claim stopped after its first steps carries on from its last step on a new graph built on the
+- [x] A sign-off, then a resume, pays the claim once, with the handler and the time on it (test)
+- [x] A claim stopped after its first steps carries on from its last step on a new graph built on the
       same saver, with the same thread, the same attempts and one decision (test)
-- [ ] A claim that fails with a model error is released, and its next try has a new thread and starts
+- [x] A claim that fails with a model error is released, and its next try has a new thread and starts
       afresh (test)
-- [ ] A 31st model call is refused and the claim is released (test)
-- [ ] `npm run check:python` passes
+- [x] A 31st model call is refused and the claim is released (test)
+- [x] `npm run check:python` passes
 
 ## Phase 6: the agent service, the runner and the dashboard
 
