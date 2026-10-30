@@ -1,5 +1,6 @@
 """The UnderCover Agent: a queue agent that hands each claim to a claim agent graph."""
 
+import contextvars
 import json
 import os
 from functools import cache
@@ -34,7 +35,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field, SecretStr
 
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = "http://127.0.0.1:8000"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
 MODEL_TIMEOUT = 60
@@ -349,6 +350,15 @@ def run(claim_id: str, thread_id: str, llm: BaseChatModel | None = None) -> str:
         inputs = None  # carry on from the last saved step
     elif saved.values:
         return f"{claim_id} is {claim['status']}: {claim['decision']}"
+    # A fresh context, so a claim worked from the queue agent's tool starts its own
+    # trace in the claim's Langfuse session rather than joining the queue agent's run.
+    return contextvars.Context().run(stream_claim, graph, inputs, config, claim_id)
+
+
+def stream_claim(
+    graph: CompiledStateGraph, inputs: Any, config: RunnableConfig, claim_id: str
+) -> str:
+    """Stream the claim graph, posting each step to the claim."""
     reply = ""
     for update in graph.stream(
         inputs, config=config, stream_mode="updates", durability="sync"

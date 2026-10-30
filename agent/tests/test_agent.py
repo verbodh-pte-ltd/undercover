@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent import __main__ as runner
@@ -516,3 +517,21 @@ def test_a_stopped_queue_run_is_finished_by_the_next_run():
     run = client.get("/api/runs/current").json()
     assert (run["run_id"], run["summary"]) == (run_id, "One claim declined.")
     assert main.resume_queue(stub()) is None
+
+
+def test_a_claim_from_the_queue_runs_outside_the_queue_agents_context(monkeypatch):
+    parents = []
+    real = main.stream_claim
+
+    def spy(*args):
+        parents.append(var_child_runnable_config.get())
+        return real(*args)
+
+    monkeypatch.setattr(main, "stream_claim", spy)
+    queue = [
+        calls(("work_claim", {"claim_id": "CLM-1001"})),
+        calls(("finish_run", {"summary": "One claim declined."})),
+        AIMessage(content="Done."),
+    ]
+    main.run_queue(1, stub(*queue), stub(*decide("CLM-1001")))
+    assert parents == [None]
