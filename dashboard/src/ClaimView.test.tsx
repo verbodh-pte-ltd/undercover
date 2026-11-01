@@ -8,7 +8,14 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Claim } from "./api";
 import { ClaimView, POLL_MS } from "./ClaimView";
-import { claim, claimRoutes, fakeBackend } from "./fixtures";
+import {
+  claim,
+  claimRoutes,
+  dana,
+  fakeBackend,
+  marcus,
+  signIn,
+} from "./fixtures";
 
 const step = (id: number, text: string) => ({ id, kind: "tool_call", text });
 
@@ -19,6 +26,7 @@ async function wait(ms: number) {
 }
 
 beforeEach(() => {
+  signIn();
   vi.useFakeTimers();
 });
 
@@ -26,6 +34,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 it("shows new steps as the agent works, without a reload", async () => {
@@ -33,7 +42,7 @@ it("shows new steps as the agent works, without a reload", async () => {
     step(1, "get_claim"),
   ]);
   fakeBackend(routes);
-  render(<ClaimView claimId="CLM-1001" />);
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
   await wait(0);
   expect(screen.getByText("get_claim")).toBeDefined();
   expect(screen.queryByText("get_policy")).toBeNull();
@@ -49,7 +58,7 @@ it("shows new steps as the agent works, without a reload", async () => {
 it("stops checking once the claim is decided", async () => {
   const routes = claimRoutes({ ...claim, status: "in_progress" });
   const fetchMock = fakeBackend(routes);
-  render(<ClaimView claimId="CLM-1001" />);
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
   await wait(0);
 
   routes["/api/claims/CLM-1001"] = {
@@ -86,10 +95,9 @@ it("signs off a large payout, then shows it paid once the agent pays", async () 
       signed_off_at: "2026-10-30T06:41:00+00:00",
     },
   });
-  render(<ClaimView claimId="CLM-1001" />);
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
   await wait(0);
   expect(screen.getByText("Not paid yet")).toBeDefined();
-  expect(screen.getByLabelText("Handler")).toHaveProperty("value", "HND-01");
 
   fireEvent.click(screen.getByRole("button", { name: "Sign off $1,250.00" }));
   await wait(0);
@@ -111,7 +119,42 @@ it("signs off a large payout, then shows it paid once the agent pays", async () 
   expect(screen.getByText(/^Paid \$1,250\.00 on /)).toBeDefined();
   expect(fetchMock).toHaveBeenCalledWith("/api/claims/CLM-1001/sign-off", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ handler_id: "HND-01" }),
+    headers: { Authorization: "Bearer token" },
   });
+});
+
+const held: Claim = {
+  ...claim,
+  status: "waiting_for_sign_off",
+  decision: "approve",
+  payout: 1250,
+  reason: "Covered.",
+  policy_section: "7. Emergency Medical",
+};
+
+it("tells a handler who can't sign off over the limit why", async () => {
+  fakeBackend(claimRoutes(held));
+  render(<ClaimView claimId="CLM-1001" handler={marcus} />);
+  await wait(0);
+  expect(
+    screen.getByText(/You can't sign off payouts over the approval limit/),
+  ).toBeDefined();
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
+it("shows why a sign-off was refused", async () => {
+  fakeBackend({
+    ...claimRoutes(held),
+    "/api/claims/CLM-1001/sign-off": [
+      401,
+      { detail: "Your sign-in has expired or isn't valid. Sign in again" },
+    ],
+  });
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  fireEvent.click(screen.getByRole("button", { name: "Sign off $1,250.00" }));
+  await wait(0);
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Your sign-in has expired or isn't valid. Sign in again",
+  );
 });

@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent import __main__ as runner
 from agent import dispatcher, main, service
 from backend.main import app
+from backend.tests.signing import headers
 
 client = TestClient(app)
 
@@ -204,7 +205,7 @@ def test_claim_agent_pauses_before_a_payout_over_the_limit():
 
 def test_sign_off_resumes_the_claim_and_pays_it_once():
     hold()
-    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-01"})
+    client.post("/api/claims/CLM-1001/sign-off", headers=headers())
     assert main.run("CLM-1001", "CLM-1001-1", stub()) == ""
     result = claim("CLM-1001")
     assert (result["status"], result["paid_amount"]) == ("decided", 1250.0)
@@ -318,7 +319,7 @@ def test_time_is_recorded_with_its_run_and_leaves_out_a_sign_off_wait(monkeypatc
     monkeypatch.setattr(main, "clock", lambda: next(ticks))
     run_id = new_run()
     hold(run_id=run_id)
-    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-01"})
+    client.post("/api/claims/CLM-1001/sign-off", headers=headers())
     main.run("CLM-1001", "CLM-1001-1", stub())
     run = client.get("/api/runs/current").json()
     assert run["seconds"] == pytest.approx(7.0)
@@ -512,7 +513,7 @@ def test_an_evaluation_works_its_copies_and_leaves_the_queue_alone():
 def test_the_service_resumes_a_signed_off_claim_and_pays_it(monkeypatch):
     monkeypatch.setattr(main, "model", stub)
     hold()
-    client.post("/api/claims/CLM-1001/sign-off", json={"handler_id": "HND-02"})
+    client.post("/api/claims/CLM-1001/sign-off", headers=headers())
     response = TestClient(service.app).post("/claims/CLM-1001/resume")
     assert response.status_code == 202
     result = claim("CLM-1001")

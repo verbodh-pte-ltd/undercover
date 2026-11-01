@@ -1,5 +1,8 @@
 import pytest
 
+from backend import auth
+from backend.tests import signing
+
 FROM_DOT_ENV = ["DATABASE_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"]
 
 
@@ -11,3 +14,9 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setenv("UNDERCOVER_AGENT", "http://127.0.0.1:9")
     for name in FROM_DOT_ENV:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def stub_jwks(monkeypatch):
+    """Serve the test key's JWKS in place of Supabase Auth's."""
+    monkeypatch.setattr(auth.jwks, "fetch_data", lambda: signing.JWKS)

@@ -70,24 +70,24 @@ Review these first. The documents in `docs/` don't make these decisions.
 The backend checks a Supabase token on every handler action, and the dashboard signs in before it shows a
 page. A sign-off records the signed-in handler.
 
-- [ ] `handlers` table seeded from `data/handlers.json` with emails, Marcus and Priya at
+- [x] `handlers` table seeded from `data/handlers.json` with emails, Marcus and Priya at
       `can_approve_over_limit: false`; `GET /api/handlers/me` (`get_signed_in_handler`) returns the handler
       for a valid token.
-- [ ] `backend/auth.py` checks the token with PyJWT's `PyJWKClient` on
+- [x] `backend/auth.py` checks the token with PyJWT's `PyJWKClient` on
       `{VITE_SUPABASE_URL}/auth/v1/.well-known/jwks.json`, audience `authenticated`, and finds the handler by
       the token's email. Tests sign tokens with a test key, served by a stub JWKS.
-- [ ] `start_dispatch`, `start_evaluation` and `sign_off` answer 401 with no token, an expired token or an
+- [x] `start_dispatch`, `start_evaluation` and `sign_off` answer 401 with no token, an expired token or an
       unknown email. A test covers each.
-- [ ] `sign_off` takes no `handler_id`, records the signed-in handler, and answers 403 for Marcus Oyelaran
+- [x] `sign_off` takes no `handler_id`, records the signed-in handler, and answers 403 for Marcus Oyelaran
       with a message that says why.
-- [ ] The dashboard signs in with `@supabase/supabase-js` `signInWithPassword` from `VITE_SUPABASE_URL` and
+- [x] The dashboard signs in with `@supabase/supabase-js` `signInWithPassword` from `VITE_SUPABASE_URL` and
       `VITE_SUPABASE_PUBLISHABLE_KEY`, sends the access token on every action, shows who is signed in in the
       header, and signs out. The sign-in page has no sign-up.
-- [ ] A claim waiting for sign-off shows Marcus a note saying he can't sign off over the limit, in place of
+- [x] A claim waiting for sign-off shows Marcus a note saying he can't sign off over the limit, in place of
       the button.
-- [ ] `e2e/auth-stand-in.mjs` signs tokens with its own key, serves its JWKS and answers CORS preflights.
+- [x] `e2e/auth-stand-in.mjs` signs tokens with its own key, serves its JWKS and answers CORS preflights.
       Every spec signs in first. `npm run check` is green with `.env` moved away.
-- [ ] In the browser (on `npm run dev` with local Supabase), Dana signs in and sees her name in the header;
+- [x] In the browser (on `npm run dev` with local Supabase), Dana signs in and sees her name in the header;
       a wrong password shows an error that says what to do.
 
 ## Phase 2: Settings and the Settings page

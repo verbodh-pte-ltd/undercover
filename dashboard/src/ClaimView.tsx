@@ -122,7 +122,10 @@ export const POLL_MS = 2000;
 const loadClaim = (claimId: string) =>
   Promise.all([getClaim(claimId), listSteps(claimId)]);
 
-export function ClaimView({ claimId }: Readonly<{ claimId: string }>) {
+export function ClaimView({
+  claimId,
+  handler,
+}: Readonly<{ claimId: string; handler: Handler }>) {
   const [claim, setClaim] = useState<Claim | null>(null);
   const [steps, setSteps] = useState<Step[]>([]);
   const [policy, setPolicy] = useState<Policy | null>(null);
@@ -178,7 +181,7 @@ export function ClaimView({ claimId }: Readonly<{ claimId: string }>) {
             )}
             {claim.status === "waiting_for_sign_off" &&
               claim.run_id === null && (
-                <SignOff claim={claim} onSigned={setClaim} />
+                <SignOff claim={claim} handler={handler} onSigned={setClaim} />
               )}
           </div>
           <div className="panel stack-sm">

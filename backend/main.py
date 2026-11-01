@@ -6,7 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
+import jwt
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Connection,
@@ -19,11 +21,12 @@ from sqlalchemy import (
     update,
 )
 
-from backend import agent_service, payout, store
+from backend import agent_service, auth, payout, store
 from backend.store import (
     answer_key,
     claims,
     customers,
+    handlers,
     held_out_claims,
     model_calls,
     policies,
@@ -50,10 +53,6 @@ class Decision(BaseModel):
 
 class Payment(BaseModel):
     amount: float = Field(gt=0)
-
-
-class SignOff(BaseModel):
-    handler_id: str
 
 
 class Step(BaseModel):
@@ -117,6 +116,28 @@ def get_db() -> Iterator[Connection]:
 
 
 Db = Annotated[Connection, Depends(get_db)]
+
+
+def signed_in_handler(
+    token: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())], db: Db
+) -> RowMapping:
+    """The handler whose Supabase access token came with the request, or raise 401."""
+    try:
+        email = auth.email(token.credentials)
+    except jwt.PyJWTError as exc:
+        raise HTTPException(
+            401, "Your sign-in has expired or isn't valid. Sign in again"
+        ) from exc
+    row = db.execute(select(handlers).where(handlers.c.email == email)).mappings()
+    handler = row.first()
+    if handler is None:
+        raise HTTPException(
+            401, f"{email} isn't a claims handler. Sign out and sign in as one"
+        )
+    return handler
+
+
+Handler = Annotated[RowMapping, Depends(signed_in_handler)]
 
 
 def claim_row(db: Connection, claim_id: str, lock: bool = False) -> RowMapping:
@@ -492,19 +513,26 @@ def get_instructions() -> dict[str, str]:
 
 
 @app.get("/api/handlers", operation_id="list_handlers")
-def list_handlers() -> list[dict[str, Any]]:
+def list_handlers(db: Db) -> list[dict[str, Any]]:
     """List the claims handlers."""
-    return store.load("handlers.json")
+    query = select(handlers).order_by(handlers.c.handler_id)
+    return [dict(r) for r in db.execute(query).mappings()]
+
+
+@app.get("/api/handlers/me", operation_id="get_signed_in_handler")
+def get_signed_in_handler(handler: Handler) -> dict[str, Any]:
+    """Get the handler who is signed in."""
+    return dict(handler)
 
 
 @app.post("/api/dispatches", operation_id="start_dispatch")
-def start_dispatch(start: DispatchStart) -> dict[str, Any]:
+def start_dispatch(start: DispatchStart, _: Handler) -> dict[str, Any]:
     """Ask the agent's service to work the queue with up to n claim agents at once."""
     return agent_service.start("dispatches", start.model_dump())
 
 
 @app.post("/api/evaluations", operation_id="start_evaluation")
-def start_evaluation(start: EvaluationStart) -> dict[str, Any]:
+def start_evaluation(start: EvaluationStart, _: Handler) -> dict[str, Any]:
     """Ask the agent's service to evaluate the agent on a labelled set of claims."""
     return agent_service.start("evaluations", start.model_dump())
 
@@ -711,12 +739,13 @@ def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
 
 @app.post("/api/claims/{claim_id}/sign-off", operation_id="sign_off")
 def sign_off(
-    claim_id: str, sign_off: SignOff, db: Db, tasks: BackgroundTasks
+    claim_id: str, handler: Handler, db: Db, tasks: BackgroundTasks
 ) -> dict[str, Any]:
-    """Sign off a payout over $1,000 as a handler; the agent then pays it."""
-    handlers = {h["handler_id"] for h in store.load("handlers.json")}
-    if sign_off.handler_id not in handlers:
-        raise HTTPException(404, f"Handler {sign_off.handler_id} not found")
+    """Sign off a payout over $1,000 as the signed-in handler; the agent pays it."""
+    if not handler["can_approve_over_limit"]:
+        raise HTTPException(
+            403, f"{handler['name']} can't sign off payouts over the approval limit"
+        )
     row = claim_row(db, claim_id, lock=True)
     if row["run_id"] is not None:
         raise HTTPException(409, f"Claim {claim_id} is an evaluation's copy")
@@ -726,7 +755,7 @@ def sign_off(
         db,
         claim_id,
         status="in_progress",
-        signed_off_by=sign_off.handler_id,
+        signed_off_by=handler["handler_id"],
         signed_off_at=store.now(),
     )
     db.commit()

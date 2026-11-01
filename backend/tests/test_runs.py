@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service, store
 from backend.main import app
+from backend.tests.signing import headers
 
 client = TestClient(app)
 
@@ -202,9 +203,11 @@ def test_start_dispatch_asks_the_service_with_n(monkeypatch):
 
     monkeypatch.setenv("UNDERCOVER_AGENT", "http://agent.test")
     monkeypatch.setattr(agent_service.httpx, "post", post)
-    assert client.post("/api/dispatches", json={"n": 3}).json() == {"status": "started"}
+    assert client.post("/api/dispatches", json={"n": 3}, headers=headers()).json() == {
+        "status": "started"
+    }
     body = {"n": 5, "eval_set": "held_out", "tiny": True}
-    client.post("/api/evaluations", json=body)
+    client.post("/api/evaluations", json=body, headers=headers())
     assert sent == [
         ("http://agent.test/dispatches", {"n": 3}),
         ("http://agent.test/evaluations", body),
@@ -214,7 +217,7 @@ def test_start_dispatch_asks_the_service_with_n(monkeypatch):
 def test_a_second_start_is_refused(monkeypatch):
     refusal = FakeResponse(409, {"detail": "A dispatch is already running"})
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: refusal)
-    response = client.post("/api/dispatches", json={"n": 3})
+    response = client.post("/api/dispatches", json={"n": 3}, headers=headers())
     assert response.status_code == 409
     assert response.json()["detail"] == "A dispatch is already running"
 
@@ -224,14 +227,20 @@ def test_start_says_when_the_service_is_not_running(monkeypatch):
         raise httpx.ConnectError("refused")
 
     monkeypatch.setattr(agent_service.httpx, "post", refuse)
-    response = client.post("/api/dispatches", json={"n": 3})
+    response = client.post("/api/dispatches", json={"n": 3}, headers=headers())
     assert response.status_code == 503
     assert response.json()["detail"] == "The agent's service isn't running"
 
 
 def test_n_is_from_1_to_25():
-    assert client.post("/api/dispatches", json={"n": 0}).status_code == 422
-    assert client.post("/api/dispatches", json={"n": 26}).status_code == 422
+    assert (
+        client.post("/api/dispatches", json={"n": 0}, headers=headers()).status_code
+        == 422
+    )
+    assert (
+        client.post("/api/dispatches", json={"n": 26}, headers=headers()).status_code
+        == 422
+    )
 
 
 def counts():
@@ -275,9 +284,7 @@ def test_a_sign_off_on_a_copy_is_refused():
     copy_id = f"E{run['run_id']}-CLM-1003"
     start(copy_id, run["run_id"])
     decide(copy_id, approve(3750))
-    response = client.post(
-        f"/api/claims/{copy_id}/sign-off", json={"handler_id": "HND-01"}
-    )
+    response = client.post(f"/api/claims/{copy_id}/sign-off", headers=headers())
     assert response.status_code == 409
 
 

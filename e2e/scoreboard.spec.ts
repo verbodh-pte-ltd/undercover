@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { signIn } from "./sign-in";
+
+test.beforeEach(async ({ page }) => {
+  await signIn(page);
+});
 
 test("the scoreboard shows an evaluation played out through the API", async ({
   page,

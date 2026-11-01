@@ -1,3 +1,5 @@
+import { supabase } from "./supabase";
+
 export type Status =
   | "waiting"
   | "in_progress"
@@ -169,6 +171,21 @@ export interface Handler {
   handler_id: string;
   name: string;
   role: string;
+  email: string;
+  can_approve_over_limit: boolean;
+}
+
+// The signed-in handler's access token, which goes with every action.
+async function authorization() {
+  const { data } = await supabase.auth.getSession();
+  return { Authorization: `Bearer ${data.session?.access_token ?? ""}` };
+}
+
+async function refusal(response: Response, fallback: string) {
+  const { detail } = (await response.json()) as { detail: unknown };
+  return typeof detail === "string"
+    ? detail
+    : `${fallback} returned ${String(response.status)}`;
 }
 
 async function getJson<T>(path: string): Promise<T> {
@@ -193,17 +210,24 @@ export const listEvaluations = () =>
 export const getEvaluation = (id: string) =>
   getJson<Evaluation>(`/api/evaluations/${id}`);
 
+export async function getSignedInHandler() {
+  const response = await fetch("/api/handlers/me", {
+    headers: await authorization(),
+  });
+  if (!response.ok) throw new Error(await refusal(response, "Sign-in"));
+  return (await response.json()) as Handler;
+}
+
 async function post(path: string, body: unknown): Promise<string | null> {
   const response = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authorization()),
+    },
     body: JSON.stringify(body),
   });
-  if (response.ok) return null;
-  const { detail } = (await response.json()) as { detail: unknown };
-  return typeof detail === "string"
-    ? detail
-    : `Starting returned ${String(response.status)}`;
+  return response.ok ? null : refusal(response, "Starting");
 }
 
 // Each returns null once started, or the reason it was refused.
@@ -211,13 +235,12 @@ export const startDispatch = (n: number) => post("/api/dispatches", { n });
 export const startEvaluation = (n: number, evalSet: EvalSet, tiny: boolean) =>
   post("/api/evaluations", { n, eval_set: evalSet, tiny });
 
-export async function signOff(claimId: string, handlerId: string) {
+// Signs off as the signed-in handler, or throws the reason it was refused.
+export async function signOff(claimId: string) {
   const response = await fetch(`/api/claims/${claimId}/sign-off`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ handler_id: handlerId }),
+    headers: await authorization(),
   });
-  if (!response.ok)
-    throw new Error(`Sign-off returned ${String(response.status)}`);
+  if (!response.ok) throw new Error(await refusal(response, "Sign-off"));
   return (await response.json()) as Claim;
 }

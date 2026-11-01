@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { signIn } from "./sign-in";
+
+test.beforeEach(async ({ page }) => {
+  await signIn(page);
+});
 
 const standIn = "http://127.0.0.1:8003/calls";
 

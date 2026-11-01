@@ -133,6 +133,15 @@ held_out_claims = Table(
     Column("claim_id", String, primary_key=True),
     Column("data", Text, nullable=False),
 )
+handlers = Table(
+    "handlers",
+    metadata,
+    Column("handler_id", String, primary_key=True),
+    Column("name", String, nullable=False),
+    Column("role", String, nullable=False),
+    Column("email", String, nullable=False, unique=True),
+    Column("can_approve_over_limit", Boolean, nullable=False),
+)
 EVAL_SETS = {
     "evaluation": ("claims.json", "evals/decisions.json"),
     "held_out": ("evals/held_out_claims.json", "evals/held_out_decisions.json"),
@@ -153,7 +162,8 @@ def now() -> str:
 
 
 def seed(conn: Connection) -> None:
-    """Copy the queue, the policies and the customers from data/."""
+    """Copy the queue, the policies, the customers and the handlers from data/."""
+    conn.execute(insert(handlers), load("handlers.json"))
     queue = [
         {"claim_id": c["claim_id"], "position": i, "data": json.dumps(c)}
         for i, c in enumerate(load("claims.json"))

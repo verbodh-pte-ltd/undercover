@@ -1,4 +1,9 @@
 import { expect, test } from "@playwright/test";
+import { signIn } from "./sign-in";
+
+test.beforeEach(async ({ page }) => {
+  await signIn(page);
+});
 
 test("steps appear on the claim while the agent works", async ({
   page,
@@ -41,7 +46,6 @@ test("a handler's sign-off reaches the agent, which then pays", async ({
   await page.goto("/#/claims/CLM-1003");
   await expect(page.getByText("Waiting for sign-off")).toBeVisible();
   await expect(page.getByText("Not paid yet")).toBeVisible();
-  await page.getByLabel("Handler").selectOption({ label: "Dana Whitfield" });
   await page.getByRole("button", { name: "Sign off $1,250.00" }).click();
   await expect(
     page.getByText(/^Signed off by Dana Whitfield on /),

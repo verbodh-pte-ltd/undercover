@@ -387,3 +387,43 @@ button:disabled {
 tr.miss td {
   background: color-mix(in srgb, var(--raspberry) 10%, transparent);
 }
+
+.who {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  color: var(--muted);
+}
+
+button.quiet {
+  background: transparent;
+  color: var(--cerulean);
+  padding: 0;
+}
+
+.note {
+  color: var(--muted);
+}
+
+.sign-in {
+  max-width: 400px;
+  padding-top: 12vh;
+}
+
+.sign-in h1 {
+  margin-bottom: 4px;
+}
+
+input {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: var(--page);
+  color: var(--ink);
+}
+
+.sign-in button {
+  margin-top: 6px;
+  padding: 8px 16px;
+}

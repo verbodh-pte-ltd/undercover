@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service
 from backend.main import app
+from backend.tests.signing import headers
 
 client = TestClient(app)
 
@@ -23,10 +24,8 @@ def pay(claim_id, amount):
     return client.post(f"/api/claims/{claim_id}/payment", json={"amount": amount})
 
 
-def sign_off(claim_id, handler_id):
-    return client.post(
-        f"/api/claims/{claim_id}/sign-off", json={"handler_id": handler_id}
-    )
+def sign_off(claim_id):
+    return client.post(f"/api/claims/{claim_id}/sign-off", headers=headers())
 
 
 def start(claim_id):
@@ -129,7 +128,7 @@ def test_paying_undecided_is_409():
 
 def test_sign_off_records_who_and_when_and_pays_nothing():
     decide("CLM-1001", LARGE)
-    claim = sign_off("CLM-1001", "HND-01").json()
+    claim = sign_off("CLM-1001").json()
     assert claim["status"] == "in_progress"
     assert claim["signed_off_by"] == "HND-01"
     assert claim["signed_off_at"]
@@ -138,7 +137,7 @@ def test_sign_off_records_who_and_when_and_pays_nothing():
 
 def test_payment_after_sign_off_pays_and_decides():
     decide("CLM-1001", LARGE)
-    sign_off("CLM-1001", "HND-01")
+    sign_off("CLM-1001")
     claim = pay("CLM-1001", 1250.0).json()
     assert (claim["status"], claim["paid_amount"]) == ("decided", 1250.0)
     assert claim["paid_at"]
@@ -147,7 +146,7 @@ def test_payment_after_sign_off_pays_and_decides():
 
 def test_a_signed_off_claim_cannot_be_released():
     decide("CLM-1001", LARGE)
-    sign_off("CLM-1001", "HND-01")
+    sign_off("CLM-1001")
     release = client.post("/api/claims/CLM-1001/release", json={"error": "boom"})
     assert release.status_code == 409
 
@@ -159,25 +158,20 @@ def test_sign_off_asks_the_agent_to_carry_on(monkeypatch):
         agent_service.httpx, "post", lambda url, **kw: calls.append(url)
     )
     decide("CLM-1001", LARGE)
-    sign_off("CLM-1001", "HND-01")
+    sign_off("CLM-1001")
     assert calls == ["http://agent.test/claims/CLM-1001/resume"]
 
 
 def test_sign_off_stands_when_the_agent_cannot_be_reached():
     decide("CLM-1001", LARGE)
-    response = sign_off("CLM-1001", "HND-01")
+    response = sign_off("CLM-1001")
     assert response.status_code == 200
     assert client.get("/api/claims/CLM-1001").json()["signed_off_by"] == "HND-01"
 
 
 def test_sign_off_when_not_waiting_is_409():
     decide("CLM-1001", SMALL)
-    assert sign_off("CLM-1001", "HND-01").status_code == 409
-
-
-def test_sign_off_unknown_handler_is_404():
-    decide("CLM-1001", LARGE)
-    assert sign_off("CLM-1001", "HND-99").status_code == 404
+    assert sign_off("CLM-1001").status_code == 409
 
 
 def test_start_gives_a_thread_that_a_second_start_keeps():

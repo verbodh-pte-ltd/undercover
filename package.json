@@ -19,6 +19,7 @@
     "format": "uv run ruff format && prettier --write -u dashboard e2e *.config.*"
   },
   "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

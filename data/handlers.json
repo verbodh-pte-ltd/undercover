@@ -11,13 +11,13 @@
     "name": "Marcus Oyelaran",
     "role": "Claims Handler",
     "email": "marcus.oyelaran@undercover.example",
-    "can_approve_over_limit": true
+    "can_approve_over_limit": false
   },
   {
     "handler_id": "HND-03",
     "name": "Priya Raman",
     "role": "Claims Handler",
     "email": "priya.raman@undercover.example",
-    "can_approve_over_limit": true
+    "can_approve_over_limit": false
   }
 ]

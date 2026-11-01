@@ -2,8 +2,9 @@
 
 The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`), durable state
 (`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
-(`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built. We use Postgres in Docker on this machine, not
-Supabase.
+(`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
+from `docs/IMPROVE.md`), phase 1: handlers sign in. We use Postgres in Docker on this machine, not
+Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
 
@@ -30,8 +31,10 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   it uses local Postgres in Docker, in the `undercover` schema, with a pool of 4 connections that
   callers wait for. Without it, it uses SQLite in `backend/undercover.db` (or the file in
   `UNDERCOVER_DB`), as the tests do. `backend/store.py` seeds the database from `data/` on first start:
-  the 25 claims, the policies, the customers, the held-out claims, and the handlers' decisions on both
-  labelled sets in `answer_key`, which no claim operation reads. `npm run seed` rebuilds every table,
+  the 25 claims, the policies, the customers, the held-out claims, the handlers from
+  `data/handlers.json` (with their emails, and whether each can sign off over the limit; only Dana
+  Whitfield can), and the handlers' decisions on both labelled sets in `answer_key`, which no claim
+  operation reads. `npm run seed` rebuilds every table,
   empties the agent's saved threads and seeds again, so it empties the scoreboard too.
   - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
     wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
@@ -41,6 +44,12 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     waiting claims oldest submitted first, or an evaluation's copies), `finish_run`,
     `stop_running_runs` and `get_current_run` (the latest dispatch, with its claims, summary, model cost
     and time). Only one runs at a time.
+  - Sign-in: `backend/auth.py` checks a Supabase access token against the public keys at
+    `{VITE_SUPABASE_URL}/auth/v1/.well-known/jwks.json` with PyJWT's `PyJWKClient`, audience
+    `authenticated`, and the backend finds the handler by the token's email. `start_dispatch`,
+    `start_evaluation` and `sign_off` need a signed-in handler (401 without one);
+    `GET /api/handlers/me` (`get_signed_in_handler`) returns the handler. The agent's own calls need
+    no sign-in.
   - `start_dispatch` and `start_evaluation` ask the agent's service through `backend/agent_service.py`,
     and pass on its refusal (409) or say it isn't running (503).
   - An evaluation works copies of its set's claims, with ids such as `E3-CLM-1001`, out of the queue.
@@ -51,7 +60,8 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     `needs_handler`. A claim stopped `in_progress` stays there for the next dispatch.
   - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py`.
   - A payout over $1,000 (`payout_approval_limit` in `data/company.json`) is refused until a handler
-    signs off. A sign-off records who and when, puts the claim back `in_progress`, and asks the agent's
+    signs off. A sign-off records the signed-in handler and when (403 for a handler who can't sign
+    off over the limit), puts the claim back `in_progress`, and asks the agent's
     service to carry on and pay it.
   - The same decision or payment sent again counts as done; a different decision is still refused.
 - `backend/instructions/claim.md`: the claim agent's instructions, served by `GET /api/instructions`.
@@ -73,7 +83,9 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     it starts.
   - Each claim is traced in Langfuse in a session named after its thread, tagged `run-<run_id>`.
   - `uv run -m agent CLM-1001` works named claims with no run.
-- `dashboard/`: the claims desk.
+- `dashboard/`: the claims desk. Every page needs a signed-in handler: the sign-in page signs in
+  with `@supabase/supabase-js` `signInWithPassword` (no sign-up), and the header shows who is signed
+  in with a "Sign out" button. Each action sends the session's access token.
   - The queue (`#/`) has a count per state, a "Claim agents at once" picker (1 to 25, 3 to start) and a
     "Start dispatch" button, and the latest dispatch: its claims and where each stands, its model cost
     and time, and its summary once it has finished.
@@ -81,12 +93,14 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     newest first with every measure. `#/scoreboard/<run_id>` shows its claims beside the handlers',
     with the misses marked and each claim linked to its page.
   - Each claim (`#/claims/CLM-1001`) shows its decision, reasons, the agent's steps, the sections it
-    read, the policy and earlier claims. A claim waiting for sign-off has a handler picker and a "Sign
-    off" button, except on an evaluation's copy.
+    read, the policy and earlier claims. A claim waiting for sign-off has a "Sign off" button, except on
+    an evaluation's copy; a handler who can't sign off over the limit sees a note saying so instead.
   - The instructions page (`#/instructions`) shows the claim agent's instructions, read only.
 - `e2e/`: Playwright tests, one at a time, on their own servers (backend :8001, dashboard :5174) and
   their own SQLite database, `e2e/e2e.db`, deleted at the start of each run. A stand-in for the agent's
-  service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls with their bodies.
+  service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls with their bodies. A
+  stand-in for Supabase Auth on :8004 (`e2e/auth-stand-in.mjs`) signs tokens with its own key,
+  serves its public key and answers CORS preflights; every spec signs in first.
 
 ## Run it
 
@@ -100,6 +114,11 @@ without a run:
 ```bash
 uv run --env-file .env -m agent CLM-1001
 ```
+
+Sign in as a handler from `data/handlers.json` with `HANDLER_PASSWORD` from `.env`. Supabase's local
+stack must be running (`npx supabase start`, as in `labs/week2/week2day5.ipynb`), with
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` in `.env`; Vite reads `.env` from the repo
+root for `npm run dev` only.
 
 The `undercover-postgres` container must be running. To reset the data, run `npm run seed`; the start
 cell in `labs/week2/week2day3.ipynb` makes the container again from `.env` if Docker has lost it.
@@ -115,4 +134,6 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 ## Not built yet
 
 - Rejecting a held payout. A handler can only sign off for now.
-- Sign-in, real payments and messages to customers, as `docs/SPEC.md` says.
+- Real payments and messages to customers, as `docs/SPEC.md` says.
+- The rest of `docs/PLAN_IMPROVE.md`: settings, the configuration's versions, the judge and the
+  improver.

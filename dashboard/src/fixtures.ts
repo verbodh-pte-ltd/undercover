@@ -1,5 +1,56 @@
+import type { Session } from "@supabase/supabase-js";
 import { vi } from "vitest";
-import type { Claim, ClaimSummary, Evaluation, Run } from "./api";
+import type { Claim, ClaimSummary, Evaluation, Handler, Run } from "./api";
+import { supabase } from "./supabase";
+
+export const dana: Handler = {
+  handler_id: "HND-01",
+  name: "Dana Whitfield",
+  role: "Senior Claims Handler",
+  email: "dana.whitfield@undercover.example",
+  can_approve_over_limit: true,
+};
+
+export const marcus: Handler = {
+  handler_id: "HND-02",
+  name: "Marcus Oyelaran",
+  role: "Claims Handler",
+  email: "marcus.oyelaran@undercover.example",
+  can_approve_over_limit: false,
+};
+
+export const session: Session = {
+  access_token: "token",
+  refresh_token: "refresh",
+  expires_in: 3600,
+  token_type: "bearer",
+  user: {
+    id: "user-1",
+    app_metadata: {},
+    user_metadata: {},
+    aud: "authenticated",
+    created_at: "2026-10-01T00:00:00+00:00",
+  },
+};
+
+// Stands in for Supabase Auth: signed in with this session, or signed out with null.
+export function signIn(signedIn: Session | null = session) {
+  vi.spyOn(supabase.auth, "getSession").mockResolvedValue(
+    signedIn
+      ? { data: { session: signedIn }, error: null }
+      : { data: { session: null }, error: null },
+  );
+  vi.spyOn(supabase.auth, "onAuthStateChange").mockImplementation(
+    (callback) => {
+      void callback("INITIAL_SESSION", signedIn);
+      return {
+        data: {
+          subscription: { id: "test", callback: vi.fn(), unsubscribe: vi.fn() },
+        },
+      };
+    },
+  );
+}
 
 export const summary: ClaimSummary = {
   claim_id: "CLM-1001",
@@ -66,11 +117,13 @@ export const history = [
 ];
 
 // A route's value is the JSON it answers, or [status, JSON] for a refusal.
+// The signed-in handler is Dana unless the routes say otherwise.
 export function fakeBackend(routes: Record<string, unknown>) {
   const fetchMock = vi.fn((path: string) => {
-    if (!(path in routes))
+    const found = { "/api/handlers/me": dana, ...routes };
+    if (!(path in found))
       return Promise.resolve(new Response("", { status: 404 }));
-    const route = routes[path];
+    const route = found[path as keyof typeof found];
     if (Array.isArray(route) && typeof route[0] === "number")
       return Promise.resolve(
         new Response(JSON.stringify(route[1]), { status: route[0] }),

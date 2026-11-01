@@ -13,16 +13,21 @@ import {
   claimRoutes,
   dispatchRun,
   fakeBackend,
+  marcus,
+  signIn,
   summary,
 } from "./fixtures";
+import { supabase } from "./supabase";
 
 beforeEach(() => {
+  signIn();
   window.location.hash = "";
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 it("shows the queue with a count per state", async () => {
@@ -96,7 +101,10 @@ it("starts a dispatch with the chosen number of claim agents", async () => {
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith("/api/dispatches", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer token",
+      },
       body: JSON.stringify({ n: 25 }),
     });
   });
@@ -198,4 +206,84 @@ it("follows the hash from the queue to a claim", async () => {
   expect(
     await screen.findByText("My flight home from Rome was canceled."),
   ).toBeDefined();
+});
+
+it("asks a handler to sign in, with no way to sign up", async () => {
+  signIn(null);
+  const signInWithPassword = vi
+    .spyOn(supabase.auth, "signInWithPassword")
+    .mockResolvedValue({
+      data: { user: null, session: null },
+      error: null,
+    } as never);
+  render(<App />);
+  fireEvent.change(screen.getByLabelText("Email"), {
+    target: { value: marcus.email },
+  });
+  fireEvent.change(screen.getByLabelText("Password"), {
+    target: { value: "secret" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await waitFor(() => {
+    expect(signInWithPassword).toHaveBeenCalledWith({
+      email: marcus.email,
+      password: "secret",
+    });
+  });
+  expect(screen.queryByText(/sign up/i)).toBeNull();
+  expect(screen.queryByRole("link", { name: "Queue" })).toBeNull();
+});
+
+it("says what to do when the password is wrong", async () => {
+  signIn(null);
+  vi.spyOn(supabase.auth, "signInWithPassword").mockResolvedValue({
+    data: { user: null, session: null },
+    error: {
+      code: "invalid_credentials",
+      message: "Invalid login credentials",
+    },
+  } as never);
+  render(<App />);
+  fireEvent.change(screen.getByLabelText("Email"), {
+    target: { value: marcus.email },
+  });
+  fireEvent.change(screen.getByLabelText("Password"), {
+    target: { value: "wrong" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "That email and password don't match. Check them and try again.",
+  );
+});
+
+it("shows who is signed in, and signs out", async () => {
+  fakeBackend({
+    "/api/claims": [summary],
+    "/api/runs/current": null,
+    "/api/handlers/me": marcus,
+  });
+  const signOut = vi
+    .spyOn(supabase.auth, "signOut")
+    .mockResolvedValue({ error: null });
+  render(<App />);
+  expect(await screen.findByText("Marcus Oyelaran")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+  expect(signOut).toHaveBeenCalled();
+});
+
+it("says when the signed-in user isn't a handler", async () => {
+  fakeBackend({
+    "/api/handlers/me": [
+      401,
+      {
+        detail:
+          "x@example.com isn't a claims handler. Sign out and sign in as one",
+      },
+    ],
+  });
+  render(<App />);
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "x@example.com isn't a claims handler. Sign out and sign in as one",
+  );
+  expect(screen.queryByText("Claims queue")).toBeNull();
 });

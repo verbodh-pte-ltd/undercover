@@ -1,50 +1,47 @@
-import { useEffect, useState } from "react";
-import { listHandlers, signOff, type Claim, type Handler } from "./api";
+import { useState } from "react";
+import { signOff, type Claim, type Handler } from "./api";
 import { money } from "./format";
 
 export function SignOff({
   claim,
+  handler,
   onSigned,
-}: Readonly<{ claim: Claim; onSigned: (claim: Claim) => void }>) {
-  const [handlers, setHandlers] = useState<Handler[]>([]);
-  const [handlerId, setHandlerId] = useState("");
+}: Readonly<{
+  claim: Claim;
+  handler: Handler;
+  onSigned: (claim: Claim) => void;
+}>) {
+  const [refused, setRefused] = useState<string | null>(null);
 
-  useEffect(() => {
-    void listHandlers().then((loaded) => {
-      setHandlers(loaded);
-      setHandlerId(loaded.at(0)?.handler_id ?? "");
-    });
-  }, []);
-
+  if (!handler.can_approve_over_limit) {
+    return (
+      <p className="note">
+        This payout is over $1,000, so it waits for a handler's sign-off. You
+        can't sign off payouts over the approval limit, so ask a handler who can
+        to sign it off.
+      </p>
+    );
+  }
   return (
     <form
       className="sign-off"
       onSubmit={(event) => {
         event.preventDefault();
-        void signOff(claim.claim_id, handlerId).then(onSigned);
+        signOff(claim.claim_id).then(onSigned, (error: unknown) => {
+          setRefused(error instanceof Error ? error.message : String(error));
+        });
       }}
     >
       <p>
         This payout is over $1,000, so it waits for a handler's sign-off. The
-        agent pays it once a handler signs off.
+        agent pays it once you sign off.
       </p>
-      <label htmlFor="handler">Handler</label>
-      <select
-        id="handler"
-        value={handlerId}
-        onChange={(event) => {
-          setHandlerId(event.target.value);
-        }}
-      >
-        {handlers.map((handler) => (
-          <option key={handler.handler_id} value={handler.handler_id}>
-            {handler.name}
-          </option>
-        ))}
-      </select>
-      <button type="submit" disabled={!handlerId}>
-        Sign off {money(claim.payout ?? 0)}
-      </button>
+      <button type="submit">Sign off {money(claim.payout ?? 0)}</button>
+      {refused && (
+        <p className="refusal" role="alert">
+          {refused}
+        </p>
+      )}
     </form>
   );
 }

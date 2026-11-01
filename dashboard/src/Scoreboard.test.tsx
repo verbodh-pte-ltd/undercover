@@ -8,15 +8,23 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { Claim, EvaluationSummary } from "./api";
-import { claim, claimRoutes, evaluation, fakeBackend } from "./fixtures";
+import {
+  claim,
+  claimRoutes,
+  evaluation,
+  fakeBackend,
+  signIn,
+} from "./fixtures";
 
 beforeEach(() => {
+  signIn();
   window.location.hash = "#/scoreboard";
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 const listed: EvaluationSummary = { ...evaluation };
@@ -59,7 +67,10 @@ it("starts an evaluation of the chosen set", async () => {
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith("/api/evaluations", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer token",
+      },
       body: JSON.stringify({ n: 5, eval_set: "held_out", tiny: true }),
     });
   });
@@ -96,5 +107,5 @@ it("shows no sign-off form on an evaluation's copy", async () => {
   expect(
     await screen.findByText(/A copy of CLM-1001 for evaluation 7/),
   ).toBeDefined();
-  expect(screen.queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("button", { name: /Sign off/ })).toBeNull();
 });
