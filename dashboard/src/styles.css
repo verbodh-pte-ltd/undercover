@@ -195,11 +195,13 @@ main {
   color: var(--midnight);
 }
 
-.chip.waiting {
+.chip.waiting,
+.chip.current {
   background: var(--sea-green);
 }
 
-.chip.in_progress {
+.chip.in_progress,
+.chip.under_test {
   background: var(--marigold);
 }
 
@@ -208,6 +210,7 @@ main {
 }
 
 .chip.decided,
+.chip.kept,
 .chip.done {
   background: var(--cerulean);
   color: #ffffff;
@@ -218,6 +221,7 @@ main {
 }
 
 .chip.needs_handler,
+.chip.rolled_back,
 .chip.left_for_handler {
   background: var(--raspberry);
   color: #ffffff;
@@ -517,4 +521,37 @@ legend {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* Changed lines: additions in green, removals in raspberry, each with its sign. */
+.diff {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.diff li {
+  display: grid;
+  grid-template-columns: 2ch 1fr;
+  gap: 8px;
+  padding: 2px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff .added {
+  background: color-mix(in srgb, var(--sea-green) 18%, transparent);
+}
+
+.diff .removed {
+  background: color-mix(in srgb, var(--raspberry) 14%, transparent);
+}
+
+.diff .added .diff-sign {
+  color: var(--sea-green-text);
+}
+
+.diff .removed .diff-sign {
+  color: var(--raspberry);
 }

@@ -38,8 +38,6 @@ from pydantic import BaseModel, Field, SecretStr
 
 BACKEND_URL = "http://127.0.0.1:8000"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "openai/gpt-6-luna"
-DEFAULT_EFFORT = "low"
 MODEL_TIMEOUT = 60
 MODEL_RETRIES = 2
 RETRY_DELAY = 1.0
@@ -195,23 +193,24 @@ class ClaimState(TypedDict):
     model_calls: int
 
 
-def model_name() -> str:
-    """The model in MODEL_NAME, or GPT-6 Luna by default."""
-    return os.getenv("MODEL_NAME") or DEFAULT_MODEL
+def model_name(version: dict[str, Any]) -> str:
+    """The model in MODEL_NAME, or the configuration version's."""
+    return os.getenv("MODEL_NAME") or version["model"]
 
 
-def effort() -> str:
-    """The reasoning effort: low for the default model, none for one in MODEL_NAME."""
-    return "none" if os.getenv("MODEL_NAME") else DEFAULT_EFFORT
+def effort(version: dict[str, Any]) -> str:
+    """The version's reasoning effort, or the model's default for one in MODEL_NAME."""
+    return "default" if os.getenv("MODEL_NAME") else version["effort"]
 
 
-def model() -> ChatOpenAI:
-    """Return the model in MODEL_NAME, or GPT-6 Luna with low effort by default."""
+def model(version: dict[str, Any]) -> ChatOpenAI:
+    """Return the model in MODEL_NAME, or the version's at its reasoning effort."""
+    chosen = effort(version)
     return ChatOpenAI(
-        model=model_name(),
+        model=model_name(version),
         base_url=OPENROUTER_BASE_URL,
         api_key=SecretStr(os.environ["OPENROUTER_API_KEY"]),
-        reasoning_effort=None if effort() == "none" else effort(),
+        reasoning_effort=None if chosen == "default" else chosen,
         timeout=MODEL_TIMEOUT,
         max_retries=MODEL_RETRIES,
     )
@@ -385,11 +384,15 @@ def run(
     run_id: int | None = None,
 ) -> str:
     """Run the claim agent on its thread: start, carry on, or resume after sign-off."""
+    # A claim in a run works to the run's version; one in none, to the current one.
+    path = "/api/configuration/current"
+    if run_id is not None:
+        path = f"/api/runs/{run_id}/configuration"
     with backend() as client:
-        instructions = client.get("/api/instructions").json()["claim"]
+        version = client.get(path).json()
         claim = client.get(f"/api/claims/{claim_id}").json()
     checkpointer = saver()
-    graph = claim_graph(llm or model(), instructions, checkpointer)
+    graph = claim_graph(llm or model(version), version["instructions"], checkpointer)
     config = traced(thread_id, run_id)
     config["recursion_limit"] = RECURSION_LIMIT
     saved = graph.get_state(config)

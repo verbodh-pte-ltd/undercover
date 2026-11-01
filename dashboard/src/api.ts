@@ -163,8 +163,30 @@ export interface Evaluation extends EvaluationSummary {
   claims: EvaluationClaim[];
 }
 
-export interface Instructions {
-  claim: string;
+// A version's averages over the whole held-out evaluations that rounds ran on it.
+export interface VersionScores {
+  accuracy: number;
+  cost_per_claim: number;
+  seconds_per_claim: number;
+  runs: number;
+}
+
+export interface ConfigVersion {
+  version: number;
+  instructions: string;
+  model: string;
+  effort: string;
+  reason: string;
+  proposed_by: string;
+  approved_by: string;
+  approved_at: string;
+  // Null while the version is under test.
+  kept: boolean | null;
+  current: boolean;
+  held_out: VersionScores | null;
+  // The version before's model and effort, and the lines changed from it; null for version 1.
+  before: { model: string; effort: string } | null;
+  changed_lines: string[] | null;
 }
 
 export interface Handler {
@@ -239,7 +261,8 @@ export const listSteps = (id: string) =>
   getJson<Step[]>(`/api/claims/${id}/steps`);
 export const getSettings = () => getJson<Settings>("/api/settings");
 export const getCurrentRun = () => getJson<Run | null>("/api/runs/current");
-export const getInstructions = () => getJson<Instructions>("/api/instructions");
+export const listVersions = () =>
+  getJson<ConfigVersion[]>("/api/configuration/versions");
 export const listEvaluations = () =>
   getJson<EvaluationSummary[]>("/api/evaluations");
 export const getEvaluation = (id: string) =>

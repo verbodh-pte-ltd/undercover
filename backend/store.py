@@ -29,6 +29,9 @@ from sqlalchemy import (
 
 DATA = Path(__file__).parent.parent / "data"
 DEFAULT_DB = Path(__file__).parent / "undercover.db"
+INSTRUCTIONS = Path(__file__).parent / "instructions"
+FIRST_MODEL = "openai/gpt-6-luna"
+FIRST_EFFORT = "low"
 SCHEMA = "undercover"
 POOL_SIZE = 4
 CHECKPOINT_TABLES = ["checkpoint_writes", "checkpoint_blobs", "checkpoints"]
@@ -91,6 +94,10 @@ runs = Table(
     Column("status", String, nullable=False, default="running"),
     Column("started_at", String, nullable=False),
     Column("finished_at", String),
+    # The configuration version the run's claim agents work to, and the round that
+    # ran it, if any.
+    Column("version", Integer, nullable=False),
+    Column("round_id", Integer),
 )
 run_claims = Table(
     "run_claims",
@@ -160,6 +167,32 @@ setting_changes = Table(
     Column("handler_id", String, nullable=False),
     Column("changed_at", String, nullable=False),
 )
+# The claim agent's configuration in versions. A version under test has kept None;
+# the current version is the newest one kept.
+config_versions = Table(
+    "config_versions",
+    metadata,
+    Column("version", Integer, primary_key=True),
+    Column("instructions", Text, nullable=False),
+    Column("model", String, nullable=False),
+    Column("effort", String, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("proposed_by", String, nullable=False),
+    Column("approved_by", String, nullable=False),
+    Column("approved_at", String, nullable=False),
+    Column("kept", Boolean),
+)
+# The improver's recipe in versions; the newest is the one it follows.
+recipes = Table(
+    "recipes",
+    metadata,
+    Column("version", Integer, primary_key=True),
+    Column("text", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("proposed_by", String, nullable=False),
+    Column("approved_by", String, nullable=False),
+    Column("approved_at", String, nullable=False),
+)
 EVAL_SETS = {
     "evaluation": ("claims.json", "evals/decisions.json"),
     "held_out": ("evals/held_out_claims.json", "evals/held_out_decisions.json"),
@@ -191,10 +224,35 @@ def seed_settings(conn: Connection) -> None:
     )
 
 
+def seed_versions(conn: Connection) -> None:
+    """Make version 1 of the configuration and of the recipe from instructions/."""
+    first = {"proposed_by": "seed", "approved_by": "seed", "approved_at": now()}
+    conn.execute(
+        insert(config_versions).values(
+            version=1,
+            instructions=(INSTRUCTIONS / "claim.md").read_text(encoding="utf-8"),
+            model=FIRST_MODEL,
+            effort=FIRST_EFFORT,
+            reason="The claim agent as it was before versions",
+            kept=True,
+            **first,
+        )
+    )
+    conn.execute(
+        insert(recipes).values(
+            version=1,
+            text=(INSTRUCTIONS / "recipe.md").read_text(encoding="utf-8"),
+            reason="The first recipe, from the lab",
+            **first,
+        )
+    )
+
+
 def seed(conn: Connection) -> None:
-    """Copy the queue, the policies, the customers, the handlers and the settings."""
+    """Copy the queue, the records, the handlers and the settings; make the versions."""
     conn.execute(insert(handlers), load("handlers.json"))
     seed_settings(conn)
+    seed_versions(conn)
     queue = [
         {"claim_id": c["claim_id"], "position": i, "data": json.dumps(c)}
         for i, c in enumerate(load("claims.json"))

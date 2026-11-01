@@ -107,13 +107,12 @@ def test_opening_twice_does_not_reseed():
 
 
 def test_instructions():
-    texts = client.get("/api/instructions").json()
-    assert set(texts) == {"claim"}
-    assert texts["claim"] == Path("backend/instructions/claim.md").read_text(
+    instructions = client.get("/api/configuration/current").json()["instructions"]
+    assert instructions == Path("backend/instructions/claim.md").read_text(
         encoding="utf-8"
     )
-    assert "read_section" in texts["claim"]
-    assert "claims_manual" in texts["claim"]
+    assert "read_section" in instructions
+    assert "claims_manual" in instructions
 
 
 def test_list_sections():

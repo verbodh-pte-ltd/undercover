@@ -1,17 +1,21 @@
+import inspect
 import json
 import threading
 import time
 from pathlib import Path
 
 import pytest
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from langchain_core.exceptions import ModelRateLimitError
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from sqlalchemy import insert
 
 from agent import __main__ as runner
 from agent import dispatcher, main, service
+from backend import store
 from backend.main import app
 from backend.tests.signing import headers
 
@@ -82,7 +86,7 @@ def decide(claim_id, verdict="decline"):
     ]
 
 
-def new_run(kind="dispatch", eval_set=None, tiny=False, n=3):
+def new_run(kind="dispatch", eval_set=None, tiny=False, n=3, version=1):
     body = {
         "kind": kind,
         "n": n,
@@ -90,6 +94,7 @@ def new_run(kind="dispatch", eval_set=None, tiny=False, n=3):
         "tiny": tiny,
         "model": "stub",
         "effort": "none",
+        "version": version,
     }
     return client.post("/api/runs", json=body).json()["run_id"]
 
@@ -192,7 +197,8 @@ def hold(claim_id="CLM-1001", payout=1250.0, run_id=None):
 
 def test_claim_agent_has_no_pay_tool():
     assert "pay_claim" not in [t.name for t in main.CLAIM_TOOLS]
-    assert "pay_claim" not in client.get("/api/instructions").json()["claim"]
+    current = client.get("/api/configuration/current").json()
+    assert "pay_claim" not in current["instructions"]
 
 
 def test_claim_agent_pauses_before_a_payout_over_the_limit():
@@ -355,16 +361,17 @@ def test_agent_never_reads_data():
         assert "data/" not in source.read_text(encoding="utf-8")
 
 
-def test_model_name(monkeypatch):
+def test_the_model_is_the_versions_unless_model_name_is_set(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.delenv("MODEL_NAME", raising=False)
-    default = main.model()
-    assert default.model_name == "openai/gpt-6-luna"
-    assert (default.reasoning_effort, main.effort()) == ("low", "low")
+    version = {"model": "google/gemini-3.5-flash-lite", "effort": "minimal"}
+    chosen = main.model(version)
+    assert chosen.model_name == "google/gemini-3.5-flash-lite"
+    assert (chosen.reasoning_effort, main.effort(version)) == ("minimal", "minimal")
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
-    chosen = main.model()
-    assert (chosen.model_name, chosen.reasoning_effort) == ("openrouter/free", None)
-    assert main.effort() == "none"
+    free = main.model(version)
+    assert (free.model_name, free.reasoning_effort) == ("openrouter/free", None)
+    assert main.effort(version) == "default"
 
 
 def test_no_tracing_without_langfuse_keys():
@@ -511,7 +518,7 @@ def test_an_evaluation_works_its_copies_and_leaves_the_queue_alone():
 
 
 def test_the_service_resumes_a_signed_off_claim_and_pays_it(monkeypatch):
-    monkeypatch.setattr(main, "model", stub)
+    monkeypatch.setattr(main, "model", lambda version: stub())
     hold()
     client.post("/api/claims/CLM-1001/sign-off", headers=headers())
     response = TestClient(service.app).post("/claims/CLM-1001/resume")
@@ -522,7 +529,7 @@ def test_the_service_resumes_a_signed_off_claim_and_pays_it(monkeypatch):
 
 
 def test_the_service_leaves_a_claim_that_is_not_in_progress(monkeypatch):
-    monkeypatch.setattr(main, "model", stub)
+    monkeypatch.setattr(main, "model", lambda version: stub())
     hold()
     TestClient(service.app).post("/claims/CLM-1001/resume")
     assert claim("CLM-1001")["status"] == "waiting_for_sign_off"
@@ -550,7 +557,7 @@ def test_the_service_starts_a_dispatch_and_refuses_a_second(monkeypatch):
             time.sleep(0.01)
     run = client.get("/api/runs/current").json()
     assert started == [(run["run_id"], 4)]
-    assert (run["n"], run["model"]) == (4, main.model_name())
+    assert run["n"] == 4
 
 
 def test_the_service_marks_a_stopped_run_when_it_starts():
@@ -592,3 +599,187 @@ def test_claim_agents_starting_together_share_one_pool(monkeypatch):
     finally:
         main.make_pool.cache_clear()
     assert made == [4]
+
+
+# The configuration in versions
+
+
+def add_version(version, kept, instructions="Version 2: decide the claim."):
+    with store.engine().begin() as conn:
+        conn.execute(
+            insert(store.config_versions).values(
+                version=version,
+                instructions=instructions,
+                model="google/gemini-3.5-flash-lite",
+                effort="minimal",
+                reason="A test version",
+                proposed_by="improver (round 1)",
+                approved_by="HND-01",
+                approved_at=store.now(),
+                kept=kept,
+            )
+        )
+
+
+def started(monkeypatch, path, body):
+    """Start a run through the service, with a dispatcher that does nothing."""
+    monkeypatch.setattr(dispatcher, "dispatch", lambda run_id, n, llm=None: [])
+    with TestClient(service.app) as agent:
+        assert agent.post(path, json=body).status_code == 202
+        for _ in range(100):
+            if not service.running.locked():
+                break
+            time.sleep(0.01)
+    if path == "/dispatches":
+        return client.get("/api/runs/current").json()
+    return client.get("/api/evaluations").json()[0]
+
+
+def test_a_dispatch_and_an_evaluation_record_the_current_version(monkeypatch):
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    add_version(2, kept=True)
+    add_version(3, kept=False)
+    dispatch = started(monkeypatch, "/dispatches", {"n": 2})
+    evaluation = started(
+        monkeypatch, "/evaluations", {"n": 2, "eval_set": "held_out", "tiny": True}
+    )
+    for run in [dispatch, evaluation]:
+        assert (run["version"], run["model"], run["effort"]) == (
+            2,
+            "google/gemini-3.5-flash-lite",
+            "minimal",
+        )
+
+
+def test_with_model_name_set_a_run_records_it_at_the_default_effort(monkeypatch):
+    monkeypatch.setenv("MODEL_NAME", "openrouter/free")
+    run = started(monkeypatch, "/dispatches", {"n": 2})
+    assert (run["version"], run["model"], run["effort"]) == (
+        1,
+        "openrouter/free",
+        "default",
+    )
+
+
+def test_a_runs_claim_agents_work_to_its_version(monkeypatch):
+    add_version(2, kept=None, instructions="Version 2, under test.")
+    seen = []
+    real = main.claim_graph
+
+    def claim_graph(llm, instructions, checkpointer):
+        seen.append(instructions)
+        return real(llm, instructions, checkpointer)
+
+    built = []
+    stubs = iter([stub(*decide("CLM-1001")), stub(*decide("CLM-1002"))])
+
+    def model(version):
+        built.append((version["version"], version["model"]))
+        return next(stubs)
+
+    monkeypatch.setattr(main, "claim_graph", claim_graph)
+    monkeypatch.setattr(main, "model", model)
+    main.work("CLM-1001", new_run(version=2))
+    client.post("/api/runs/stop-running")
+    main.work("CLM-1002", None)
+    current = client.get("/api/configuration/current").json()["instructions"]
+    assert seen == ["Version 2, under test.", current]
+    assert built == [(2, "stub"), (1, "openai/gpt-6-luna")]
+
+
+PAYOUT_ARGS = {
+    "policy_id": "POL-2001",
+    "benefit": "trip_delay",
+    "lines": [
+        {
+            "description": "Hotel",
+            "amount": 300,
+            "quantity": 1,
+            "kind": "expense",
+            "nights": 0,
+            "hours": 0,
+        }
+    ],
+    "paid_by_others": 0,
+}
+CLAIM_AGENT_OPERATIONS = {
+    "get_current_configuration",
+    "get_run_configuration",
+    "get_claim",
+    "get_policy",
+    "get_claim_history",
+    "list_sections",
+    "read_section",
+    "work_out_payout",
+    "record_decision",
+    "pay_claim",
+    "start_claim",
+    "release_claim",
+    "add_step",
+    "record_model_call",
+    "record_work_time",
+    "list_run_claims",
+    "finish_run",
+}
+# What the scores, the handlers' decisions, the rounds and the settings go through.
+FORBIDDEN = [
+    "answer_key",
+    "evaluation_view",
+    "version_scores",
+    "settings_view",
+    "rounds",
+]
+
+
+def operation(method, path):
+    """The backend operation a request reaches."""
+    for route in app.routes:
+        if (
+            isinstance(route, APIRoute)
+            and method in route.methods
+            and route.path_regex.match(path)
+        ):
+            return route
+    raise AssertionError(f"{method} {path} reaches no operation")
+
+
+def test_the_claim_agents_client_never_reaches_the_scores_or_the_handlers_decisions(
+    monkeypatch,
+):
+    reached = []
+
+    class Recording(TestClient):
+        def request(self, method, url, *args, **kwargs):
+            reached.append(operation(method.upper(), str(url).split("?")[0]))
+            return super().request(method, url, *args, **kwargs)
+
+    monkeypatch.setattr(main, "backend", lambda: Recording(app))
+    every_tool = [
+        calls(
+            ("get_claim", {"claim_id": "CLM-1001"}),
+            ("get_policy", {"policy_id": "POL-2001"}),
+            ("get_claim_history", {"customer_id": "CUS-3001"}),
+            ("list_sections", {"document": "claims_manual"}),
+            ("read_section", {"document": "claims_manual", "number": "6"}),
+        ),
+        calls(("calculate_payout", PAYOUT_ARGS)),
+        calls(("record_decision", decision("CLM-1001", 300.0))),
+        AIMessage(content="Approved, $300.00."),
+    ]
+    main.work("CLM-1001", None, stub(*every_tool))
+    main.work("CLM-1003", None, stub(AIMessage("?"), AIMessage("?")))
+    hold("CLM-1002")
+    client.post("/api/claims/CLM-1002/sign-off", headers=headers())
+    main.run("CLM-1002", "CLM-1002-1", stub())
+    run_id = new_run("evaluation", "evaluation", tiny=True, n=1)
+    copies = client.get(f"/api/runs/{run_id}/claims").json()
+    dispatcher.dispatch(run_id, 1, stub(*[m for c in copies for m in decide(c)]))
+
+    assert {route.operation_id for route in reached} == CLAIM_AGENT_OPERATIONS
+    for route in reached:
+        source = inspect.getsource(route.endpoint)
+        for forbidden in FORBIDDEN:
+            assert forbidden not in source, (route.operation_id, forbidden)
+    agent_source = Path("agent/main.py").read_text(encoding="utf-8")
+    for path in ["/api/evaluations", "/api/settings", "/api/configuration/v"]:
+        assert path not in agent_source

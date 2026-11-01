@@ -19,9 +19,13 @@ test("the queue lists every claim and opens one", async ({ page }) => {
   await expect(page.locator("tbody tr")).toHaveCount(25);
 });
 
-test("the claim agent's instructions are shown read only", async ({ page }) => {
+test("the Configuration page shows version 1, read only", async ({ page }) => {
   await page.goto("/#/instructions");
+  await expect(
+    page.getByRole("heading", { name: "Current version: version 1" }),
+  ).toBeVisible();
   await expect(page.getByText(/You decide one travel insurance/)).toBeVisible();
+  await expect(page.getByText("Not scored yet")).toBeVisible();
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });
 

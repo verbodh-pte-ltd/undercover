@@ -1,10 +1,10 @@
 """The UnderCover backend."""
 
+import difflib
 import json
 import os
 from collections.abc import Iterator
 from datetime import datetime
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import jwt
@@ -26,6 +26,7 @@ from backend import agent_service, auth, payout, store
 from backend.store import (
     answer_key,
     claims,
+    config_versions,
     customers,
     handlers,
     held_out_claims,
@@ -41,7 +42,6 @@ from backend.store import (
 
 app = FastAPI(title="UnderCover")
 
-INSTRUCTIONS = Path(__file__).parent / "instructions"
 DOCUMENTS = {"policy_wording": "policy_wording.md", "claims_manual": "claims_manual.md"}
 WRONGFUL_DECLINE = 1500
 NEEDLESS_REFERRAL = 50
@@ -84,6 +84,7 @@ class RunCreate(BaseModel):
     tiny: bool
     model: str
     effort: str
+    version: int
 
 
 class ModelCall(BaseModel):
@@ -131,6 +132,8 @@ class Settings(BaseModel):
 
 
 MAX_ATTEMPTS = 2
+# The held-out measures a version's scores average.
+SCORED = ["accuracy", "cost_per_claim", "seconds_per_claim"]
 
 
 def get_db() -> Iterator[Connection]:
@@ -313,6 +316,7 @@ def run_view(db: Connection, row: RowMapping) -> dict[str, Any]:
     return {
         **{k: row[k] for k in ["run_id", "kind", "n", "eval_set", "tiny", "model"]},
         **{k: row[k] for k in ["effort", "status", "started_at", "finished_at"]},
+        "version": row["version"],
         "claims": worked,
         "cost": sum(c["cost"] for c in worked),
         "seconds": sum(c["seconds"] for c in worked),
@@ -441,8 +445,49 @@ def evaluation_view(db: Connection, row: RowMapping) -> dict[str, Any]:
         "seconds_per_claim": sum(r["seconds"] for r in rows) / count,
         "run_seconds": run_seconds(row),
     }
-    keys = ["run_id", "eval_set", "tiny", "n", "model", "effort", "status"]
+    keys = ["run_id", "eval_set", "tiny", "n", "model", "effort", "status", "version"]
     return {**{k: row[k] for k in keys + ["started_at"]}, **measures, "claims": rows}
+
+
+def current_version(db: Connection) -> RowMapping:
+    """The current version of the claim agent's configuration: the newest one kept."""
+    query = select(config_versions).where(config_versions.c.kept)
+    query = query.order_by(config_versions.c.version.desc()).limit(1)
+    return db.execute(query).mappings().one()
+
+
+def configuration(row: RowMapping, model: str, effort: str) -> dict[str, Any]:
+    """What a claim agent works to, with no scores."""
+    return {
+        "version": row["version"],
+        "instructions": row["instructions"],
+        "model": model,
+        "effort": effort,
+    }
+
+
+def changed_lines(old: str, new: str) -> list[str]:
+    """The lines that differ between two texts, as the lab shows them."""
+    lines = difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0)
+    # The first two lines name the files; each "@@" line says where a change is.
+    return [line for line in list(lines)[2:] if not line.startswith("@@")]
+
+
+def version_scores(db: Connection, version: int) -> dict[str, float] | None:
+    """A version's held-out scores: the averages of the whole-set runs rounds made."""
+    query = select(runs).where(
+        runs.c.kind == "evaluation",
+        runs.c.eval_set == "held_out",
+        runs.c.tiny.is_(False),
+        runs.c.status == "finished",
+        runs.c.version == version,
+        runs.c.round_id.is_not(None),
+    )
+    views = [evaluation_view(db, r) for r in db.execute(query).mappings()]
+    if not views:
+        return None
+    averages = {m: sum(v[m] for v in views) / len(views) for m in SCORED}
+    return {**averages, "runs": len(views)}
 
 
 def set_claim(db: Connection, claim_id: str, **values: Any) -> None:
@@ -571,13 +616,42 @@ def work_out_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
     )
 
 
-@app.get("/api/instructions", operation_id="get_instructions")
-def get_instructions() -> dict[str, str]:
-    """Get the claim agent's instructions."""
-    return {
-        name: (INSTRUCTIONS / f"{name}.md").read_text(encoding="utf-8")
-        for name in ["claim"]
-    }
+@app.get("/api/configuration/current", operation_id="get_current_configuration")
+def get_current_configuration(db: Db) -> dict[str, Any]:
+    """Get the current version of the claim agent's instructions, model and effort."""
+    row = current_version(db)
+    return configuration(row, row["model"], row["effort"])
+
+
+@app.get("/api/configuration/versions", operation_id="list_versions")
+def list_versions(db: Db) -> list[dict[str, Any]]:
+    """List every configuration version, newest first, with its scores and changes."""
+    query = select(config_versions).order_by(config_versions.c.version)
+    rows = db.execute(query).mappings().all()
+    current = current_version(db)["version"]
+    found = []
+    for before, row in zip([None, *rows], rows, strict=False):
+        found.append(
+            {
+                **row,
+                "current": row["version"] == current,
+                "held_out": version_scores(db, row["version"]),
+                "before": before and {k: before[k] for k in ["model", "effort"]},
+                "changed_lines": before
+                and changed_lines(before["instructions"], row["instructions"]),
+            }
+        )
+    return found[::-1]
+
+
+@app.get("/api/runs/{run_id}/configuration", operation_id="get_run_configuration")
+def get_run_configuration(run_id: int, db: Db) -> dict[str, Any]:
+    """Get the instructions, model and effort a run's claim agents work to."""
+    run = run_row(db, run_id)
+    query = select(config_versions).where(config_versions.c.version == run["version"])
+    return configuration(
+        db.execute(query).mappings().one(), run["model"], run["effort"]
+    )
 
 
 @app.get("/api/handlers", operation_id="list_handlers")
@@ -646,6 +720,9 @@ def create_run(create: RunCreate, db: Db) -> dict[str, Any]:
         raise HTTPException(409, "A dispatch or evaluation is already running")
     if (create.kind == "evaluation") != (create.eval_set is not None):
         raise HTTPException(422, "Only an evaluation has a set")
+    known = select(config_versions.c.version)
+    if db.scalar(known.where(config_versions.c.version == create.version)) is None:
+        raise HTTPException(404, f"Version {create.version} not found")
     new_run = insert(runs).values(**create.model_dump(), started_at=store.now())
     run_id = db.execute(new_run.returning(runs.c.run_id)).scalar_one()
     if create.eval_set is not None:

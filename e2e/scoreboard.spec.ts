@@ -19,6 +19,7 @@ test("the scoreboard shows an evaluation played out through the API", async ({
       tiny: true,
       model: "stand-in",
       effort: "none",
+      version: 1,
     },
   });
   const { run_id } = (await created.json()) as { run_id: number };

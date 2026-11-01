@@ -50,9 +50,16 @@ def carry_on_claim(claim_id: str) -> None:
 
 
 def work_run(body: dict[str, Any]) -> None:
-    """Create the run through the backend, then work it; runs in the background."""
+    """Create the run on the current version, then work it; runs in the background."""
     try:
         with main.backend() as client:
+            version = client.get("/api/configuration/current").json()
+            body = {
+                **body,
+                "version": version["version"],
+                "model": main.model_name(version),
+                "effort": main.effort(version),
+            }
             run = client.post("/api/runs", json=body).json()
         dispatcher.dispatch(run["run_id"], body["n"])
     finally:
@@ -63,7 +70,6 @@ def start(body: dict[str, Any]) -> dict[str, str]:
     """Start a run in the background, or refuse while one is going."""
     if not running.acquire(blocking=False):
         raise HTTPException(409, "A dispatch or evaluation is already running")
-    body = {**body, "model": main.model_name(), "effort": main.effort()}
     threading.Thread(target=work_run, args=(body,), daemon=True).start()
     return {"status": "started"}
 

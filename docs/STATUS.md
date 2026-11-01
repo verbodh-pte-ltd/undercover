@@ -3,7 +3,8 @@
 The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`), durable state
 (`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
 (`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
-from `docs/IMPROVE.md`), phase 1: handlers sign in, and phase 2: settings and the Settings page. We use Postgres in Docker on this machine, not
+from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, and phase 3: the
+configuration in versions. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -33,8 +34,8 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   `UNDERCOVER_DB`), as the tests do. `backend/store.py` seeds the database from `data/` on first start:
   the 25 claims, the policies, the customers, the held-out claims, the handlers from
   `data/handlers.json` (with their emails, and whether each can sign off over the limit; only Dana
-  Whitfield can), and the handlers' decisions on both labelled sets in `answer_key`, which no claim
-  operation reads. `npm run seed` rebuilds every table,
+  Whitfield can), the handlers' decisions on both labelled sets in `answer_key`, which no claim
+  operation reads, and version 1 of the claim agent's configuration and of the improver's recipe. `npm run seed` rebuilds every table,
   empties the agent's saved threads and seeds again, so it empties the scoreboard too.
   - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
     wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
@@ -43,7 +44,9 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   - Runs are dispatches or evaluations: `create_run`, `list_run_claims` (claims in progress first, then
     waiting claims oldest submitted first, or an evaluation's copies), `finish_run`,
     `stop_running_runs` and `get_current_run` (the latest dispatch, with its claims, summary, model cost
-    and time). Only one runs at a time.
+    and time). Only one runs at a time. Each run records the configuration version it works to
+    (`version`, 404 for one that doesn't exist), and `get_run_configuration` gives a run's
+    instructions, model and effort.
   - Sign-in: `backend/auth.py` checks a Supabase access token against the public keys at
     `{VITE_SUPABASE_URL}/auth/v1/.well-known/jwks.json` with PyJWT's `PyJWKClient`, audience
     `authenticated`, and the backend finds the handler by the token's email. `start_dispatch`,
@@ -72,10 +75,21 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     off over the limit), puts the claim back `in_progress`, and asks the agent's
     service to carry on and pay it.
   - The same decision or payment sent again counts as done; a different decision is still refused.
-- `backend/instructions/claim.md`: the claim agent's instructions, served by `GET /api/instructions`.
+  - The claim agent's configuration (its instructions, model and reasoning effort) is kept in
+    versions in `config_versions`, each with its reason, who proposed and approved it and when, and
+    whether it was kept (empty while under test). The current version is the newest one kept.
+    `GET /api/configuration/current` (`get_current_configuration`) gives it with no scores.
+    `GET /api/configuration/versions` (`list_versions`) lists every version newest first, with its
+    held-out scores (the averages of the whole held-out evaluations rounds ran on it; none until the
+    improver runs rounds) and, from `difflib`, the lines it changed from the version before. The
+    improver's recipe is kept in versions in `recipes`.
+- `backend/instructions/claim.md` and `backend/instructions/recipe.md`: version 1 of the claim agent's
+  instructions (on `openai/gpt-6-luna` at low effort) and of the improver's recipe (the lab's first),
+  which seeding copies into the database.
 - `agent/`: the UnderCover Agent, in five parts (`docs/CODE_STANDARDS.md`).
   - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`) with seven tools and no pay
-    or sign-off tool, on `openai/gpt-6-luna` with low reasoning effort, or `MODEL_NAME` with none. At
+    or sign-off tool. It works to its run's configuration version (the current one for a claim in no
+    run): its instructions, model and reasoning effort, or `MODEL_NAME` at the model's default effort. At
     most 30 model calls a claim. Each model call's tokens and cost are recorded with its run.
   - Progress is saved after every step by `PostgresSaver`, a saver of its own for each claim run on the
     process's shared pool of 4, or in memory without `DATABASE_URL`.
@@ -86,8 +100,9 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   - `agent/dispatcher.py` lists a run's claims and fans out with `Send`, up to N at once. A rate limit or
     timeout waits and carries the claim on, up to 3 tries, then leaves it in progress. It skips a claim
     the service is already working.
-  - The agent's service (`agent/service.py`, port 8002) starts dispatches and evaluations (refusing a
-    second while one runs), resumes signed-off claims, and marks any run still running as stopped when
+  - The agent's service (`agent/service.py`, port 8002) starts dispatches and evaluations on the
+    current version, recording its model and effort (`default` with `MODEL_NAME`), refusing a
+    second while one runs, resumes signed-off claims, and marks any run still running as stopped when
     it starts.
   - Each claim is traced in Langfuse in a session named after its thread, tagged `run-<run_id>`.
   - `uv run -m agent CLM-1001` works named claims with no run.
@@ -103,7 +118,10 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   - Each claim (`#/claims/CLM-1001`) shows its decision, reasons, the agent's steps, the sections it
     read, the policy and earlier claims. A claim waiting for sign-off has a "Sign off" button, except on
     an evaluation's copy; a handler who can't sign off over the limit sees a note saying so instead.
-  - The instructions page (`#/instructions`) shows the claim agent's instructions, read only.
+  - The Configuration page (`#/configuration`; `#/instructions` goes there too) shows the current
+    version with its instructions, and every version with its status, reason, who proposed and
+    approved it, and its held-out scores. Each version after the first opens what it changed from
+    the one before: the model and effort before and after, and the changed lines in color.
   - The Settings page (`#/settings`) shows every setting with who last changed it, and the models
     allowed with their reasoning efforts and prices. Dana can change the settings, after a
     confirmation in the dashboard's own dialog; Marcus and Priya see them read only, with a note
@@ -148,5 +166,6 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The rest of `docs/PLAN_IMPROVE.md`: the configuration's versions, the judge and the improver.
-  Nothing reads the improvement settings yet; the improver will.
+- The rest of `docs/PLAN_IMPROVE.md`: the judge, the rounds and the improver. Nothing reads the
+  improvement settings or the recipe yet, and nothing makes a version after the first; the
+  improver will.

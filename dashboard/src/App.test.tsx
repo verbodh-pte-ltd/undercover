@@ -183,16 +183,6 @@ it("shows the decision, its reasons and the steps", async () => {
   expect(screen.getByText("Policy wording, section 3")).toBeDefined();
 });
 
-it("shows the claim agent's instructions, read only", async () => {
-  fakeBackend({ "/api/instructions": { claim: "You decide one claim." } });
-  window.location.hash = "#/instructions";
-  render(<App />);
-  expect(await screen.findByText("You decide one claim.")).toBeDefined();
-  expect(screen.getByText("Working a claim")).toBeDefined();
-  expect(screen.queryByText("Running the queue")).toBeNull();
-  expect(screen.queryByRole("textbox")).toBeNull();
-});
-
 it("follows the hash from the queue to a claim", async () => {
   fakeBackend({
     "/api/claims": [summary],

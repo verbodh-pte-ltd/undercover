@@ -26,6 +26,7 @@ def new_run(kind="dispatch", eval_set=None, tiny=False, n=3):
         "tiny": tiny,
         "model": "openai/gpt-6-luna",
         "effort": "low",
+        "version": 1,
     }
     return client.post("/api/runs", json=body)
 
@@ -56,12 +57,14 @@ def test_no_run_yet():
 
 def test_create_a_dispatch():
     run = new_run().json()
-    assert {k: run[k] for k in ["kind", "n", "eval_set", "model", "effort"]} == {
+    keys = ["kind", "n", "eval_set", "model", "effort", "version"]
+    assert {k: run[k] for k in keys} == {
         "kind": "dispatch",
         "n": 3,
         "eval_set": None,
         "model": "openai/gpt-6-luna",
         "effort": "low",
+        "version": 1,
     }
     assert (run["status"], run["claims"], run["finished_at"]) == ("running", [], None)
     assert client.get("/api/runs/current").json()["run_id"] == run["run_id"]

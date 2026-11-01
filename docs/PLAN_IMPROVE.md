@@ -113,22 +113,22 @@ Settings live in the database, and every part of the product reads them from the
 
 The claim agent runs on a version of its configuration, and the Configuration page replaces Instructions.
 
-- [ ] Seeding makes version 1 from `backend/instructions/claim.md` with `openai/gpt-6-luna` at `low`, and
+- [x] Seeding makes version 1 from `backend/instructions/claim.md` with `openai/gpt-6-luna` at `low`, and
       recipe version 1 from `backend/instructions/recipe.md`. `npm run seed` takes both back to version 1
       and empties the rounds.
-- [ ] `GET /api/configuration/current` (`get_current_configuration`) gives the claim agent its version's
+- [x] `GET /api/configuration/current` (`get_current_configuration`) gives the claim agent its version's
       instructions, model and effort, with no scores. The service builds each run's claim agents from the
       run's version and records it on the run.
-- [ ] A dispatch and an evaluation each record their version. A test for each.
-- [ ] `GET /api/configuration/versions` (`list_versions`) lists every version with what changed, the
+- [x] A dispatch and an evaluation each record their version. A test for each.
+- [x] `GET /api/configuration/versions` (`list_versions`) lists every version with what changed, the
       reason, who proposed and approved it and when, its held-out scores, and the diff from the version
       before, worked out with `difflib`.
-- [ ] Without `MODEL_NAME`, the effort is recorded as the version's; with it, as `default`.
-- [ ] A test: nothing the claim agent's client calls reaches `answer_key`, the scores, the rounds or the
+- [x] Without `MODEL_NAME`, the effort is recorded as the version's; with it, as `default`.
+- [x] A test: nothing the claim agent's client calls reaches `answer_key`, the scores, the rounds or the
       settings.
-- [ ] The Configuration page (`#/configuration`) shows the current version and every version with its
+- [x] The Configuration page (`#/configuration`) shows the current version and every version with its
       held-out scores, and opens a diff of any version against the one before.
-- [ ] `npm run check` is green.
+- [x] `npm run check` is green.
 
 ## Phase 4: The judge
 

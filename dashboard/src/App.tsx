@@ -2,7 +2,7 @@ import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 import { getSignedInHandler, type Handler } from "./api";
 import { ClaimView } from "./ClaimView";
-import { Instructions } from "./Instructions";
+import { Configuration } from "./Configuration";
 import { Queue } from "./Queue";
 import { EvaluationView, Scoreboard } from "./Scoreboard";
 import { Settings } from "./Settings";
@@ -45,7 +45,9 @@ function Page({ hash, handler }: Readonly<{ hash: string; handler: Handler }>) {
   if (evaluation)
     return <EvaluationView key={evaluation[1]} runId={evaluation[1]} />;
   if (hash === "#/scoreboard") return <Scoreboard />;
-  if (hash === "#/instructions") return <Instructions />;
+  // The Configuration page took the place of the Instructions page.
+  if (hash === "#/configuration" || hash === "#/instructions")
+    return <Configuration />;
   if (hash === "#/settings") return <Settings handler={handler} />;
   return <Queue />;
 }
@@ -71,7 +73,7 @@ function SignedIn() {
         </a>
         <a href="#/">Queue</a>
         <a href="#/scoreboard">Scoreboard</a>
-        <a href="#/instructions">Instructions</a>
+        <a href="#/configuration">Configuration</a>
         <a href="#/settings">Settings</a>
         <span className="who">
           {handler && <span>{handler.name}</span>}
