@@ -108,6 +108,7 @@ Done:
 
 - `week1/week1day2.ipynb`, `week2/week2day1.ipynb`, `week2/week2day2.ipynb`: truststore.
 - `week2/week2day3.ipynb`, `week2/week2day4.ipynb`: truststore and local Postgres.
+- `week2/week2day5.ipynb`, `week2/week2day5free.ipynb`: truststore and local Supabase Auth (section 4).
 
 Truststore only (no database):
 
@@ -125,7 +126,6 @@ Truststore and local Postgres:
 
 Needs a decision first (section 4):
 
-- `week2/week2day5.ipynb`, `week2/week2day5free.ipynb`
 - `week3/week3day1free.ipynb`, `week3/week3day2_lab2.ipynb`, `week3/week3day2_lab2free.ipynb`,
   `week3/week3day3.ipynb`, `week3/week3day4_lab1.ipynb`, `week3/week3day4_lab2.ipynb`,
   `week3/week3day4_lab2free.ipynb`, `week3/week3day5_lab1.ipynb`, `week3/week3day5_lab1free.ipynb`
@@ -136,9 +136,14 @@ Local Postgres replaces Supabase's database, but not the rest of Supabase, and n
 can reach. Decide these before changing those labs.
 
 - **Week 2 Day 5 uses Supabase Auth** for the handlers' sign-in (`VITE_SUPABASE_URL`, the publishable key
-  and sign-in tokens). Local Postgres has no sign-in service. The choices: keep a free Supabase project
-  for sign-in only while the data stays local; or run Supabase's own stack locally with the Supabase CLI
-  (`supabase start`), which brings Auth as well as Postgres.
+  and sign-in tokens). Local Postgres has no sign-in service. **Decided (2026-11-01): Supabase's own stack
+  on this machine**, with no Supabase account. `supabase/config.toml` (from `npx supabase@2.122.0 init`,
+  sign-ups off) runs it; `npx supabase@2.122.0 start --workdir .` starts it on `127.0.0.1:54321`, with
+  Studio on `:54323` and its own Postgres on `:54322` for the sign-in users only. The data stays in
+  `undercover-postgres`. The lab's start cell writes `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`
+  and `HANDLER_PASSWORD` to `.env`, and a second cell adds the three handlers through the Auth admin API.
+  Checked: sign-ups refused, the three handlers sign in, and tokens are ES256 with the key served at
+  `/auth/v1/.well-known/jwks.json`.
 - **Week 3 deploys to AWS** (Lambda and AgentCore Runtime). Code there can't reach `127.0.0.1` on this
   laptop. These labs also turn `DATABASE_URL` into Supabase's transaction pooler with
   `.replace(":5432/", ":6543/")`, which does nothing to a local address. The choices: use a hosted Postgres
