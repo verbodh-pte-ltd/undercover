@@ -218,18 +218,18 @@ A handler runs rounds from the dashboard, and every page meets point 8 of the br
 
 With the real model, after one `npm run seed`, with `npm run dev` and local Supabase running.
 
-- [ ] Signed in as Dana, two rounds from the Improvement page: the first proposal rejected with a reason,
+- [x] Signed in as Dana, two rounds from the Improvement page: the first proposal rejected with a reason,
       then the rest approved. Each round shows as it happens, then its scores before and after, verdict and
       cost.
-- [ ] The Configuration page shows the versions and their diffs, and through Langfuse's API each round's
+- [x] The Configuration page shows the versions and their diffs, and through Langfuse's API each round's
       improver traces are found in one session.
-- [ ] Report how far version 1's two held-out runs differed on each measure, beside the noise and tolerance.
-- [ ] A dispatch at N=25 on the current version. As Marcus, a payout waiting for sign-off can't be signed off
+- [x] Report how far version 1's two held-out runs differed on each measure, beside the noise and tolerance.
+- [x] A dispatch at N=25 on the current version. As Marcus, a payout waiting for sign-off can't be signed off
       and the settings can't be changed; as Dana, the same payout is signed off and paid.
 - [ ] Screenshots of every page in light and dark mode; a fresh subagent reviews them once as a senior
       product designer against `docs/BRAND.md` and point 8, and what it finds is fixed.
-- [ ] What the live checks spent, under $1 on GPT-6 Luna.
-- [ ] `docs/SPEC.md`, `docs/TECH_STACK.md`, `docs/PROCESS.md`, `docs/CODE_STANDARDS.md` (rules 7 and 13 for the
+- [x] What the live checks spent, under $1 on GPT-6 Luna.
+- [x] `docs/SPEC.md`, `docs/TECH_STACK.md`, `docs/PROCESS.md`, `docs/CODE_STANDARDS.md` (rules 7 and 13 for the
       improver, its client and the dashboard's Supabase client), `docs/STATUS.md` and `data/README.md`
       describe the product as it now is.
-- [ ] `npm run check` is green with `.env` moved away.
+- [x] `npm run check` is green with `.env` moved away.

@@ -6,11 +6,11 @@ The data behind UnderCover Travel Insurance, a fictional insurer. Everything her
 
 - `company.json`: company settings, including the $1,000 payout approval limit, which seeds the approval limit setting. After seeding, the limit is changed on the dashboard's Settings page, not here.
 - `improvement.json`: the starting values of the improver's settings, from the Week 2 Day 5 lab: the business objectives (floors on held-out accuracy and the judge's grade, 0 to 3), the noise and the tolerance on accuracy, the grade, cost per claim and time per claim (accuracy and the grade as differences, cost and time as fractions of the old value), the spending limit for each round in dollars, and how many claim agents work at once in its evaluations.
-- `models.json`: the models the claim agent may use, with their reasoning efforts and prices in dollars per million input and output tokens. It can't be changed on the dashboard.
+- `models.json`: the models the claim agent may use, with their reasoning efforts and prices in dollars per million input and output tokens. It can't be changed on the dashboard. With `MODEL_NAME` set, that model alone is allowed instead.
 - `plans.json`: the three plans (Economy, Premium, First) with their limits, waiting periods and deductibles, and the three add-ons.
 - `policies.json`: one policy per trip, with the plan, the add-ons, the purchase date, the trip and the travelers.
 - `customers.json`: contact details and claim history, with the date and a one line summary of each earlier claim. This is personal data.
-- `handlers.json`: the claims handlers.
+- `handlers.json`: the claims handlers, with the email each signs in with and whether each can sign off payouts over the approval limit. Only Dana Whitfield can; only she may also run the improver's rounds and change the settings.
 - `claims.json`: the claims queue, twenty-five claims. Each has the customer's story, the items claimed and the supporting documents as text.
 
 ## The documents
@@ -20,7 +20,7 @@ The data behind UnderCover Travel Insurance, a fictional insurer. Everything her
 
 ## The evaluation set
 
-- `evals/decisions.json`: the handlers' decisions on the twenty-five claims in the queue: approve, decline or refer, the payout, the calculation, the reason and what each claim tests. An agent deciding claims must never be shown this file.
+- `evals/decisions.json`: the handlers' decisions on the twenty-five claims in the queue: approve, decline or refer, the payout, the calculation, the reason and what each claim tests. An agent deciding claims must never be shown this file. Seeding copies each decision, reason and reference into the database, where the judge reads them and the improver reads the evaluation set's, never the held-out set's.
 - `evals/held_out_claims.json` and `evals/held_out_decisions.json`: twenty-five more claims with their decisions, kept out of the queue for checking that an improvement generalizes. They have the same blend as the queue. Keep them out of sight while you write a prompt or a rule, and score them afterwards.
 
 The queue is the development set and the held-out claims are the test set. Nothing is trained on either.

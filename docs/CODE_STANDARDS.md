@@ -11,7 +11,9 @@
 
 The agent has six parts:
 
-7. **Tools** (`agent/main.py`): the claim agent's tools, which reach the backend only through its API.
+7. **Tools** (`agent/main.py`): the claim agent's tools, which reach the backend only through its API,
+   with `backend()` in `agent/main.py` as their client. That client has no call to the scores, the
+   handlers' decisions, the rounds or the settings, and a test checks it.
 8. **The claim graph** (`claim_graph` in `agent/main.py`): the model, its tools, the sign-off and the
    payment, saved after every step.
 9. **The harness** (`run`, `carry_on` and `work` in `agent/main.py`): starts, carries on and resumes a
@@ -22,4 +24,12 @@ The agent has six parts:
 11. **The service** (`agent/service.py`): starts dispatches, evaluations and rounds, carries a round
     on from a handler's answer, and resumes signed-off claims, for the backend.
 12. **The improver** (`agent/improver.py`): follows its recipe to propose new versions and recipes,
-    pausing for a handler. It reaches the backend only through `agent/improver_api.py`.
+    pausing for a handler. Its instructions are goals that wrap the recipe, which is data it follows.
+13. **The improver's client** (`agent/improver_api.py`): the only way to the round, the improver's
+    view of the results and its proposals. The claim agent never imports it.
+
+## The dashboard
+
+14. **The Supabase client** (`dashboard/src/supabase.ts`): the dashboard's one Supabase client, used
+    only for Supabase Auth: signing in and out and the session's access token. The dashboard sends
+    that token with each action to the backend, and never reads data from Supabase.

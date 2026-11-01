@@ -1,14 +1,14 @@
 # Process
 
-`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend, the dashboard and the agent's service, with the settings in `.env`. `npm run seed` reseeds the database. On this machine the database is the `undercover-postgres` Docker container, which must be running.
+`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend, the dashboard and the agent's service, with the settings in `.env`. `npm run seed` reseeds the database. On this machine the database is the `undercover-postgres` Docker container, which must be running, and sign-in needs Supabase's local stack (`npx supabase start`). Sign in as a handler from `data/handlers.json` with `HANDLER_PASSWORD` from `.env`.
 
 `npm run check` runs every check:
 
 - Python: ruff (lint and format), pyright, and pytest with 80% coverage
 - TypeScript: ESLint, Prettier, tsc, and vitest with 80% coverage
-- Playwright end-to-end tests, on their own SQLite database, with a stand-in for the agent's service on port 8003
+- Playwright end-to-end tests, on their own SQLite database, with stand-ins for the agent's service on port 8003, Supabase Auth on port 8004 and the judge on port 8005. Every spec signs in first
 
-The checks never read `.env`, so they need no database, Langfuse or OpenRouter.
+The checks never read `.env`, so they need no database, Langfuse, OpenRouter or Supabase. Tests never call a model, the judge or Supabase Auth.
 
 The pre-commit hook runs the format, lint, type and unit test checks on every commit.
 
@@ -17,7 +17,7 @@ The pre-commit hook runs the format, lint, type and unit test checks on every co
 When asked to plan, as in "Please plan the pilot", write the plan to `docs/PLAN.md` and write no code.
 
 - Split the work into phases, usually 5 or 6, each building on the last.
-- Give each phase detailed success criteria that you can verify yourself: tests that pass, commands and their output, API calls and their responses, and pages you check in the browser with the Playwright MCP server. Write each one as a checkbox.
+- Give each phase detailed success criteria that you can verify yourself: tests that pass, commands and their output, API calls and their responses, and pages you check in the browser, signed in as a handler, with the Playwright MCP server or a Playwright script. Write each one as a checkbox.
 - Then stop and wait until you are asked to implement the plan.
 
 ## Implementing
@@ -46,6 +46,10 @@ When the last phase is done, run `npm run check` and report the results.
 ## Live runs with the real model
 
 Reseed once with `npm run seed`, then use the runs the brief asks for: dispatches started from the queue
-page, and evaluations from the Scoreboard page, on the evaluation set or the held-out set's five tiny
-claims. These replace the old cap of five claims on a run. A live run calls GPT-6 Luna through OpenRouter
-and costs a fraction of a cent per claim.
+page, evaluations from the Scoreboard page, on the evaluation set or the held-out set's five tiny
+claims, and improvement rounds from the Improvement page. These replace the old cap of five claims on a
+run. A live run calls GPT-6 Luna through OpenRouter and costs a fraction of a cent per claim, and the
+judge a little more. A round runs up to six whole-set evaluations and stops starting claims at its
+spending limit, a setting that starts at $0.50; check it before each round. The credit limit on the
+OpenRouter key covers everything as well. On free models (`MODEL_NAME` set), the judge isn't called and
+rounds aren't run, since they need more requests than the free models allow in a day.

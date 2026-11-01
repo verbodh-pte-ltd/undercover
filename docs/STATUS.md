@@ -5,7 +5,8 @@ The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`),
 (`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
 from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, phase 3: the
 configuration in versions, phase 4: the judge, phase 5: rounds in the backend, phase 6: the
-improver, and phase 7: the Improvement page and the look of the dashboard. We use Postgres in Docker on this machine, not
+improver, phase 7: the Improvement page and the look of the dashboard, and phase 8: the live runs and
+the documents (the designer's review of the screenshots is still to come). We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -26,6 +27,36 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   claims at N=5: 100% right, 80% straight through, 23 seconds. The queue's counts were the same before
   and after.
 - Through Langfuse's API, the 16 claims of the N=25 dispatch are found together by its tag, `run-2`.
+
+In the improver build's live runs on local Postgres with GPT-6 Luna and local Supabase Auth, after one
+reseed, all driven through the dashboard in headless Chromium:
+
+- Round 1, signed in as Dana Whitfield: the first evaluations (1, 2 and 3 of 3) took 73 seconds. The
+  improver's first proposal (a Trip Delay evidence rule and a broad unattended-property exclusion)
+  was rejected as too broad; it came back within 14 seconds with the exclusion tied to the wording's
+  own conditions, which was approved. Version 2 was evaluated (1, 2 and 3 of 3) and kept: held-out
+  accuracy 78% to 94%, grade 1.28 to 1.77, cost per claim $0.00123 to $0.00130 (+6%, within the 100%
+  tolerance), time per claim 15.0 to 14.9 seconds. Its recipe was approved. The round cost $0.199 of
+  its $0.50 limit.
+- Round 2: no first evaluations, since version 2 had its three. The improver proposed a rule for
+  repeat claims in the customer's history (version 3), approved; it was rolled back because no
+  measure improved by more than its noise: accuracy 94% to 94%, grade 1.77 to 1.75, cost -2.5%, time
+  +16% (within the 25% tolerance). Its recipe was approved. The round cost $0.102.
+- Version 1's two held-out runs differed by 0.04 in accuracy (76% and 80%; noise 0.10, tolerance
+  0.10), 0.098 in grade (1.23 and 1.33; noise 0.15, tolerance 0.15), 0.6% in cost per claim (noise
+  15%, tolerance 100%) and 7.1% in time per claim (15.6 and 14.5 seconds; noise 15%, tolerance 25%):
+  all within the noise. On the evaluation set version 1 scored 88%, version 2 80% and version 3 96%.
+- Through Langfuse's API, round 1's improver work is 4 traces in the session `Round 1` and round 2's
+  3 traces in `Round 2`, one for each stretch of its work.
+- A dispatch at N=25 on version 2: 14 approved, 4 declined, 4 referred and 3 payouts waiting for
+  sign-off (CLM-1003 $3,750, CLM-1008 $2,240, CLM-1011 $1,150), $0.032 of model calls, 27 seconds.
+  Signed in as Marcus Oyelaran, CLM-1003 shows a note in place of the "Sign off" button and the
+  Settings page is read only (13 fields disabled, no save), and with his own token the backend answers
+  403 to the sign-off and to a settings change. Signed in as Dana, the same claim was signed off and
+  paid $3,750 within 5 seconds.
+- What the live checks spent, from the costs recorded in the database: $0.289 for the rounds' claim
+  agents (9 evaluations, 225 claims), $0.032 for the dispatch, $0.005 for the improver (11 calls) and
+  $0.007 for the judge (225 grades), $0.333 in all.
 
 ## The parts
 
@@ -211,8 +242,7 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   judge's endpoint on :8005 (`e2e/judge-stand-in.mjs`) gives every claim a B at 2.2.
   `e2e/rounds.spec.ts` starts a round on the dashboard, records a proposal through the backend's
   routes as the agent's service would, approves it on the page, checks the approval reached the
-  stand-in with the handler, records it, and stops the round. It runs after `e2e/queue.spec.ts`,
-  which expects version 1 alone.
+  stand-in with the handler, records it, and stops the round. The specs pass in any order.
 
 ## Run it
 
@@ -247,5 +277,5 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The rest of `docs/PLAN_IMPROVE.md`: the live rounds with the real model and the documents
-  (phase 8).
+- The designer's review of the screenshots of every page (phase 8 of `docs/PLAN_IMPROVE.md`), and
+  the fixes it asks for.
