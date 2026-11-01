@@ -202,7 +202,8 @@ def make_improver(round_id: int, recipe: str) -> CompiledStateGraph:
     )
     middleware: list[AgentMiddleware[Any, Any, Any]] = [
         RoundGuard(round_id),
-        ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS),
+        # Per round, not per resume: each round has a thread of its own
+        ModelCallLimitMiddleware(thread_limit=MAX_MODEL_CALLS),
         approval,
     ]
     return create_agent(
