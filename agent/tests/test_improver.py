@@ -2,6 +2,7 @@ import json
 import time
 import uuid
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
@@ -403,3 +404,14 @@ def test_the_improver_is_luna_at_medium_unless_model_name_is_set(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
     free = improver.improver_model()
     assert (free.model_name, free.reasoning_effort) == ("openrouter/free", None)
+
+
+def test_an_answer_lets_go_of_the_lock_when_the_backend_cant_be_reached(monkeypatch):
+    def unreachable(round_id, body):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(improver_api, "record_decision", unreachable)
+    answer = {"decision": "approve", "reason": "", "handler_id": "HND-01"}
+    with TestClient(service.app, raise_server_exceptions=False) as agent:
+        assert agent.post("/rounds/1/decision", json=answer).status_code == 500
+    assert not service.running.locked()

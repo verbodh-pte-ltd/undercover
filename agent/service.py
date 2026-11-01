@@ -142,7 +142,12 @@ def start_round(start_: RoundStart) -> dict[str, str]:
 def answer_proposal(round_id: int, answer: RoundAnswer) -> dict[str, str]:
     """Record a handler's answer on a round's proposal, then carry the round on."""
     take(f"Round {round_id}")
-    recorded = improver_api.record_decision(round_id, answer.model_dump())
+    try:
+        recorded = improver_api.record_decision(round_id, answer.model_dump())
+    except httpx.HTTPError:
+        # Without this, the lock stays taken and every later start is refused.
+        running.release()
+        raise
     if not recorded.is_success:
         running.release()
         raise HTTPException(recorded.status_code, recorded.json()["detail"])
