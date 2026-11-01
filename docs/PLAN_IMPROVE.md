@@ -153,22 +153,24 @@ Each claim in an evaluation is graded against the handler's reason, in the backe
 
 The backend owns the rounds, the rule that keeps or rolls back a version, and the round's spending.
 
-- [ ] `start_round`, `stop_round`, `get_round`, `list_rounds`, `approve_proposal` and `reject_proposal` need
+- [x] `start_round`, `stop_round`, `get_round`, `list_rounds`, `approve_proposal` and `reject_proposal` need
       a handler who can sign off over the limit; Marcus gets 403 on each. Only one round is open at a time.
-- [ ] A round copies the settings at its start; a test changes a setting mid-round and the round keeps its
+      (Built: the four actions need one; `get_round` and `list_rounds` are reads open to every page, as the
+      brief has Marcus see a round and why he can't act on it.)
+- [x] A round copies the settings at its start; a test changes a setting mid-round and the round keeps its
       own.
-- [ ] Rule tests, with measures worked by hand: a version kept, one rolled back for a measure worse than its
+- [x] Rule tests, with measures worked by hand: a version kept, one rolled back for a measure worse than its
       tolerance, one rolled back for no gain above the noise, and one with no grade rolled back. Cost and time
       compare as fractions of the old value; accuracy and the grade as differences.
-- [ ] A version's scores average only the whole-set evaluations that rounds ran on it. A test.
-- [ ] The improver's view (`GET /api/rounds/{round_id}/results`) has the evaluation set's wrong claims and
+- [x] A version's scores average only the whole-set evaluations that rounds ran on it. A test.
+- [x] The improver's view (`GET /api/rounds/{round_id}/results`) has the evaluation set's wrong claims and
       the five weakest right ones with the handlers' reasons, and nothing from the held-out set but its
       scores. A test checks for every held-out claim id and reason.
-- [ ] An evaluation that would go over the round's limit is refused; one cut short by the limit shows as
+- [x] An evaluation that would go over the round's limit is refused; one cut short by the limit shows as
       stopped, and its version is rolled back. Tests for each.
-- [ ] A stopped round refuses anything it records afterwards, and leaves the current version as it was. A
+- [x] A stopped round refuses anything it records afterwards, and leaves the current version as it was. A
       test.
-- [ ] `npm run check` is green.
+- [x] `npm run check` is green.
 
 ## Phase 6: The improver
 

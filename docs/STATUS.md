@@ -4,7 +4,7 @@ The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`),
 (`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
 (`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
 from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, phase 3: the
-configuration in versions, and phase 4: the judge. We use Postgres in Docker on this machine, not
+configuration in versions, phase 4: the judge, and phase 5: rounds in the backend. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -77,7 +77,36 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     couldn't grade has no grade and is left out of the average. An evaluation's grade is the average
     (none if no claim was graded) and its `judge_cost` is kept apart from the claim agent's cost. With
     `MODEL_NAME` set the judge isn't called and every claim shows as not graded. A version's held-out
-    scores include the grade.
+    scores include the grade. `finish_run` finishes only a run still running, and only that call
+    grades it, so a second call pays the judge nothing and a stopped run isn't graded.
+  - Rounds of the improver (`rounds`, with each approval or rejection in `round_events`). A handler who
+    can sign off over the limit starts (`POST /api/rounds`), stops (`POST /api/rounds/{id}/stop`),
+    approves (`/approve`) or rejects (`/reject`, with a reason) one; anyone else gets 403 saying why.
+    Only one round is open at a time. A start makes the round, with a copy of the settings, the recipe
+    version, the current version and a new thread id, and asks the agent's service (`POST /rounds`);
+    a refusal passes on and leaves no round. An approval or rejection is passed to the service
+    (`POST /rounds/{id}/decision`) with the handler, and the backend records nothing of its own.
+    `GET /api/rounds` and `GET /api/rounds/{id}` show each round: its stage, the proposal waiting with
+    its diff, the version tried, the verdict and why, the held-out scores before and after, who approved
+    or rejected what, its runs, what it spent and what's left. The service records a round through open
+    routes: its stage, a proposed change (422 for a model or effort outside the models allowed) or
+    recipe, the handler's decision (an approved change becomes a version under test, an approved recipe
+    the next recipe), the improver's own model calls, and its whole-set evaluations
+    (`POST /api/rounds/{id}/evaluations`, on the round's versions only, with the round's agents at once).
+    `POST /api/rounds/{id}/verdict` applies the rule in `backend/rule.py` (the lab's): kept when the
+    version meets the objectives, a measure improves by more than its noise and none gets worse by more
+    than its tolerance, with accuracy and the grade as differences and cost and time as fractions of the
+    old value. A version with no grade, with a stopped evaluation, or without its three evaluations is
+    rolled back. `GET /api/rounds/{id}/results` is the improver's view: the current version and its
+    scores, the wrong claims and five weakest right ones of its latest evaluation-set run beside the
+    handlers' reasons and the judge, the earlier rounds, the objectives, noise, tolerance and rule,
+    what's left of the limit and the models allowed, and nothing from the held-out set but its scores.
+  - A round's spending is the improver's calls, its evaluations' calls and the judge. An evaluation is
+    refused when its estimate (its claims times the highest cost per claim seen on its model, or the
+    current model's scaled by the larger price ratio) is more than what's left. Once the limit is
+    spent, or the round is stopped, `start_claim` refuses the next claim of its evaluations and marks
+    the run stopped. A stopped round refuses everything it records afterwards and rolls back a version
+    not yet judged, so the current version stays as it was.
   - A claim that fails before its decision goes back to `waiting`; after two failures it is
     `needs_handler`. A claim stopped `in_progress` stays there for the next dispatch.
   - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py`.
@@ -180,6 +209,6 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The rest of `docs/PLAN_IMPROVE.md`: the rounds and the improver. Nothing reads the
-  improvement settings or the recipe yet, and nothing makes a version after the first; the
-  improver will.
+- The rest of `docs/PLAN_IMPROVE.md`: the improver (phase 6), which drives the rounds through the
+  routes above, and the Improvement page. The agent's service has no `/rounds` routes yet, so a start
+  from the backend fails and leaves no round.

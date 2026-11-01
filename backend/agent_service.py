@@ -25,7 +25,7 @@ def resume_claim(claim_id: str) -> None:
 
 
 def start(path: str, body: dict[str, Any]) -> dict[str, Any]:
-    """Ask the service to start a dispatch or an evaluation, passing on its refusal."""
+    """Ask the service to start a run or round, or answer a proposal, or say why not."""
     try:
         response = httpx.post(f"{url()}/{path}", json=body, timeout=TIMEOUT)
     except httpx.HTTPError as exc:

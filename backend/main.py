@@ -3,11 +3,13 @@
 import difflib
 import json
 import os
+import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
+import httpx
 import jwt
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -19,11 +21,12 @@ from sqlalchemy import (
     delete,
     func,
     insert,
+    or_,
     select,
     update,
 )
 
-from backend import agent_service, auth, judge, payout, store
+from backend import agent_service, auth, judge, payout, rule, store
 from backend.store import (
     answer_key,
     claims,
@@ -34,6 +37,9 @@ from backend.store import (
     held_out_claims,
     model_calls,
     policies,
+    recipes,
+    round_events,
+    rounds,
     run_claims,
     runs,
     setting_changes,
@@ -500,11 +506,13 @@ def average(values: list[float | None]) -> float | None:
     return sum(known) / len(known) if known else None
 
 
-def version_scores(db: Connection, version: int) -> dict[str, Any] | None:
-    """A version's held-out scores: the averages of the whole-set runs rounds made."""
+def version_scores(
+    db: Connection, version: int, eval_set: str
+) -> dict[str, Any] | None:
+    """A version's scores on a set: the averages of the whole-set runs rounds made."""
     query = select(runs).where(
         runs.c.kind == "evaluation",
-        runs.c.eval_set == "held_out",
+        runs.c.eval_set == eval_set,
         runs.c.tiny.is_(False),
         runs.c.status == "finished",
         runs.c.version == version,
@@ -713,7 +721,7 @@ def list_versions(db: Db) -> list[dict[str, Any]]:
             {
                 **row,
                 "current": row["version"] == current,
-                "held_out": version_scores(db, row["version"]),
+                "held_out": version_scores(db, row["version"], "held_out"),
                 "before": before and {k: before[k] for k in ["model", "effort"]},
                 "changed_lines": before
                 and changed_lines(before["instructions"], row["instructions"]),
@@ -790,9 +798,8 @@ def start_evaluation(start: EvaluationStart, _: Handler) -> dict[str, Any]:
     return agent_service.start("evaluations", start.model_dump())
 
 
-@app.post("/api/runs", operation_id="create_run")
-def create_run(create: RunCreate, db: Db) -> dict[str, Any]:
-    """Record a new dispatch or evaluation; an evaluation's copies are made here."""
+def add_run(db: Connection, create: RunCreate, round_id: int | None) -> dict[str, Any]:
+    """Record a new run, in a round or none, unless another is running."""
     running = select(runs.c.run_id).where(runs.c.status == "running")
     if db.execute(running.with_for_update()).first() is not None:
         raise HTTPException(409, "A dispatch or evaluation is already running")
@@ -801,12 +808,20 @@ def create_run(create: RunCreate, db: Db) -> dict[str, Any]:
     known = select(config_versions.c.version)
     if db.scalar(known.where(config_versions.c.version == create.version)) is None:
         raise HTTPException(404, f"Version {create.version} not found")
-    new_run = insert(runs).values(**create.model_dump(), started_at=store.now())
+    new_run = insert(runs).values(
+        **create.model_dump(), round_id=round_id, started_at=store.now()
+    )
     run_id = db.execute(new_run.returning(runs.c.run_id)).scalar_one()
     if create.eval_set is not None:
         make_copies(db, run_id, create.eval_set, create.tiny)
     db.commit()
     return run_view(db, run_row(db, run_id))
+
+
+@app.post("/api/runs", operation_id="create_run")
+def create_run(create: RunCreate, db: Db) -> dict[str, Any]:
+    """Record a new dispatch or evaluation; an evaluation's copies are made here."""
+    return add_run(db, create, None)
 
 
 @app.get("/api/runs/current", operation_id="get_current_run")
@@ -838,13 +853,15 @@ def list_run_claims(run_id: int, db: Db) -> list[str]:
 
 @app.post("/api/runs/{run_id}/finish", operation_id="finish_run")
 def finish_run(run_id: int, db: Db) -> dict[str, Any]:
-    """Mark a run finished, the judge grading an evaluation's claims first."""
-    if run_row(db, run_id)["kind"] == "evaluation":
-        grade_claims(db, run_id)
-    run_row(db, run_id, lock=True)
-    query = update(runs).where(runs.c.run_id == run_id)
-    db.execute(query.values(status="finished", finished_at=store.now()))
+    """Mark a running run finished, then have the judge grade an evaluation's claims."""
+    kind = run_row(db, run_id)["kind"]
+    query = update(runs).where(runs.c.run_id == run_id, runs.c.status == "running")
+    finished = db.execute(query.values(status="finished", finished_at=store.now()))
     db.commit()
+    # Only the call that finished the run grades it, so the judge is paid once, and a
+    # run that was stopped isn't graded.
+    if finished.rowcount and kind == "evaluation":
+        grade_claims(db, run_id)
     return run_view(db, run_row(db, run_id))
 
 
@@ -883,7 +900,10 @@ def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
     if row["status"] not in {"waiting", "in_progress"}:
         raise HTTPException(409, f"Claim {claim_id} is not waiting")
     if start.run_id is not None:
-        run_row(db, start.run_id)
+        held_back = held_back_by_round(db, start.run_id)
+        if held_back:
+            db.commit()
+            raise HTTPException(409, held_back)
         if claim_id not in run_claim_ids(db, start.run_id):
             db.execute(
                 insert(run_claims).values(run_id=start.run_id, claim_id=claim_id)
@@ -1020,3 +1040,605 @@ def sign_off(
     db.commit()
     tasks.add_task(agent_service.resume_claim, claim_id)
     return get_claim(claim_id, db)
+
+
+# The improver's rounds. The handler's actions need a handler who can sign off over
+# the limit; the agent's service records the rest of a round through open routes, as
+# it does its runs.
+CLOSED = {"finished", "stopped"}
+# A version's evaluations in a round: once on the evaluation set, twice on the held-out.
+NEEDED = {"evaluation": 1, "held_out": 2}
+# A check of the judge's at this probability or above counts as yes.
+YES = 0.5
+
+
+class RoundStage(BaseModel):
+    stage: Literal["first_evaluations", "improving", "evaluations", "finished"]
+
+
+class ProposedChange(BaseModel):
+    instructions: str = Field(min_length=1)
+    model: str
+    effort: str
+    reason: str = Field(min_length=1)
+
+
+class ProposedRecipe(BaseModel):
+    recipe: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class RoundDecision(BaseModel):
+    decision: Literal["approve", "reject"]
+    handler_id: str
+    reason: str
+
+
+class Rejection(BaseModel):
+    reason: str = Field(min_length=1)
+
+
+class RoundEvaluation(BaseModel):
+    eval_set: Literal["evaluation", "held_out"]
+    version: int
+    model: str
+    effort: str
+
+
+class ImproverCall(BaseModel):
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
+    cost: float = Field(ge=0)
+
+
+def may_act(handler: RowMapping, action: str) -> None:
+    """Refuse a handler who can't sign off over the limit, saying why."""
+    if not handler["can_approve_over_limit"]:
+        raise HTTPException(
+            403,
+            f"{handler['name']} can't {action}. Only a handler who can sign off"
+            " payouts over the approval limit can",
+        )
+
+
+def round_row(db: Connection, round_id: int, lock: bool = False) -> RowMapping:
+    """Return the round's row, or raise 404; lock it for the transaction if asked."""
+    query = select(rounds).where(rounds.c.round_id == round_id)
+    row = db.execute(query.with_for_update() if lock else query).mappings().first()
+    if row is None:
+        raise HTTPException(404, f"Round {round_id} not found")
+    return row
+
+
+def open_round(db: Connection, round_id: int) -> RowMapping:
+    """Return an open round's row, locked, or refuse anything a closed one records."""
+    row = round_row(db, round_id, lock=True)
+    if row["stage"] in CLOSED:
+        raise HTTPException(409, f"Round {round_id} is {row['stage']}")
+    return row
+
+
+def round_spent(db: Connection, round_id: int) -> float:
+    """What a round has spent: the improver's calls, its evaluations' and the judge."""
+    run_ids = select(runs.c.run_id).where(runs.c.round_id == round_id)
+    calls = select(func.coalesce(func.sum(model_calls.c.cost), 0.0)).where(
+        or_(model_calls.c.round_id == round_id, model_calls.c.run_id.in_(run_ids))
+    )
+    judged = select(func.coalesce(func.sum(grades.c.judge_cost), 0.0)).where(
+        grades.c.run_id.in_(run_ids)
+    )
+    return (db.scalar(calls) or 0.0) + (db.scalar(judged) or 0.0)
+
+
+def round_left(db: Connection, row: RowMapping) -> float:
+    """What's left of a round's spending limit."""
+    limit = json.loads(row["settings"])["round_spending_limit"]
+    return limit - round_spent(db, row["round_id"])
+
+
+def held_back_by_round(db: Connection, run_id: int) -> str | None:
+    """Why a run's round lets no new claim start, marking the run stopped; or None."""
+    round_id = run_row(db, run_id)["round_id"]
+    if round_id is None:
+        return None
+    row = round_row(db, round_id)
+    if row["stage"] == "stopped":
+        why = f"Round {round_id} was stopped"
+    elif round_left(db, row) <= 0:
+        why = f"Round {round_id} has spent its limit"
+    else:
+        return None
+    query = update(runs).where(runs.c.run_id == run_id, runs.c.status == "running")
+    db.execute(query.values(status="stopped", finished_at=store.now()))
+    return why
+
+
+def highest_cost_per_claim(db: Connection, model: str) -> float | None:
+    """The highest model cost of one claim in one run on a model, or None if no runs."""
+    per_claim = (
+        select(func.sum(model_calls.c.cost).label("cost"))
+        .join(runs, runs.c.run_id == model_calls.c.run_id)
+        .where(runs.c.model == model, model_calls.c.claim_id.is_not(None))
+        .group_by(model_calls.c.run_id, model_calls.c.claim_id)
+        .subquery()
+    )
+    return db.scalar(select(func.max(per_claim.c.cost)))
+
+
+def estimate(db: Connection, model: str, count: int) -> float:
+    """An evaluation's likely cost: its claims times the highest cost per claim seen."""
+    seen = highest_cost_per_claim(db, model)
+    if seen is None:
+        # A model with no runs: the current model's, scaled by the larger price ratio.
+        current = current_version(db)["model"]
+        prices = {m["model"]: m for m in models_allowed()}
+        new, old = prices.get(model), prices.get(current)
+        ratio = 1.0
+        if new and old and old["input_price"] and old["output_price"]:
+            ratio = max(
+                new["input_price"] / old["input_price"],
+                new["output_price"] / old["output_price"],
+            )
+        seen = (highest_cost_per_claim(db, current) or 0.0) * ratio
+    return count * seen
+
+
+def loaded(value: str | None) -> Any:
+    """A JSON column's value, or None."""
+    return value and json.loads(value)
+
+
+def proposal_view(db: Connection, row: RowMapping) -> dict[str, Any] | None:
+    """The proposal waiting for a handler, with what it changes."""
+    proposal = loaded(row["proposal"])
+    if proposal is None:
+        return None
+    if proposal["kind"] == "recipe":
+        query = select(recipes.c.text).order_by(recipes.c.version.desc())
+        before = db.scalars(query.limit(1)).one()
+        return {**proposal, "changed_lines": changed_lines(before, proposal["recipe"])}
+    query = select(config_versions).where(
+        config_versions.c.version == row["version_before"]
+    )
+    old = db.execute(query).mappings().one()
+    return {
+        **proposal,
+        "before": {"model": old["model"], "effort": old["effort"]},
+        "changed_lines": changed_lines(old["instructions"], proposal["instructions"]),
+    }
+
+
+def round_view(db: Connection, row: RowMapping) -> dict[str, Any]:
+    """A round: where it has got to, what it tried, its verdict and its spending."""
+    round_id = row["round_id"]
+    query = select(runs).where(runs.c.round_id == round_id).order_by(runs.c.run_id)
+    worked = [
+        {k: r[k] for k in ["run_id", "eval_set", "version", "status"]}
+        for r in db.execute(query).mappings()
+    ]
+    query = (
+        select(round_events, handlers.c.name.label("handler"))
+        .join(handlers, handlers.c.handler_id == round_events.c.handler_id)
+        .where(round_events.c.round_id == round_id)
+        .order_by(round_events.c.id)
+    )
+    keep = ["kind", "decision", "handler_id", "handler", "reason", "decided_at"]
+    events = [{k: e[k] for k in keep} for e in db.execute(query).mappings()]
+    spent = round_spent(db, round_id)
+    simple = ["round_id", "stage", "recipe_version", "thread_id", "version_before"]
+    simple += ["version", "reason", "kept", "why", "started_by", "started_at"]
+    simple += ["stopped_by", "finished_at"]
+    settings_ = json.loads(row["settings"])
+    return {
+        **{k: row[k] for k in simple},
+        "settings": settings_,
+        "held_out_before": loaded(row["held_out_before"]),
+        "held_out_after": loaded(row["held_out_after"]),
+        "proposal": proposal_view(db, row),
+        "events": events,
+        "runs": worked,
+        "spent": spent,
+        "left": settings_["round_spending_limit"] - spent,
+    }
+
+
+def beside_handler(db: Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Evaluation claims, the agent's answer beside the handler's, and the grade."""
+    found = []
+    for r in rows:
+        query = select(answer_key).where(answer_key.c.claim_id == r["copied_from"])
+        key = db.execute(query).mappings().one()
+        copy = claim_row(db, r["claim_id"])
+        checks = {
+            c: None if r[c] is None else r[c] >= YES
+            for c in ["same_grounds", "same_section"]
+        }
+        found.append(
+            {
+                "claim_id": r["copied_from"],
+                "summary": json.loads(copy["data"])["summary"],
+                "agent": {
+                    "decision": r["agent"],
+                    "payout": r["agent_payout"],
+                    "rationale": r["reason"],
+                    "section": copy["policy_section"],
+                },
+                "handler": {
+                    k: key[k] for k in ["decision", "payout", "reason", "reference"]
+                },
+                "judge": {"grade": r["grade"], "letter": r["letter"], **checks},
+            }
+        )
+    return found
+
+
+def mistakes(db: Connection, version: int) -> dict[str, Any] | None:
+    """The wrong claims and the five right ones explained least well, from a version's
+    latest whole evaluation-set run; None before it has one."""
+    query = select(runs).where(
+        runs.c.kind == "evaluation",
+        runs.c.eval_set == "evaluation",
+        runs.c.tiny.is_(False),
+        runs.c.status == "finished",
+        runs.c.version == version,
+    )
+    latest = db.execute(query.order_by(runs.c.run_id.desc()).limit(1)).mappings()
+    row = latest.first()
+    if row is None:
+        return None
+    rows = evaluation_view(db, row)["claims"]
+    right = [r for r in rows if r["right"]]
+    weakest = sorted(right, key=lambda r: (r["grade"] is None, r["grade"] or 0))[:5]
+    return {
+        "run_id": row["run_id"],
+        "wrong": beside_handler(db, [r for r in rows if not r["right"]]),
+        "explained_least_well": beside_handler(db, weakest),
+    }
+
+
+def earlier_round(db: Connection, row: RowMapping) -> dict[str, Any]:
+    """What an earlier round tried and what came of it."""
+    tried = None
+    if row["version"] is not None:
+        query = select(config_versions).where(
+            config_versions.c.version == row["version"]
+        )
+        tried = db.execute(query).mappings().one()
+    return {
+        "round": row["round_id"],
+        "recipe_version": row["recipe_version"],
+        "version": row["version"],
+        "model": tried and tried["model"],
+        "effort": tried and tried["effort"],
+        "reason": row["reason"],
+        "kept": row["kept"],
+        "why": row["why"],
+        "held_out_before": loaded(row["held_out_before"]),
+        "held_out_after": loaded(row["held_out_after"]),
+        "stage": row["stage"],
+    }
+
+
+@app.post("/api/rounds", operation_id="start_round")
+def start_round(handler: Handler, db: Db) -> dict[str, Any]:
+    """Start a round of the improver, as a handler who can sign off over the limit."""
+    may_act(handler, "start a round")
+    query = select(rounds.c.round_id).where(rounds.c.stage.not_in(CLOSED))
+    already = db.execute(query.with_for_update()).first()
+    if already is not None:
+        raise HTTPException(
+            409, f"Round {already.round_id} is open. Stop it or wait for it to finish"
+        )
+    values = {
+        "stage": "first_evaluations",
+        "recipe_version": db.scalar(select(func.max(recipes.c.version))),
+        "settings": json.dumps(settings_view(db)["settings"]),
+        "thread_id": f"round-{uuid.uuid4().hex}",
+        "version_before": current_version(db)["version"],
+        "started_by": handler["handler_id"],
+        "started_at": store.now(),
+    }
+    new_round = insert(rounds).values(**values).returning(rounds.c.round_id)
+    round_id = db.execute(new_round).scalar_one()
+    db.commit()
+    body = {"round_id": round_id, "thread_id": values["thread_id"]}
+    try:
+        agent_service.start("rounds", body)
+    # A round the service didn't start must not stay open and block the next one.
+    except (HTTPException, httpx.HTTPError):
+        db.execute(delete(rounds).where(rounds.c.round_id == round_id))
+        db.commit()
+        raise
+    return round_view(db, round_row(db, round_id))
+
+
+@app.get("/api/rounds", operation_id="list_rounds")
+def list_rounds(db: Db) -> list[dict[str, Any]]:
+    """List the improver's rounds, newest first."""
+    query = select(rounds).order_by(rounds.c.round_id.desc())
+    return [round_view(db, r) for r in db.execute(query).mappings().all()]
+
+
+@app.get("/api/rounds/{round_id}", operation_id="get_round")
+def get_round(round_id: int, db: Db) -> dict[str, Any]:
+    """Get one round: its stage, its proposal waiting, its verdict and its spending."""
+    return round_view(db, round_row(db, round_id))
+
+
+@app.post("/api/rounds/{round_id}/stop", operation_id="stop_round")
+def stop_round(round_id: int, handler: Handler, db: Db) -> dict[str, Any]:
+    """Stop an open round; a version not yet judged is rolled back."""
+    may_act(handler, "stop a round")
+    row = open_round(db, round_id)
+    db.execute(
+        update(rounds)
+        .where(rounds.c.round_id == round_id)
+        .values(
+            stage="stopped",
+            proposal=None,
+            stopped_by=handler["handler_id"],
+            finished_at=store.now(),
+        )
+    )
+    if row["version"] is not None and row["kept"] is None:
+        query = update(config_versions)
+        query = query.where(config_versions.c.version == row["version"])
+        db.execute(query.values(kept=False))
+    query = update(runs).where(runs.c.round_id == round_id, runs.c.status == "running")
+    db.execute(query.values(status="stopped", finished_at=store.now()))
+    db.commit()
+    return round_view(db, round_row(db, round_id))
+
+
+def answer_proposal(
+    db: Connection, round_id: int, handler: RowMapping, decision: str, reason: str
+) -> dict[str, Any]:
+    """Pass a handler's answer on a proposal to the agent's service to record."""
+    row = open_round(db, round_id)
+    if row["proposal"] is None:
+        raise HTTPException(409, f"Round {round_id} has no proposal waiting")
+    # End the read, so the service can record the answer while this waits.
+    db.commit()
+    body = {"decision": decision, "reason": reason, "handler_id": handler["handler_id"]}
+    return agent_service.start(f"rounds/{round_id}/decision", body)
+
+
+@app.post("/api/rounds/{round_id}/approve", operation_id="approve_proposal")
+def approve_proposal(round_id: int, handler: Handler, db: Db) -> dict[str, Any]:
+    """Approve a round's proposal, as a handler who can sign off over the limit."""
+    may_act(handler, "approve the improver's proposals")
+    return answer_proposal(db, round_id, handler, "approve", "")
+
+
+@app.post("/api/rounds/{round_id}/reject", operation_id="reject_proposal")
+def reject_proposal(
+    round_id: int, rejection: Rejection, handler: Handler, db: Db
+) -> dict[str, Any]:
+    """Reject a round's proposal with a reason that goes back to the improver."""
+    may_act(handler, "reject the improver's proposals")
+    return answer_proposal(db, round_id, handler, "reject", rejection.reason)
+
+
+@app.get("/api/rounds/{round_id}/results", operation_id="read_round_results")
+def read_round_results(round_id: int, db: Db) -> dict[str, Any]:
+    """Get what the improver reads: scores, mistakes, earlier rounds, rule, budget."""
+    row = round_row(db, round_id)
+    settings_ = json.loads(row["settings"])
+    current = current_version(db)
+    version = current["version"]
+    query = select(rounds).where(rounds.c.round_id < round_id)
+    earlier = db.execute(query.order_by(rounds.c.round_id)).mappings().all()
+    return {
+        "current_version": configuration(current, current["model"], current["effort"]),
+        "scores": {
+            s: version_scores(db, version, s) for s in ["evaluation", "held_out"]
+        },
+        "evaluation_set": mistakes(db, version),
+        "earlier_rounds": [earlier_round(db, r) for r in earlier],
+        "objectives_on_the_held_out_set": settings_["objectives"],
+        "noise": settings_["noise"],
+        "tolerance": settings_["tolerance"],
+        "rule": rule.RULE,
+        "spending_left": round_left(db, row),
+        "models_allowed": models_allowed(),
+    }
+
+
+@app.post("/api/rounds/{round_id}/stage", operation_id="record_round_stage")
+def record_round_stage(round_id: int, stage: RoundStage, db: Db) -> dict[str, Any]:
+    """Record where an open round has got to; finished closes it."""
+    open_round(db, round_id)
+    values: dict[str, Any] = {"stage": stage.stage}
+    if stage.stage == "finished":
+        values["finished_at"] = store.now()
+    db.execute(update(rounds).where(rounds.c.round_id == round_id).values(**values))
+    db.commit()
+    return round_view(db, round_row(db, round_id))
+
+
+def wait_for_handler(db: Connection, round_id: int, proposal: dict[str, Any]) -> None:
+    """Record a proposal waiting for a handler."""
+    stage = f"{proposal['kind']}_waiting"
+    query = update(rounds).where(rounds.c.round_id == round_id)
+    db.execute(query.values(stage=stage, proposal=json.dumps(proposal)))
+    db.commit()
+
+
+@app.post(
+    "/api/rounds/{round_id}/proposed-change", operation_id="record_proposed_change"
+)
+def record_proposed_change(
+    round_id: int, change: ProposedChange, db: Db
+) -> dict[str, Any]:
+    """Record a new configuration the improver proposes, to wait for a handler."""
+    row = open_round(db, round_id)
+    if row["version"] is not None:
+        raise HTTPException(409, f"Round {round_id} has already tried a version")
+    allowed = {m["model"]: m["reasoning_efforts"] for m in models_allowed()}
+    if change.effort not in allowed.get(change.model, []):
+        raise HTTPException(
+            422,
+            f"{change.model} at {change.effort} isn't allowed."
+            " Choose from the models allowed",
+        )
+    wait_for_handler(db, round_id, {"kind": "change", **change.model_dump()})
+    return round_view(db, round_row(db, round_id))
+
+
+@app.post(
+    "/api/rounds/{round_id}/proposed-recipe", operation_id="record_proposed_recipe"
+)
+def record_proposed_recipe(
+    round_id: int, recipe: ProposedRecipe, db: Db
+) -> dict[str, Any]:
+    """Record a new recipe the improver proposes, to wait for a handler."""
+    open_round(db, round_id)
+    wait_for_handler(db, round_id, {"kind": "recipe", **recipe.model_dump()})
+    return round_view(db, round_row(db, round_id))
+
+
+def approved(db: Connection, round_id: int, proposal: dict[str, Any], by: str) -> None:
+    """Record an approved proposal: a version under test, or the next recipe."""
+    table = recipes if proposal["kind"] == "recipe" else config_versions
+    record_ = {
+        "version": (db.scalar(select(func.max(table.c.version))) or 0) + 1,
+        "reason": proposal["reason"],
+        "proposed_by": f"improver (round {round_id})",
+        "approved_by": by,
+        "approved_at": store.now(),
+    }
+    if proposal["kind"] == "recipe":
+        db.execute(insert(recipes).values(**record_, text=proposal["recipe"]))
+        return
+    db.execute(
+        insert(config_versions).values(
+            **record_,
+            instructions=proposal["instructions"],
+            model=proposal["model"],
+            effort=proposal["effort"],
+            kept=None,
+        )
+    )
+    query = update(rounds).where(rounds.c.round_id == round_id)
+    db.execute(query.values(version=record_["version"], reason=proposal["reason"]))
+
+
+@app.post("/api/rounds/{round_id}/decision", operation_id="record_round_decision")
+def record_round_decision(
+    round_id: int, answer: RoundDecision, db: Db
+) -> dict[str, Any]:
+    """Record a handler's approval or rejection of a round's proposal."""
+    row = open_round(db, round_id)
+    proposal = loaded(row["proposal"])
+    if proposal is None:
+        raise HTTPException(409, f"Round {round_id} has no proposal waiting")
+    query = select(handlers).where(handlers.c.handler_id == answer.handler_id)
+    handler = db.execute(query).mappings().first()
+    if handler is None:
+        raise HTTPException(404, f"Handler {answer.handler_id} not found")
+    may_act(handler, "approve or reject the improver's proposals")
+    if answer.decision == "approve":
+        approved(db, round_id, proposal, answer.handler_id)
+    db.execute(
+        insert(round_events).values(
+            round_id=round_id,
+            kind=proposal["kind"],
+            decision=answer.decision,
+            handler_id=answer.handler_id,
+            reason=answer.reason,
+            decided_at=store.now(),
+        )
+    )
+    query = update(rounds).where(rounds.c.round_id == round_id)
+    db.execute(query.values(stage="improving", proposal=None))
+    db.commit()
+    return round_view(db, round_row(db, round_id))
+
+
+@app.post("/api/rounds/{round_id}/model-calls", operation_id="record_improver_call")
+def record_improver_call(round_id: int, used: ImproverCall, db: Db) -> dict[str, str]:
+    """Record one of the improver's own model calls with its round."""
+    open_round(db, round_id)
+    db.execute(insert(model_calls).values(round_id=round_id, **used.model_dump()))
+    db.commit()
+    return {"status": "recorded"}
+
+
+@app.post("/api/rounds/{round_id}/evaluations", operation_id="create_round_evaluation")
+def create_round_evaluation(
+    round_id: int, wanted: RoundEvaluation, db: Db
+) -> dict[str, Any]:
+    """Record a round's whole-set evaluation, unless it would go over the limit."""
+    row = open_round(db, round_id)
+    if wanted.version not in {row["version_before"], row["version"]}:
+        raise HTTPException(
+            409, f"Version {wanted.version} isn't under test in round {round_id}"
+        )
+    query = select(func.count()).select_from(answer_key)
+    count = db.scalar(query.where(answer_key.c.eval_set == wanted.eval_set)) or 0
+    likely, left = estimate(db, wanted.model, count), round_left(db, row)
+    if likely > left:
+        raise HTTPException(
+            409,
+            f"Refused: the evaluation could cost about ${likely:.4f} and ${left:.4f}"
+            " of the round's spending limit is left",
+        )
+    create = RunCreate(
+        kind="evaluation",
+        n=json.loads(row["settings"])["agents_at_once"],
+        eval_set=wanted.eval_set,
+        tiny=False,
+        model=wanted.model,
+        effort=wanted.effort,
+        version=wanted.version,
+    )
+    return add_run(db, create, round_id)
+
+
+def verdict(db: Connection, row: RowMapping) -> tuple[bool, str]:
+    """Keep or roll back the version a round tried, by the rule."""
+    query = select(runs).where(
+        runs.c.round_id == row["round_id"], runs.c.version == row["version"]
+    )
+    tried = db.execute(query).mappings().all()
+    if any(r["status"] == "stopped" for r in tried):
+        return False, "its evaluations were stopped"
+    for eval_set, needed in NEEDED.items():
+        done = [
+            r for r in tried if r["eval_set"] == eval_set and r["status"] == "finished"
+        ]
+        if len(done) < needed:
+            return False, "the round couldn't afford to evaluate it"
+    before = version_scores(db, row["version_before"], "held_out")
+    if before is None:
+        return False, "the current version has no held-out scores to compare with"
+    after = version_scores(db, row["version"], "held_out")
+    return rule.keep_or_roll_back(after or {}, before, json.loads(row["settings"]))
+
+
+@app.post("/api/rounds/{round_id}/verdict", operation_id="apply_verdict")
+def apply_verdict(round_id: int, db: Db) -> dict[str, Any]:
+    """Keep or roll back the version a round tried, by the rule, from its runs."""
+    row = open_round(db, round_id)
+    if row["version"] is None or row["kept"] is not None:
+        raise HTTPException(
+            409, f"Round {round_id} has no version waiting for a verdict"
+        )
+    kept, why = verdict(db, row)
+    before = version_scores(db, row["version_before"], "held_out")
+    after = version_scores(db, row["version"], "held_out")
+    query = update(config_versions).where(config_versions.c.version == row["version"])
+    db.execute(query.values(kept=kept))
+    db.execute(
+        update(rounds)
+        .where(rounds.c.round_id == round_id)
+        .values(
+            stage="verdict",
+            kept=kept,
+            why=why,
+            held_out_before=json.dumps(before),
+            held_out_after=json.dumps(after),
+        )
+    )
+    db.commit()
+    return round_view(db, round_row(db, round_id))

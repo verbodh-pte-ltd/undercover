@@ -107,12 +107,14 @@ run_claims = Table(
     Column("claim_id", String, nullable=False),
 )
 
+# A claim agent's calls have a claim; the improver's own calls have only a round.
 model_calls = Table(
     "model_calls",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("claim_id", String, nullable=False),
+    Column("claim_id", String),
     Column("run_id", Integer),
+    Column("round_id", Integer),
     Column("input_tokens", Integer, nullable=False),
     Column("output_tokens", Integer, nullable=False),
     Column("cost", Float, nullable=False),
@@ -207,6 +209,42 @@ grades = Table(
     Column("same_grounds", Float, nullable=False),
     Column("same_section", Float, nullable=False),
     Column("judge_cost", Float, nullable=False),
+)
+# The improver's rounds. settings is a copy of the settings at the start, as JSON;
+# proposal is what waits for a handler, as JSON, or None; version_before is the
+# current version at the start, and version the one the round tried.
+rounds = Table(
+    "rounds",
+    metadata,
+    Column("round_id", Integer, primary_key=True, autoincrement=True),
+    Column("stage", String, nullable=False),
+    Column("recipe_version", Integer, nullable=False),
+    Column("settings", Text, nullable=False),
+    Column("thread_id", String, nullable=False),
+    Column("version_before", Integer, nullable=False),
+    Column("version", Integer),
+    Column("proposal", Text),
+    Column("reason", Text),
+    Column("held_out_before", Text),
+    Column("held_out_after", Text),
+    Column("kept", Boolean),
+    Column("why", Text),
+    Column("started_by", String, nullable=False),
+    Column("started_at", String, nullable=False),
+    Column("stopped_by", String),
+    Column("finished_at", String),
+)
+# Each approval or rejection of a round's proposals, with the handler and the reason.
+round_events = Table(
+    "round_events",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("round_id", Integer, nullable=False),
+    Column("kind", String, nullable=False),
+    Column("decision", String, nullable=False),
+    Column("handler_id", String, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("decided_at", String, nullable=False),
 )
 EVAL_SETS = {
     "evaluation": ("claims.json", "evals/decisions.json"),
