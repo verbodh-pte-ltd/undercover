@@ -266,7 +266,7 @@ function Rounds({ rounds }: Readonly<{ rounds: Round[] }>) {
               <tr key={r.round_id}>
                 <td>
                   <span className="mono">{r.round_id}</span>
-                  <div className="muted small">{when(r.started_at)}</div>
+                  <div className="muted small nowrap">{when(r.started_at)}</div>
                 </td>
                 <td>
                   <span className={`chip ${status.name}`}>{status.text}</span>
@@ -331,16 +331,14 @@ function Recipes({
               <th>Reason</th>
               <th>Proposed by</th>
               <th>Approved</th>
-              <th>
-                <span className="hidden">Changes</span>
-              </th>
+              <th>Changes</th>
             </tr>
           </thead>
           <tbody>
             {recipes.map((r) => (
               <tr key={r.version}>
                 <td className="mono">{r.version}</td>
-                <td>{r.reason}</td>
+                <td className="small">{r.reason}</td>
                 <td>{name(r.proposed_by)}</td>
                 <td>
                   {name(r.approved_by)}

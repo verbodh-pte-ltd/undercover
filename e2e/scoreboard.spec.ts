@@ -52,13 +52,18 @@ test("the scoreboard shows an evaluation played out through the API", async ({
 
   await row.getByRole("link", { name: `Evaluation ${run}` }).click();
   await expect(page.locator("tbody tr")).toHaveCount(5);
-  const first = page.getByRole("row", { name: new RegExp(copies[0]) });
-  await expect(first.getByRole("cell", { name: "B 2.20" })).toBeVisible();
+  await expect(page.getByText(/stand-in, version 1\./)).toBeVisible();
+  // The table names each copy by the claim it copies, such as CLM-1001 for E6-CLM-1001.
+  const original = copies[0].slice(copies[0].indexOf("-") + 1);
+  const first = page.getByRole("row", { name: new RegExp(original) });
+  await expect(first.getByRole("cell", { name: "B, 2.20 of 3" })).toBeVisible();
   await expect(first.getByRole("cell", { name: "Yes" })).toBeVisible();
   await expect(
     first.getByRole("cell", { name: "No", exact: true }),
   ).toBeVisible();
-  await page.getByRole("link", { name: copies[0] }).click();
+  const link = page.getByRole("link", { name: original, exact: true });
+  await expect(link).toHaveAttribute("href", `#/claims/${copies[0]}`);
+  await link.click();
   await expect(
     page.getByText(new RegExp(`A copy of .* for evaluation ${run}`)),
   ).toBeVisible();

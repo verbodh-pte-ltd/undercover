@@ -184,6 +184,7 @@ export const dispatchRun: Run = {
 
 export const evaluation: Evaluation = {
   run_id: 7,
+  version: 2,
   eval_set: "held_out",
   tiny: true,
   n: 5,

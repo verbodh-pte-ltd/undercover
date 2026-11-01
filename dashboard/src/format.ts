@@ -14,6 +14,14 @@ const moments = new Intl.DateTimeFormat("en-US", {
 
 export const when = (iso: string) => moments.format(new Date(iso));
 
+const days = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeZone: "UTC",
+});
+
+// A date with no time, such as "2026-06-18", shows as "Jun 18, 2026" wherever the reader is.
+export const day = (iso: string) => days.format(new Date(iso));
+
 export const statusLabels: Record<Status, string> = {
   waiting: "Waiting",
   in_progress: "In progress",

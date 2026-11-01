@@ -17,7 +17,7 @@ test("a handler changes a setting after confirming it", async ({
   await page.getByRole("button", { name: "Save changes" }).click();
   const dialog = page.getByRole("dialog", { name: "Save these changes?" });
   await expect(dialog).toContainText(
-    "Spending limit for each round: $0.5 to $0.75",
+    "Spending limit for each round: $0.50 to $0.75",
   );
   await dialog.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByRole("status")).toHaveText(

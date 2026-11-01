@@ -60,10 +60,10 @@ afterEach(() => {
 it("shows every setting, the models allowed and who last changed each", async () => {
   fakeBackend({ "/api/settings": loaded });
   render(<Settings handler={dana} />);
-  expect(await screen.findByLabelText("Approval limit")).toHaveProperty(
-    "value",
-    "1000",
-  );
+  const limit = await screen.findByLabelText("Approval limit");
+  expect(limit).toHaveProperty("value", "1000");
+  // The input edits a plain number; the dollars read as money over it.
+  expect(limit.nextElementSibling?.textContent).toBe("$1,000.00");
   expect(screen.getByLabelText("Held-out accuracy at least")).toHaveProperty(
     "value",
     "60",
@@ -82,7 +82,8 @@ it("shows every setting, the models allowed and who last changed each", async ()
   );
   expect(screen.getByText("openai/gpt-6-luna")).toBeDefined();
   expect(screen.getByText("none, low, medium")).toBeDefined();
-  expect(screen.getByText("$0.50")).toBeDefined();
+  // A model's output price, and the spending limit as money over its input.
+  expect(screen.getAllByText("$0.50")).toHaveLength(2);
   expect(screen.getByText(/Last changed by Dana Whitfield/)).toBeDefined();
   expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty(
     "disabled",
@@ -105,7 +106,9 @@ it("asks in its own dialog before saving, then shows the new value", async () =>
   });
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   const dialog = screen.getByRole("dialog", { name: "Save these changes?" });
-  expect(dialog.textContent).toContain("Approval limit: $1000 to $2000");
+  expect(dialog.textContent).toContain(
+    "Approval limit: $1,000.00 to $2,000.00",
+  );
   expect(dialog.textContent).toContain(
     "Noise on held-out accuracy: 10 % points to 5 % points",
   );

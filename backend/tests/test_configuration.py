@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, insert, select, update
 
 from backend import store
-from backend.main import app
+from backend.main import app, changed_lines
 
 client = TestClient(app)
 
@@ -119,10 +119,38 @@ def test_each_version_shows_what_changed_from_the_one_before():
     second = client.get("/api/configuration/versions").json()[0]
     assert second["before"] == {"model": "openai/gpt-6-luna", "effort": "low"}
     assert (second["model"], second["effort"]) == ("x/model", "medium")
-    assert second["changed_lines"] == [
+    found = second["changed_lines"]
+    assert [line for line in found if line[0] in "+-"] == [
         "-Work the claim in this order:",
         "+Work in this order:",
         "+Never approve without a receipt.",
+    ]
+    # Each change has the unchanged lines around it, and "…" between the two.
+    assert found.count("…") == 1
+    assert found[found.index("+Never approve without a receipt.") - 1].startswith(" ")
+
+
+def test_a_diff_ignores_spacing_and_skips_unchanged_text():
+    old = "One.\n  Two.\nThree.\nFour.\nFive.\nSix.\nSeven.\nEight."
+    new = "One.\nTwo.\nThree.\nFour.\nFive.\nSix.\nSeven, changed.\nEight.\nNine."
+    assert changed_lines(old, new) == [
+        " Five.",
+        " Six.",
+        "-Seven.",
+        "+Seven, changed.",
+        " Eight.",
+        "+Nine.",
+    ]
+    assert changed_lines("A\nB\nC\nD\nE\nF\nG", "X\nB\nC\nD\nE\nF\nY") == [
+        "-A",
+        "+X",
+        " B",
+        " C",
+        "…",
+        " E",
+        " F",
+        "-G",
+        "+Y",
     ]
 
 

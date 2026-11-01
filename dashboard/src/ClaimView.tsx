@@ -12,7 +12,7 @@ import {
   type Step,
   type Teammate,
 } from "./api";
-import { label, money, sectionLabel, when } from "./format";
+import { day, label, money, sectionLabel, when } from "./format";
 import { LoadFailed, PageHeader } from "./Page";
 import { StatusChip } from "./Queue";
 import { SignOff } from "./SignOff";
@@ -73,7 +73,14 @@ function Steps({ steps }: Readonly<{ steps: Step[] }>) {
       {steps.map((step) => (
         <li key={step.id} className={step.kind}>
           <span className="step-kind">{label(step.kind)}</span>
-          <span className="step-text">{step.text}</span>
+          {step.kind === "tool_result" ? (
+            // A tool's result can be long JSON: one line until it is opened.
+            <details>
+              <summary className="step-text">{step.text}</summary>
+            </details>
+          ) : (
+            <span className="step-text">{step.text}</span>
+          )}
         </li>
       ))}
     </ol>
@@ -93,8 +100,8 @@ function PolicyPanel({ policy }: Readonly<{ policy: Policy }>) {
       </dd>
       <dt>Trip</dt>
       <dd>
-        {policy.trip.destination}, {policy.trip.departs_on} to{" "}
-        {policy.trip.returns_on}
+        {policy.trip.destination}, {day(policy.trip.departs_on)} to{" "}
+        {day(policy.trip.returns_on)}
       </dd>
       <dt>Trip cost</dt>
       <dd className="mono">{money(policy.trip.trip_cost)}</dd>
@@ -110,7 +117,7 @@ function History({ history }: Readonly<{ history: PastClaim[] }>) {
     <ul className="stack-sm plain">
       {history.map((past) => (
         <li key={past.claim_id}>
-          <span className="mono">{past.claim_id}</span>, {past.filed_on}:{" "}
+          <span className="mono">{past.claim_id}</span>, {day(past.filed_on)}:{" "}
           {past.summary}. {label(past.outcome)}, paid{" "}
           <span className="mono">{money(past.amount_paid)}</span>
         </li>
@@ -212,7 +219,7 @@ export function ClaimView({
             <h2>Story</h2>
             <p className="muted">
               {claim.customer_name}, {label(claim.claim_type)},{" "}
-              {claim.incident_location}, {claim.incident_date}
+              {claim.incident_location}, {day(claim.incident_date)}
             </p>
             <p>{claim.story}</p>
           </div>

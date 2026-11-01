@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { listVersions, type ConfigVersion } from "./api";
 import { Diff } from "./Diff";
 import { cost, grade, percent, seconds, when } from "./format";
@@ -124,56 +124,61 @@ export function Configuration() {
                 <th>Version</th>
                 <th>Status</th>
                 <th>Model and effort</th>
-                <th>Reason</th>
                 <th>Proposed by</th>
                 <th>Approved</th>
                 <th className="num">Held-out accuracy</th>
                 <th className="num">Grade</th>
                 <th className="num">Cost per claim</th>
                 <th className="num">Time per claim</th>
-                <th>
-                  <span className="hidden">Changes</span>
-                </th>
+                <th>Changes</th>
               </tr>
             </thead>
             <tbody>
               {versions.map((v) => {
                 const s = status(v);
                 return (
-                  <tr key={v.version}>
-                    <td className="mono">{v.version}</td>
-                    <td>
-                      <span className={`chip ${s.name}`}>{s.text}</span>
-                    </td>
-                    <td>
-                      {v.model}
-                      <div className="muted small">Effort {v.effort}</div>
-                    </td>
-                    <td>{v.reason}</td>
-                    <td>{name(v.proposed_by)}</td>
-                    <td>
-                      {name(v.approved_by)}
-                      <br />
-                      <span className="muted small">{when(v.approved_at)}</span>
-                    </td>
-                    <Scores v={v} />
-                    <td>
-                      {v.before && (
-                        <button
-                          type="button"
-                          className="quiet"
-                          aria-pressed={shown === v.version}
-                          onClick={() => {
-                            setShown(shown === v.version ? null : v.version);
-                          }}
-                        >
-                          {shown === v.version
-                            ? "Hide changes"
-                            : `Changes in version ${String(v.version)}`}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                  <Fragment key={v.version}>
+                    <tr>
+                      <td className="mono">{v.version}</td>
+                      <td>
+                        <span className={`chip ${s.name}`}>{s.text}</span>
+                      </td>
+                      <td className="nowrap">
+                        {v.model}
+                        <div className="muted small">Effort {v.effort}</div>
+                      </td>
+                      <td>{name(v.proposed_by)}</td>
+                      <td>
+                        {name(v.approved_by)}
+                        <br />
+                        <span className="muted small nowrap">
+                          {when(v.approved_at)}
+                        </span>
+                      </td>
+                      <Scores v={v} />
+                      <td>
+                        {v.before && (
+                          <button
+                            type="button"
+                            className="quiet"
+                            aria-pressed={shown === v.version}
+                            onClick={() => {
+                              setShown(shown === v.version ? null : v.version);
+                            }}
+                          >
+                            {shown === v.version
+                              ? "Hide changes"
+                              : `Changes in version ${String(v.version)}`}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {/* The reason reads as a sentence on its own line, under its version. */}
+                    <tr className="reason-row">
+                      <td />
+                      <td colSpan={9}>{v.reason}</td>
+                    </tr>
+                  </Fragment>
                 );
               })}
             </tbody>

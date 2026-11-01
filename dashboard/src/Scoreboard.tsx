@@ -128,10 +128,10 @@ export function Scoreboard() {
               <tr>
                 <th>Evaluation</th>
                 <th>Set</th>
-                <th className="num">Agents</th>
+                <th className="num">Version</th>
                 <th>Model</th>
-                <th className="num">Decisions right</th>
-                <th className="num">Right</th>
+                <th className="num">Decision right</th>
+                <th className="num">Decision and payout right</th>
                 <th className="num">Cost of mistakes</th>
                 <th className="num">Straight through</th>
                 <th className="num">Grade</th>
@@ -157,10 +157,12 @@ export function Scoreboard() {
                     {setLabels[e.eval_set]}
                     {e.tiny && <div className="muted small">Tiny</div>}
                   </td>
-                  <td className="num mono">{e.n}</td>
+                  <td className="num mono">{e.version}</td>
                   <td>
-                    {e.model}
-                    <div className="muted small">Effort {e.effort}</div>
+                    <span className="nowrap">{e.model}</span>
+                    <div className="muted small">
+                      Effort {e.effort}, {e.n} agents at once
+                    </div>
                   </td>
                   <td className="num mono">{percent(e.decision_accuracy)}</td>
                   <td className="num mono">{percent(e.accuracy)}</td>
@@ -190,7 +192,7 @@ function JudgeCells({ c }: Readonly<{ c: EvaluationClaim }>) {
   return (
     <>
       <td className="num mono">
-        <strong>{c.letter}</strong> {c.grade.toFixed(2)}
+        <strong>{c.letter}</strong>, {grade(c.grade)}
       </td>
       <td>{yesNo(c.same_grounds)}</td>
       <td>{yesNo(c.same_section)}</td>
@@ -235,10 +237,11 @@ export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
       <p className="muted">
         {setLabels[evaluation.eval_set]}
         {evaluation.tiny ? ", tiny" : ""}, {evaluation.n} claim agents at once,{" "}
-        {evaluation.model}. {runStates[evaluation.status]}.{" "}
-        {percent(evaluation.accuracy)} right, {misses} missed, cost of mistakes{" "}
-        {money(evaluation.cost_of_mistakes)}. Grade {grade(evaluation.grade)},
-        judge's cost {cost(evaluation.judge_cost)}.
+        {evaluation.model}, version {evaluation.version}.{" "}
+        {runStates[evaluation.status]}. {percent(evaluation.accuracy)} right,{" "}
+        {misses} missed, cost of mistakes {money(evaluation.cost_of_mistakes)}.
+        Grade {grade(evaluation.grade)}, judge's cost{" "}
+        {cost(evaluation.judge_cost)}.
       </p>
       <div className="panel table-wrap">
         <table>
@@ -260,7 +263,7 @@ export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
               <tr key={c.claim_id} className={c.right ? "" : "miss"}>
                 <td>
                   <a className="mono" href={`#/claims/${c.claim_id}`}>
-                    {c.claim_id}
+                    {c.copied_from}
                   </a>
                   <div>
                     <span className={`chip ${c.right ? "right" : "missed"}`}>

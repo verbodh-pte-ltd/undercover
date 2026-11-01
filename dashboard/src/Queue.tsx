@@ -125,17 +125,23 @@ function RunPanel({ run }: Readonly<{ run: Run }>) {
       {run.claims.length === 0 ? (
         <p className="muted">No claims started yet.</p>
       ) : (
-        <ol className="plain stack-sm">
-          {run.claims.map((worked) => (
-            <li key={worked.claim_id}>
-              <StatusChip status={worked.status} />{" "}
-              <a className="mono" href={`#/claims/${worked.claim_id}`}>
-                {worked.claim_id}
-              </a>{" "}
-              {worked.decision && label(worked.decision)}
-            </li>
-          ))}
-        </ol>
+        // Folded, so a big dispatch doesn't push the queue below the fold.
+        <details>
+          <summary className="quiet-link">
+            Show all {run.claims.length} claims
+          </summary>
+          <ol className="plain stack-sm">
+            {run.claims.map((worked) => (
+              <li key={worked.claim_id}>
+                <StatusChip status={worked.status} />{" "}
+                <a className="mono" href={`#/claims/${worked.claim_id}`}>
+                  {worked.claim_id}
+                </a>{" "}
+                {worked.decision && label(worked.decision)}
+              </li>
+            ))}
+          </ol>
+        </details>
       )}
     </div>
   );

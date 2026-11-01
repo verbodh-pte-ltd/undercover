@@ -8,7 +8,7 @@ import {
   type Settings as Loaded,
 } from "./api";
 import { Confirm } from "./Confirm";
-import { when } from "./format";
+import { money, when } from "./format";
 import { LoadFailed, PageHeader } from "./Page";
 import { applyTheme, savedTheme, type Theme } from "./theme";
 
@@ -107,7 +107,7 @@ function withDraft(values: SettingValues, draft: Record<string, string>) {
 }
 
 const withUnit = (f: Field, text: string) =>
-  f.unit === "$" ? `$${text}` : `${text} ${f.unit}`;
+  f.unit === "$" ? money(Number(text)) : `${text} ${f.unit}`;
 
 const THEMES: { value: Theme; label: string }[] = [
   { value: "light", label: "Light" },
@@ -176,23 +176,30 @@ function Input({
   readOnly: boolean;
   onChange: (key: string, text: string) => void;
 }>) {
+  const text = draft[f.key] ?? shown(values, f);
+  const dollars = f.unit === "$" && text !== "" && Number(text) >= 0;
   return (
     <span className="amount">
-      <span className="muted">{f.unit === "$" && "$"}</span>
       <input
         id={f.key}
         type="number"
-        className="mono num"
+        className={dollars ? "mono num dollars" : "mono num"}
         required
         min={0}
         max={f.max}
         step={f.key === "agents_at_once" ? 1 : "any"}
         disabled={readOnly}
-        value={draft[f.key] ?? shown(values, f)}
+        value={text}
         onChange={(event) => {
           onChange(f.key, event.target.value);
         }}
       />
+      {/* Dollars read as $1,000.00 over the input until it is focused to edit the number. */}
+      {dollars && (
+        <span className="money mono" aria-hidden="true">
+          {money(Number(text))}
+        </span>
+      )}
       <span className="muted">{f.unit !== "$" && f.unit}</span>
     </span>
   );
@@ -226,8 +233,8 @@ function ModelsAllowed({ models }: Readonly<{ models: AllowedModel[] }>) {
     <div className="panel stack-sm">
       <h2>Models allowed</h2>
       <p className="muted small">
-        The models the claim agent may use, set in data/models.json. Prices are
-        in dollars per million tokens.
+        The models the claim agent may use, set by IT. Prices are in dollars per
+        million tokens.
       </p>
       <div className="table-wrap">
         <table>
@@ -373,8 +380,8 @@ export function Settings({ handler }: Readonly<{ handler: Handler }>) {
               <thead>
                 <tr>
                   <th>Measure</th>
-                  <th className="num">Noise</th>
-                  <th className="num">Tolerance</th>
+                  <th>Noise</th>
+                  <th>Tolerance</th>
                 </tr>
               </thead>
               <tbody>
@@ -382,7 +389,7 @@ export function Settings({ handler }: Readonly<{ handler: Handler }>) {
                   <tr key={m.name}>
                     <td>{m.label}</td>
                     {[NOISE[i], TOLERANCE[i]].map((f) => (
-                      <td key={f.key} className="num">
+                      <td key={f.key} className="nowrap">
                         <label htmlFor={f.key} className="hidden">
                           {f.label}
                         </label>

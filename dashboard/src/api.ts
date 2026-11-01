@@ -137,6 +137,8 @@ export interface Measures {
 
 export interface EvaluationSummary extends Measures {
   run_id: number;
+  // The configuration version the evaluation ran on.
+  version: number;
   eval_set: EvalSet;
   tiny: boolean;
   n: number;

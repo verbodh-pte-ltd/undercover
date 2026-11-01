@@ -55,6 +55,20 @@ it("shows new steps as the agent works, without a reload", async () => {
   expect(screen.getByText("get_policy")).toBeDefined();
 });
 
+it("shows the story's date as a date and folds a tool's result to one line", async () => {
+  fakeBackend(
+    claimRoutes(claim, [
+      { id: 1, kind: "tool_result", text: '{"claim_id": "CLM-1001"}' },
+    ]),
+  );
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  expect(screen.getByText(/Rome, Italy, Jun 18, 2026/)).toBeDefined();
+  const result = screen.getByText('{"claim_id": "CLM-1001"}');
+  expect(result.tagName).toBe("SUMMARY");
+  expect(result.closest("details")?.open).toBe(false);
+});
+
 it("stops checking once the claim is decided", async () => {
   const routes = claimRoutes({ ...claim, status: "in_progress" });
   const fetchMock = fakeBackend(routes);

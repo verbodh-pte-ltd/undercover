@@ -494,10 +494,25 @@ def configuration(row: RowMapping, model: str, effort: str) -> dict[str, Any]:
 
 
 def changed_lines(old: str, new: str) -> list[str]:
-    """The lines that differ between two texts, as the lab shows them."""
-    lines = difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0)
-    # The first two lines name the files; each "@@" line says where a change is.
-    return [line for line in list(lines)[2:] if not line.startswith("@@")]
+    """The lines that differ between two texts, with two lines around each change."""
+    before, after = old.splitlines(), new.splitlines()
+    # Spacing is evened out first, so a line only indented again isn't a change.
+    matcher = difflib.SequenceMatcher(
+        None,
+        [" ".join(x.split()) for x in before],
+        [" ".join(x.split()) for x in after],
+    )
+    found: list[str] = []
+    for group in matcher.get_grouped_opcodes(2):
+        # "…" stands for the unchanged text skipped between two changes.
+        found += ["…"] if found else []
+        for tag, i1, i2, j1, j2 in group:
+            if tag == "equal":
+                found += [" " + line for line in after[j1:j2]]
+                continue
+            found += ["-" + line for line in before[i1:i2]]
+            found += ["+" + line for line in after[j1:j2]]
+    return found
 
 
 def average(values: list[float | None]) -> float | None:

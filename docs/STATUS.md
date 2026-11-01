@@ -6,7 +6,7 @@ The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`),
 from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, phase 3: the
 configuration in versions, phase 4: the judge, phase 5: rounds in the backend, phase 6: the
 improver, phase 7: the Improvement page and the look of the dashboard, and phase 8: the live runs and
-the documents (the designer's review of the screenshots is still to come). We use Postgres in Docker on this machine, not
+the documents, with the designer's review of the screenshots and its fixes. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -57,6 +57,22 @@ reseed, all driven through the dashboard in headless Chromium:
 - What the live checks spent, from the costs recorded in the database: $0.289 for the rounds' claim
   agents (9 evaluations, 225 claims), $0.032 for the dispatch, $0.005 for the improver (11 calls) and
   $0.007 for the judge (225 grades), $0.333 in all.
+
+A product designer reviewed screenshots of every page in light and dark mode against `docs/BRAND.md`.
+What changed for it, in the look only:
+
+- Diffs (versions, recipes and proposals) compare lines with their spacing evened out, so a line only
+  indented again isn't a change, and show two unchanged lines around each change with "…" between changes.
+- The Configuration page puts each version's reason on its own line under the version, and the changes
+  columns there and on the Improvement page have a "Changes" heading.
+- The Queue shows a dispatch's summary and sign-offs first, with its claims behind "Show all N claims".
+- Settings show dollars as $1,000.00 until an input is edited, line the noise and tolerance headings up
+  with their inputs, say the models are set by IT, and color the radio buttons Cerulean.
+- The Scoreboard has a Version column and the headings "Decision right" and "Decision and payout right";
+  an evaluation shows its version, names each copy by the claim it copies and its grades as "A, 2.07 of 3".
+- The Improvement page keeps dates on one line and reasons at one size; the claim page shows dates as
+  "Jun 27, 2026" and folds each tool result to one line that opens on a click; links in dark mode are a
+  lighter Cerulean, 5.6:1 on the page.
 
 ## The parts
 
@@ -277,5 +293,3 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The designer's review of the screenshots of every page (phase 8 of `docs/PLAN_IMPROVE.md`), and
-  the fixes it asks for.

@@ -9,6 +9,7 @@
   --marigold: #ffc145;
   --coral: #f78c6b;
   --cerulean: #118ab2;
+  --cerulean-text: #118ab2;
   --raspberry: #ef476f;
   --midnight: #073b4c;
   --sans: "Instrument Sans", system-ui, sans-serif;
@@ -25,6 +26,7 @@
   --muted: #8fa7ae;
   --line: #0b3340;
   --sea-green-text: #5cf0c4;
+  --cerulean-text: #2aa3cc;
   color-scheme: dark;
 }
 
@@ -36,6 +38,7 @@
     --muted: #8fa7ae;
     --line: #0b3340;
     --sea-green-text: #5cf0c4;
+    --cerulean-text: #2aa3cc;
     color-scheme: dark;
   }
 }
@@ -52,7 +55,16 @@ body {
 }
 
 a {
-  color: var(--cerulean);
+  color: var(--cerulean-text);
+}
+
+input[type="radio"],
+input[type="checkbox"] {
+  accent-color: var(--cerulean-text);
+}
+
+.nowrap {
+  white-space: nowrap;
 }
 
 h1,
@@ -441,8 +453,9 @@ tr.miss td {
 
 button.quiet {
   background: transparent;
-  color: var(--cerulean);
+  color: var(--cerulean-text);
   padding: 0;
+  white-space: nowrap;
 }
 
 .note {
@@ -480,10 +493,10 @@ textarea {
   max-width: 520px;
 }
 
-/* A slot for "$", the input, then a slot for the unit, so every input lines up. */
+/* The input, then a slot for the unit, so every input lines up. */
 .amount {
   display: inline-grid;
-  grid-template-columns: 1ch 9rem 5rem;
+  grid-template-columns: 9rem 5rem;
   gap: 6px;
   align-items: center;
   text-align: left;
@@ -491,6 +504,26 @@ textarea {
 
 .amount input {
   width: 100%;
+}
+
+/* Dollars show as money over their input, in the input's own cell, until it is focused. */
+.amount input,
+.amount .money {
+  grid-area: 1 / 1;
+}
+
+.amount .money {
+  justify-self: end;
+  padding-right: 13px;
+  pointer-events: none;
+}
+
+.amount input.dollars:not(:focus) {
+  color: transparent;
+}
+
+.amount input:focus + .money {
+  visibility: hidden;
 }
 
 .amount input:disabled {
@@ -588,6 +621,42 @@ legend {
 
 .diff .removed .diff-sign {
   color: var(--raspberry);
+}
+
+.diff .same,
+.diff .skipped {
+  color: var(--muted);
+}
+
+/* A version's reason sits on its own line under the version's row. */
+tbody tr.reason-row td {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/* A long tool result shows one line until it is opened. */
+.steps summary {
+  cursor: pointer;
+}
+
+.steps li {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+summary.quiet-link {
+  color: var(--cerulean-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+details[open] > summary.quiet-link {
+  margin-bottom: 10px;
+}
+
+.steps details:not([open]) summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Where a round has got to: done, now and still to do. */

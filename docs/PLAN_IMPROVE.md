@@ -226,7 +226,7 @@ With the real model, after one `npm run seed`, with `npm run dev` and local Supa
 - [x] Report how far version 1's two held-out runs differed on each measure, beside the noise and tolerance.
 - [x] A dispatch at N=25 on the current version. As Marcus, a payout waiting for sign-off can't be signed off
       and the settings can't be changed; as Dana, the same payout is signed off and paid.
-- [ ] Screenshots of every page in light and dark mode; a fresh subagent reviews them once as a senior
+- [x] Screenshots of every page in light and dark mode; a fresh subagent reviews them once as a senior
       product designer against `docs/BRAND.md` and point 8, and what it finds is fixed.
 - [x] What the live checks spent, under $1 on GPT-6 Luna.
 - [x] `docs/SPEC.md`, `docs/TECH_STACK.md`, `docs/PROCESS.md`, `docs/CODE_STANDARDS.md` (rules 7 and 13 for the

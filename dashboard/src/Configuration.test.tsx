@@ -38,7 +38,13 @@ const second: ConfigVersion = {
     runs: 2,
   },
   before: { model: "openai/gpt-6-luna", effort: "low" },
-  changed_lines: ["-Read the wording.", "+Read the manual too."],
+  changed_lines: [
+    "-Read the wording.",
+    "+Read the manual too.",
+    " Decide the claim.",
+    "…",
+    "+Say why.",
+  ],
 };
 
 const third: ConfigVersion = {
@@ -67,7 +73,11 @@ it("shows the current version and every version with its held-out scores", async
   render(<Configuration />);
   expect(await screen.findByText("Current version: version 2")).toBeDefined();
   expect(screen.getByText(/Read the manual too\./)).toBeDefined();
-  const rows = screen.getAllByRole("row").slice(1);
+  // Each version's row, then its reason on a line of its own.
+  const all = screen.getAllByRole("row").slice(1);
+  const rows = all.filter((_, i) => i % 2 === 0);
+  expect(all[1].className).toBe("reason-row");
+  expect(all[1].textContent).toBe(third.reason);
   expect(rows.map((r) => r.querySelector(".chip")?.textContent)).toEqual([
     "Rolled back",
     "Current",
@@ -98,6 +108,11 @@ it("opens what a version changed from the one before", async () => {
   );
   expect(lines.querySelector(".added")?.textContent).toContain(
     "Read the manual too.",
+  );
+  // An unchanged line beside a change, then a mark for the text skipped.
+  expect(lines.querySelector(".same")?.textContent).toBe("Decide the claim.");
+  expect(lines.querySelector(".skipped")?.textContent).toContain(
+    "Unchanged text skipped",
   );
   fireEvent.click(screen.getByRole("button", { name: "Changes in version 3" }));
   expect(
