@@ -134,20 +134,20 @@ The claim agent runs on a version of its configuration, and the Configuration pa
 
 Each claim in an evaluation is graded against the handler's reason, in the backend.
 
-- [ ] Seeding stores `reason` and `reference` in `answer_key` from `data/evals/`.
-- [ ] `backend/judge.py` calls `typesafe/jev-1.13` once through the `openrouter` package's
+- [x] Seeding stores `reason` and `reference` in `answer_key` from `data/evals/`.
+- [x] `backend/judge.py` calls `typesafe/jev-1.13` once through the `openrouter` package's
       `alpha.decisions.create`, with the lab's three questions, `server_url` read once from the environment,
       a 10-second timeout and retries off. The letter is the most likely level, never the score rounded.
-- [ ] `finish_run` grades an evaluation's claims in parallel and stays under 20 seconds with a stub judge
+- [x] `finish_run` grades an evaluation's claims in parallel and stays under 20 seconds with a stub judge
       that sleeps. A claim the agent didn't decide gets an F without a call; a claim the judge can't grade is
       not graded and left out of the average. Tests for each.
-- [ ] The judge's cost is recorded with the evaluation, apart from the claim agent's cost.
-- [ ] With `MODEL_NAME` set, the judge isn't called and every claim shows as not graded.
-- [ ] The Scoreboard adds the average grade; an evaluation's page shows each claim's grade, its letter and
+- [x] The judge's cost is recorded with the evaluation, apart from the claim agent's cost.
+- [x] With `MODEL_NAME` set, the judge isn't called and every claim shows as not graded.
+- [x] The Scoreboard adds the average grade; an evaluation's page shows each claim's grade, its letter and
       the two checks as yes or no.
-- [ ] Tests never call the judge: unit tests stub `judge.grade`, and the end-to-end tests point the address
+- [x] Tests never call the judge: unit tests stub `judge.grade`, and the end-to-end tests point the address
       at `e2e/judge-stand-in.mjs`.
-- [ ] `npm run check` is green.
+- [x] `npm run check` is green.
 
 ## Phase 5: Rounds in the backend: the rule, the scores and the spending
 

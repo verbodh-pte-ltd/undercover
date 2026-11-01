@@ -135,6 +135,8 @@ answer_key = Table(
     Column("decision", String, nullable=False),
     Column("payout", Float, nullable=False),
     Column("tiny", Boolean, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("reference", Text, nullable=False),
 )
 held_out_claims = Table(
     "held_out_claims",
@@ -192,6 +194,19 @@ recipes = Table(
     Column("proposed_by", String, nullable=False),
     Column("approved_by", String, nullable=False),
     Column("approved_at", String, nullable=False),
+)
+# The judge's grade of each evaluation claim's explanation. A claim the judge couldn't
+# grade has no row. The two checks are Jev's probabilities.
+grades = Table(
+    "grades",
+    metadata,
+    Column("claim_id", String, primary_key=True),
+    Column("run_id", Integer, nullable=False),
+    Column("grade", Float, nullable=False),
+    Column("letter", String, nullable=False),
+    Column("same_grounds", Float, nullable=False),
+    Column("same_section", Float, nullable=False),
+    Column("judge_cost", Float, nullable=False),
 )
 EVAL_SETS = {
     "evaluation": ("claims.json", "evals/decisions.json"),
@@ -289,6 +304,8 @@ def seed(conn: Connection) -> None:
                     "decision": d["decision"],
                     "payout": d["payout"],
                     "tiny": d["tiny"],
+                    "reason": d["reason"],
+                    "reference": d["reference"],
                 }
                 for d in load(decisions)
             ],

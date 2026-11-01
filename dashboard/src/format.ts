@@ -35,6 +35,14 @@ export const cost = (amount: number) => costs.format(amount);
 export const seconds = (value: number | null) =>
   value === null ? "Not finished" : `${value.toFixed(1)} s`;
 
+// The judge's grade runs from 0 (F) to 3 (A).
+export const grade = (value: number | null) =>
+  value === null ? "Not graded" : `${value.toFixed(2)} of 3`;
+
+// The judge's checks are probabilities, shown as yes or no.
+export const yesNo = (probability: number) =>
+  probability >= 0.5 ? "Yes" : "No";
+
 export const percent = (share: number) => `${String(Math.round(share * 100))}%`;
 
 const documentLabels: Record<string, string> = {

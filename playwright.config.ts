@@ -2,9 +2,10 @@ import { defineConfig } from "@playwright/test";
 
 // The end-to-end tests run their own backend and dashboard on their own ports and database,
 // so they never change the data behind `npm run dev`. A stand-in on port 8003 takes the agent
-// service's calls, so they never reach the agent that `npm run dev` starts, and one on port 8004
-// takes Supabase Auth's.
+// service's calls, so they never reach the agent that `npm run dev` starts, one on port 8004
+// takes Supabase Auth's, and one on port 8005 takes the judge's.
 const AUTH = "http://127.0.0.1:8004";
+const JUDGE = "http://127.0.0.1:8005";
 
 export default defineConfig({
   testDir: "e2e",
@@ -25,6 +26,11 @@ export default defineConfig({
       reuseExistingServer: true,
     },
     {
+      command: "node e2e/judge-stand-in.mjs",
+      url: `${JUDGE}/health`,
+      reuseExistingServer: true,
+    },
+    {
       command:
         `node -e "require('fs').rmSync('e2e/e2e.db', { force: true })"` +
         " && uv run -m uvicorn backend.main:app --port 8001",
@@ -35,6 +41,10 @@ export default defineConfig({
         DATABASE_URL: "",
         UNDERCOVER_AGENT: "http://127.0.0.1:8003",
         VITE_SUPABASE_URL: AUTH,
+        JUDGE_URL: JUDGE,
+        OPENROUTER_API_KEY: "e2e-key",
+        // The judge is called only off the free models.
+        MODEL_NAME: "",
       },
       reuseExistingServer: true,
     },

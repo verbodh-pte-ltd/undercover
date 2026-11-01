@@ -45,6 +45,13 @@ it("lists the evaluations with every measure", async () => {
   expect(screen.getByText("8.3 s")).toBeDefined();
   expect(screen.getByText("10.5 s")).toBeDefined();
   expect(screen.getByText("Effort low")).toBeDefined();
+  expect(screen.getByText("2.60 of 3")).toBeDefined();
+});
+
+it("shows an evaluation with no graded claims as not graded", async () => {
+  fakeBackend({ "/api/evaluations": [{ ...listed, grade: null }] });
+  render(<App />);
+  expect(await screen.findByText("Not graded")).toBeDefined();
 });
 
 it("says when there are no evaluations yet", async () => {
@@ -89,6 +96,27 @@ it("shows an evaluation's claims beside the handlers', with misses marked", asyn
   expect(screen.getByText("Right")).toBeDefined();
   expect(
     screen.getByText(/1 missed, cost of mistakes \$1,500\.00/),
+  ).toBeDefined();
+});
+
+it("shows each claim's grade, its letter and the two checks as yes or no", async () => {
+  fakeBackend({ "/api/evaluations/7": evaluation });
+  window.location.hash = "#/scoreboard/7";
+  render(<App />);
+  const graded = (
+    await screen.findByRole("link", { name: "E7-CLM-1101" })
+  ).closest("tr");
+  const cells = [...(graded?.querySelectorAll("td") ?? [])].map(
+    (td) => td.textContent,
+  );
+  expect(cells).toContain("A 2.60");
+  expect(cells.slice(-5, -2)).toEqual(["A 2.60", "Yes", "No"]);
+  const ungraded = screen
+    .getByRole("link", { name: "E7-CLM-1102" })
+    .closest("tr");
+  expect(ungraded?.textContent).toContain("Not graded");
+  expect(
+    screen.getByText(/Grade 2\.60 of 3, judge's cost \$0\.0008\./),
   ).toBeDefined();
 });
 

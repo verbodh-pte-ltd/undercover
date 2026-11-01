@@ -47,9 +47,17 @@ test("the scoreboard shows an evaluation played out through the API", async ({
   await expect(row).toBeVisible();
   await expect(row.getByText("Held-out set")).toBeVisible();
   await expect(row.getByText("Tiny")).toBeVisible();
+  // e2e/judge-stand-in.mjs grades every claim 2.2, most likely a B.
+  await expect(row.getByText("2.20 of 3")).toBeVisible();
 
   await row.getByRole("link", { name: `Evaluation ${run}` }).click();
   await expect(page.locator("tbody tr")).toHaveCount(5);
+  const first = page.getByRole("row", { name: new RegExp(copies[0]) });
+  await expect(first.getByRole("cell", { name: "B 2.20" })).toBeVisible();
+  await expect(first.getByRole("cell", { name: "Yes" })).toBeVisible();
+  await expect(
+    first.getByRole("cell", { name: "No", exact: true }),
+  ).toBeVisible();
   await page.getByRole("link", { name: copies[0] }).click();
   await expect(
     page.getByText(new RegExp(`A copy of .* for evaluation ${run}`)),

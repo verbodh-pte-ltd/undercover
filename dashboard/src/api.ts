@@ -127,6 +127,9 @@ export interface Measures {
   accuracy: number;
   cost_of_mistakes: number;
   straight_through: number;
+  // The judge's average grade, 0 (F) to 3 (A); null when no claim was graded.
+  grade: number | null;
+  judge_cost: number;
   cost_per_claim: number;
   seconds_per_claim: number;
   run_seconds: number | null;
@@ -157,6 +160,12 @@ export interface EvaluationClaim {
   mistake_cost: number;
   cost: number;
   seconds: number;
+  // The judge's grade, its letter and its two checks as probabilities; null when not graded.
+  grade: number | null;
+  letter: "F" | "C" | "B" | "A" | null;
+  same_grounds: number | null;
+  same_section: number | null;
+  judge_cost: number;
 }
 
 export interface Evaluation extends EvaluationSummary {
@@ -166,6 +175,7 @@ export interface Evaluation extends EvaluationSummary {
 // A version's averages over the whole held-out evaluations that rounds ran on it.
 export interface VersionScores {
   accuracy: number;
+  grade: number | null;
   cost_per_claim: number;
   seconds_per_claim: number;
   runs: number;

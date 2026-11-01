@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listVersions, type ConfigVersion } from "./api";
 import { Diff } from "./Diff";
-import { cost, percent, seconds, when } from "./format";
+import { cost, grade, percent, seconds, when } from "./format";
 
 function status(v: ConfigVersion) {
   if (v.current) return { name: "current", text: "Current" };
@@ -14,13 +14,14 @@ function status(v: ConfigVersion) {
 function Scores({ v }: Readonly<{ v: ConfigVersion }>) {
   if (!v.held_out)
     return (
-      <td colSpan={3} className="num muted">
+      <td colSpan={4} className="num muted">
         Not scored yet
       </td>
     );
   return (
     <>
       <td className="num mono">{percent(v.held_out.accuracy)}</td>
+      <td className="num mono">{grade(v.held_out.grade)}</td>
       <td className="num mono">{cost(v.held_out.cost_per_claim)}</td>
       <td className="num mono">{seconds(v.held_out.seconds_per_claim)}</td>
     </>
@@ -130,6 +131,7 @@ export function Configuration() {
                 <th>Proposed by</th>
                 <th>Approved</th>
                 <th className="num">Held-out accuracy</th>
+                <th className="num">Grade</th>
                 <th className="num">Cost per claim</th>
                 <th className="num">Time per claim</th>
                 <th>

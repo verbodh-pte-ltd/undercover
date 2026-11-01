@@ -181,10 +181,12 @@ def test_scores_average_only_whole_held_out_evaluations_that_rounds_ran():
             client.post(f"/api/claims/{copy_id}/model-calls", json=used)
         finished_in_a_round(run_id)
     scores = client.get("/api/configuration/versions").json()[0]["held_out"]
-    # Two runs count: 25 claims each, none decided, $2.50 and $5.00 between them.
+    # Two runs count: 25 claims each, none decided, so each an F, and $2.50 and $5.00
+    # between them.
     accuracy = client.get(f"/api/evaluations/{counted[0]}").json()["accuracy"]
     assert scores == {
         "accuracy": accuracy,
+        "grade": 0.0,
         "cost_per_claim": (0.1 + 0.2) / 2,
         "seconds_per_claim": 0.0,
         "runs": 2,

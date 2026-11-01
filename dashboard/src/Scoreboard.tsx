@@ -5,9 +5,10 @@ import {
   startEvaluation,
   type EvalSet,
   type Evaluation,
+  type EvaluationClaim,
   type EvaluationSummary,
 } from "./api";
-import { cost, label, money, percent, seconds } from "./format";
+import { cost, grade, label, money, percent, seconds, yesNo } from "./format";
 import { AgentPicker } from "./Queue";
 
 const SCOREBOARD_POLL_MS = 5000;
@@ -115,6 +116,7 @@ export function Scoreboard() {
                 <th className="num">Right</th>
                 <th className="num">Cost of mistakes</th>
                 <th className="num">Straight through</th>
+                <th className="num">Grade</th>
                 <th className="num">Model cost per claim</th>
                 <th className="num">Time per claim</th>
                 <th className="num">Run time</th>
@@ -142,6 +144,7 @@ export function Scoreboard() {
                   <td className="num mono">{percent(e.accuracy)}</td>
                   <td className="num mono">{money(e.cost_of_mistakes)}</td>
                   <td className="num mono">{percent(e.straight_through)}</td>
+                  <td className="num mono">{grade(e.grade)}</td>
                   <td className="num mono">{cost(e.cost_per_claim)}</td>
                   <td className="num mono">{seconds(e.seconds_per_claim)}</td>
                   <td className="num mono">{seconds(e.run_seconds)}</td>
@@ -152,6 +155,24 @@ export function Scoreboard() {
         </div>
       )}
     </section>
+  );
+}
+
+function JudgeCells({ c }: Readonly<{ c: EvaluationClaim }>) {
+  if (c.grade === null || c.same_grounds === null || c.same_section === null)
+    return (
+      <td colSpan={3} className="num muted">
+        Not graded
+      </td>
+    );
+  return (
+    <>
+      <td className="num mono">
+        <strong>{c.letter}</strong> {c.grade.toFixed(2)}
+      </td>
+      <td>{yesNo(c.same_grounds)}</td>
+      <td>{yesNo(c.same_section)}</td>
+    </>
   );
 }
 
@@ -174,7 +195,8 @@ export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
         {evaluation.tiny ? ", tiny" : ""}, {evaluation.n} claim agents at once,{" "}
         {evaluation.model}. {runStates[evaluation.status]}.{" "}
         {percent(evaluation.accuracy)} right, {misses} missed, cost of mistakes{" "}
-        {money(evaluation.cost_of_mistakes)}.
+        {money(evaluation.cost_of_mistakes)}. Grade {grade(evaluation.grade)},
+        judge's cost {cost(evaluation.judge_cost)}.
       </p>
       <div className="panel table-wrap">
         <table>
@@ -184,6 +206,9 @@ export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
               <th>Handler</th>
               <th>Agent</th>
               <th className="num">Cost of the mistake</th>
+              <th className="num">Grade</th>
+              <th>Same grounds</th>
+              <th>Same section</th>
               <th className="num">Model cost</th>
               <th className="num">Time</th>
             </tr>
@@ -208,6 +233,7 @@ export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
                   <span className="mono">{money(c.agent_payout)}</span>
                 </td>
                 <td className="num mono">{money(c.mistake_cost)}</td>
+                <JudgeCells c={c} />
                 <td className="num mono">{cost(c.cost)}</td>
                 <td className="num mono">{seconds(c.seconds)}</td>
               </tr>

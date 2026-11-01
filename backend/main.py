@@ -4,6 +4,7 @@ import difflib
 import json
 import os
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -22,12 +23,13 @@ from sqlalchemy import (
     update,
 )
 
-from backend import agent_service, auth, payout, store
+from backend import agent_service, auth, judge, payout, store
 from backend.store import (
     answer_key,
     claims,
     config_versions,
     customers,
+    grades,
     handlers,
     held_out_claims,
     model_calls,
@@ -133,7 +135,17 @@ class Settings(BaseModel):
 
 MAX_ATTEMPTS = 2
 # The held-out measures a version's scores average.
-SCORED = ["accuracy", "cost_per_claim", "seconds_per_claim"]
+SCORED = ["accuracy", "grade", "cost_per_claim", "seconds_per_claim"]
+# What the judge records on a claim; None on a claim it couldn't grade.
+JUDGED = ["grade", "letter", "same_grounds", "same_section"]
+# A claim the agent didn't decide gets an F without asking the judge.
+UNDECIDED = {
+    "grade": 0.0,
+    "letter": "F",
+    "same_grounds": 0.0,
+    "same_section": 0.0,
+    "judge_cost": 0.0,
+}
 
 
 def get_db() -> Iterator[Connection]:
@@ -402,6 +414,8 @@ def mistake_cost(
 def evaluation_view(db: Connection, row: RowMapping) -> dict[str, Any]:
     """An evaluation's claims beside the handlers' decisions, with its measures."""
     run_id = row["run_id"]
+    judged = db.execute(select(grades).where(grades.c.run_id == run_id)).mappings()
+    graded = {g["claim_id"]: g for g in judged}
     copies = db.execute(
         select(claims).where(claims.c.run_id == run_id).order_by(claims.c.position)
     ).mappings()
@@ -417,6 +431,7 @@ def evaluation_view(db: Connection, row: RowMapping) -> dict[str, Any]:
         # A claim the agent didn't decide counts as a referral.
         agent = copy["decision"] or "refer"
         payout_ = copy["payout"] or 0.0
+        grade = graded.get(copy["claim_id"])
         rows.append(
             {
                 "claim_id": copy["claim_id"],
@@ -433,14 +448,20 @@ def evaluation_view(db: Connection, row: RowMapping) -> dict[str, Any]:
                     agent, payout_, key["decision"], key["payout"]
                 ),
                 **claim_totals(db, copy["claim_id"], run_id),
+                **{k: grade and grade[k] for k in JUDGED},
+                "judge_cost": grade["judge_cost"] if grade else 0.0,
             }
         )
     count = len(rows) or 1
+    known = [r["grade"] for r in rows if r["grade"] is not None]
     measures = {
         "decision_accuracy": sum(r["decision_right"] for r in rows) / count,
         "accuracy": sum(r["right"] for r in rows) / count,
         "cost_of_mistakes": sum(r["mistake_cost"] for r in rows),
         "straight_through": sum(r["agent"] != "refer" for r in rows) / count,
+        # A run with no graded claims has no grade.
+        "grade": sum(known) / len(known) if known else None,
+        "judge_cost": sum(r["judge_cost"] for r in rows),
         "cost_per_claim": sum(r["cost"] for r in rows) / count,
         "seconds_per_claim": sum(r["seconds"] for r in rows) / count,
         "run_seconds": run_seconds(row),
@@ -473,7 +494,13 @@ def changed_lines(old: str, new: str) -> list[str]:
     return [line for line in list(lines)[2:] if not line.startswith("@@")]
 
 
-def version_scores(db: Connection, version: int) -> dict[str, float] | None:
+def average(values: list[float | None]) -> float | None:
+    """The average of the values that are known, or None if none is."""
+    known = [v for v in values if v is not None]
+    return sum(known) / len(known) if known else None
+
+
+def version_scores(db: Connection, version: int) -> dict[str, Any] | None:
     """A version's held-out scores: the averages of the whole-set runs rounds made."""
     query = select(runs).where(
         runs.c.kind == "evaluation",
@@ -486,8 +513,59 @@ def version_scores(db: Connection, version: int) -> dict[str, float] | None:
     views = [evaluation_view(db, r) for r in db.execute(query).mappings()]
     if not views:
         return None
-    averages = {m: sum(v[m] for v in views) / len(views) for m in SCORED}
+    averages = {m: average([v[m] for v in views]) for m in SCORED}
     return {**averages, "runs": len(views)}
+
+
+def grade_claim(row: RowMapping) -> dict[str, Any] | None:
+    """The judge's grade of one evaluation claim, or None if it couldn't grade it."""
+    if row["decision"] is None:
+        return UNDECIDED
+    return judge.grade(
+        {
+            "decision": row["handler_decision"],
+            "reason": row["handler_reason"],
+            "reference": row["reference"],
+        },
+        {
+            "decision": row["decision"],
+            "rationale": row["reason"],
+            "section": row["policy_section"],
+        },
+    )
+
+
+def grade_claims(db: Connection, run_id: int) -> None:
+    """Have the judge grade an evaluation's claims in parallel, those not yet graded."""
+    # On a free model the judge isn't called, so every claim shows as not graded.
+    if os.getenv("MODEL_NAME"):
+        return
+    query = (
+        select(
+            claims,
+            answer_key.c.decision.label("handler_decision"),
+            answer_key.c.reason.label("handler_reason"),
+            answer_key.c.reference,
+        )
+        .join(answer_key, answer_key.c.claim_id == claims.c.copied_from)
+        .where(
+            claims.c.run_id == run_id,
+            claims.c.claim_id.not_in(select(grades.c.claim_id)),
+        )
+    )
+    rows = db.execute(query).mappings().all()
+    # End the read, so no lock is held while the judge works.
+    db.rollback()
+    with ThreadPoolExecutor(max_workers=max(len(rows), 1)) as pool:
+        found = list(pool.map(grade_claim, rows))
+    graded = [
+        {"claim_id": r["claim_id"], "run_id": run_id, **g}
+        for r, g in zip(rows, found, strict=True)
+        if g is not None
+    ]
+    if graded:
+        db.execute(insert(grades), graded)
+        db.commit()
 
 
 def set_claim(db: Connection, claim_id: str, **values: Any) -> None:
@@ -760,7 +838,9 @@ def list_run_claims(run_id: int, db: Db) -> list[str]:
 
 @app.post("/api/runs/{run_id}/finish", operation_id="finish_run")
 def finish_run(run_id: int, db: Db) -> dict[str, Any]:
-    """Mark a dispatch or evaluation finished."""
+    """Mark a run finished, the judge grading an evaluation's claims first."""
+    if run_row(db, run_id)["kind"] == "evaluation":
+        grade_claims(db, run_id)
     run_row(db, run_id, lock=True)
     query = update(runs).where(runs.c.run_id == run_id)
     db.execute(query.values(status="finished", finished_at=store.now()))

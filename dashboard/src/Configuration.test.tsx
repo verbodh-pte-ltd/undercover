@@ -32,6 +32,7 @@ const second: ConfigVersion = {
   current: true,
   held_out: {
     accuracy: 0.84,
+    grade: 2.25,
     cost_per_claim: 0.0012,
     seconds_per_claim: 12.4,
     runs: 2,
@@ -73,6 +74,7 @@ it("shows the current version and every version with its held-out scores", async
     "Kept",
   ]);
   expect(rows[1].textContent).toContain("84%");
+  expect(rows[1].textContent).toContain("2.25 of 3");
   expect(rows[1].textContent).toContain("$0.0012");
   expect(rows[1].textContent).toContain("12.4 s");
   expect(rows[2].textContent).toContain("Not scored yet");

@@ -1,6 +1,6 @@
 import pytest
 
-from backend import auth
+from backend import auth, judge
 from backend.tests import signing
 
 FROM_DOT_ENV = ["DATABASE_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"]
@@ -14,6 +14,12 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setenv("UNDERCOVER_AGENT", "http://127.0.0.1:9")
     for name in FROM_DOT_ENV:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_judge(monkeypatch):
+    """Never call the judge: every claim is left not graded unless a test says."""
+    monkeypatch.setattr(judge, "grade", lambda handler, agent: None)
 
 
 @pytest.fixture(autouse=True)

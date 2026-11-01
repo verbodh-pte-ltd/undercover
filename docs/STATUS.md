@@ -3,8 +3,8 @@
 The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`), durable state
 (`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
 (`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
-from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, and phase 3: the
-configuration in versions. We use Postgres in Docker on this machine, not
+from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, phase 3: the
+configuration in versions, and phase 4: the judge. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -34,8 +34,8 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   `UNDERCOVER_DB`), as the tests do. `backend/store.py` seeds the database from `data/` on first start:
   the 25 claims, the policies, the customers, the held-out claims, the handlers from
   `data/handlers.json` (with their emails, and whether each can sign off over the limit; only Dana
-  Whitfield can), the handlers' decisions on both labelled sets in `answer_key`, which no claim
-  operation reads, and version 1 of the claim agent's configuration and of the improver's recipe. `npm run seed` rebuilds every table,
+  Whitfield can), the handlers' decisions on both labelled sets in `answer_key`, with each
+  handler's reason and reference from `data/evals/`, which no claim operation reads, and version 1 of the claim agent's configuration and of the improver's recipe. `npm run seed` rebuilds every table,
   empties the agent's saved threads and seeds again, so it empties the scoreboard too.
   - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
     wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
@@ -66,6 +66,18 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     Nobody signs off a copy. `list_evaluations` and `get_evaluation` score each one against
     `answer_key`: decision accuracy, accuracy (the payout within a dollar), the cost of mistakes, the
     straight-through rate, model cost and time per claim, and the time for the run.
+  - The judge (`backend/judge.py`) grades each claim of an evaluation as `finish_run` finishes it:
+    Jev (`typesafe/jev-1.13`) through OpenRouter's Decisions endpoint, with the lab's rubric and three
+    questions, comparing the agent's decision, reason and section with the handler's decision, reason
+    and reference. The calls run in parallel, each with a 10-second timeout and the SDK's retries off,
+    at the address in `JUDGE_URL` (`https://openrouter.ai` if unset), read once. Each claim gets a
+    grade from 0 to 3 (Jev's score), a letter F, C, B or A (the most likely level, never the score
+    rounded) and the two checks, same grounds and same section, kept as probabilities in `grades`
+    with the judge's cost. A claim the agent didn't decide gets an F without a call; a claim the judge
+    couldn't grade has no grade and is left out of the average. An evaluation's grade is the average
+    (none if no claim was graded) and its `judge_cost` is kept apart from the claim agent's cost. With
+    `MODEL_NAME` set the judge isn't called and every claim shows as not graded. A version's held-out
+    scores include the grade.
   - A claim that fails before its decision goes back to `waiting`; after two failures it is
     `needs_handler`. A claim stopped `in_progress` stays there for the next dispatch.
   - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py`.
@@ -113,8 +125,9 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     "Start dispatch" button, and the latest dispatch: its claims and where each stands, its model cost
     and time, and its summary once it has finished.
   - The Scoreboard (`#/scoreboard`) starts an evaluation (set, whole or tiny, N) and lists evaluations
-    newest first with every measure. `#/scoreboard/<run_id>` shows its claims beside the handlers',
-    with the misses marked and each claim linked to its page.
+    newest first with every measure, the average grade among them. `#/scoreboard/<run_id>` shows its
+    claims beside the handlers', with the misses marked, each claim's grade and letter and the two
+    checks as yes or no, the judge's cost, and each claim linked to its page.
   - Each claim (`#/claims/CLM-1001`) shows its decision, reasons, the agent's steps, the sections it
     read, the policy and earlier claims. A claim waiting for sign-off has a "Sign off" button, except on
     an evaluation's copy; a handler who can't sign off over the limit sees a note saying so instead.
@@ -131,7 +144,8 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   their own SQLite database, `e2e/e2e.db`, deleted at the start of each run. A stand-in for the agent's
   service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls with their bodies. A
   stand-in for Supabase Auth on :8004 (`e2e/auth-stand-in.mjs`) signs tokens with its own key,
-  serves its public key and answers CORS preflights; every spec signs in first.
+  serves its public key and answers CORS preflights; every spec signs in first. A stand-in for the
+  judge's endpoint on :8005 (`e2e/judge-stand-in.mjs`) gives every claim a B at 2.2.
 
 ## Run it
 
@@ -166,6 +180,6 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The rest of `docs/PLAN_IMPROVE.md`: the judge, the rounds and the improver. Nothing reads the
+- The rest of `docs/PLAN_IMPROVE.md`: the rounds and the improver. Nothing reads the
   improvement settings or the recipe yet, and nothing makes a version after the first; the
   improver will.
