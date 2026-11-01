@@ -16,9 +16,9 @@ export function SignOff({
   if (!handler.can_approve_over_limit) {
     return (
       <p className="note">
-        This payout is over $1,000, so it waits for a handler's sign-off. You
-        can't sign off payouts over the approval limit, so ask a handler who can
-        to sign it off.
+        This payout is over the approval limit, so it waits for a handler's
+        sign-off. You can't sign off payouts over the approval limit, so ask a
+        handler who can to sign it off.
       </p>
     );
   }
@@ -33,8 +33,8 @@ export function SignOff({
       }}
     >
       <p>
-        This payout is over $1,000, so it waits for a handler's sign-off. The
-        agent pays it once you sign off.
+        This payout is over the approval limit, so it waits for a handler's
+        sign-off. The agent pays it once you sign off.
       </p>
       <button type="submit">Sign off {money(claim.payout ?? 0)}</button>
       {refused && (

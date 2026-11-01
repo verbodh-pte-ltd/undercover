@@ -1,6 +1,7 @@
 """The UnderCover backend."""
 
 import json
+import os
 from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,8 @@ from backend.store import (
     policies,
     run_claims,
     runs,
+    setting_changes,
+    settings,
     steps,
     work_times,
 )
@@ -106,6 +109,27 @@ class PayoutQuestion(BaseModel):
     paid_by_others: float = Field(ge=0)
 
 
+class Measures(BaseModel):
+    accuracy: float = Field(ge=0, le=1)
+    grade: float = Field(ge=0, le=3)
+    cost_per_claim: float = Field(ge=0)
+    seconds_per_claim: float = Field(ge=0)
+
+
+class Objectives(BaseModel):
+    accuracy: float = Field(ge=0, le=1)
+    grade: float = Field(ge=0, le=3)
+
+
+class Settings(BaseModel):
+    approval_limit: float = Field(gt=0)
+    objectives: Objectives
+    noise: Measures
+    tolerance: Measures
+    round_spending_limit: float = Field(gt=0)
+    agents_at_once: int = Field(ge=1, le=25)
+
+
 MAX_ATTEMPTS = 2
 
 
@@ -138,6 +162,46 @@ def signed_in_handler(
 
 
 Handler = Annotated[RowMapping, Depends(signed_in_handler)]
+
+
+def setting(db: Connection, name: str) -> Any:
+    """One of the platform's settings."""
+    query = select(settings.c.value).where(settings.c.name == name)
+    return json.loads(db.execute(query).scalar_one())
+
+
+def models_allowed() -> list[dict[str, Any]]:
+    """The models the claim agent may use: MODEL_NAME alone, free, if it is set."""
+    free = os.getenv("MODEL_NAME")
+    if free:
+        return [
+            {
+                "model": free,
+                "reasoning_efforts": ["default"],
+                "input_price": 0.0,
+                "output_price": 0.0,
+            }
+        ]
+    return store.load("models.json")
+
+
+def settings_view(db: Connection) -> dict[str, Any]:
+    """The settings, the models allowed, and who last changed each setting and when."""
+    values = {r.name: json.loads(r.value) for r in db.execute(select(settings))}
+    query = (
+        select(setting_changes, handlers.c.name.label("handler"))
+        .join(handlers, handlers.c.handler_id == setting_changes.c.handler_id)
+        .order_by(setting_changes.c.id)
+    )
+    changes = {
+        r["name"]: {"handler": r["handler"], "changed_at": r["changed_at"]}
+        for r in db.execute(query).mappings()
+    }
+    return {
+        "settings": Settings(**values).model_dump(),
+        "models_allowed": models_allowed(),
+        "changes": changes,
+    }
 
 
 def claim_row(db: Connection, claim_id: str, lock: bool = False) -> RowMapping:
@@ -499,7 +563,11 @@ def work_out_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
     """Work out the payout on an approved claim with UnderCover's payout rules."""
     policy = record(db, "policies", question.policy_id)
     return payout.work_out_payout(
-        policy, question.benefit, question.lines, question.paid_by_others
+        policy,
+        question.benefit,
+        question.lines,
+        question.paid_by_others,
+        setting(db, "approval_limit"),
     )
 
 
@@ -513,16 +581,49 @@ def get_instructions() -> dict[str, str]:
 
 
 @app.get("/api/handlers", operation_id="list_handlers")
-def list_handlers(db: Db) -> list[dict[str, Any]]:
-    """List the claims handlers."""
+def list_handlers(_: Handler, db: Db) -> list[dict[str, Any]]:
+    """List the claims handlers, without their email addresses."""
     query = select(handlers).order_by(handlers.c.handler_id)
-    return [dict(r) for r in db.execute(query).mappings()]
+    keep = ["handler_id", "name", "role", "can_approve_over_limit"]
+    return [{k: r[k] for k in keep} for r in db.execute(query).mappings()]
 
 
 @app.get("/api/handlers/me", operation_id="get_signed_in_handler")
 def get_signed_in_handler(handler: Handler) -> dict[str, Any]:
     """Get the handler who is signed in."""
     return dict(handler)
+
+
+@app.get("/api/settings", operation_id="get_settings")
+def get_settings(db: Db) -> dict[str, Any]:
+    """Get the platform's settings, the models allowed and who last changed each."""
+    return settings_view(db)
+
+
+@app.put("/api/settings", operation_id="change_settings")
+def change_settings(changed: Settings, handler: Handler, db: Db) -> dict[str, Any]:
+    """Change the platform's settings, as a handler who can sign off over the limit."""
+    if not handler["can_approve_over_limit"]:
+        raise HTTPException(
+            403,
+            f"{handler['name']} can't change the settings. Only a handler who can"
+            " sign off payouts over the approval limit can",
+        )
+    for name, value in changed.model_dump().items():
+        if setting(db, name) == value:
+            continue
+        text = json.dumps(value)
+        db.execute(update(settings).where(settings.c.name == name).values(value=text))
+        db.execute(
+            insert(setting_changes).values(
+                name=name,
+                value=text,
+                handler_id=handler["handler_id"],
+                changed_at=store.now(),
+            )
+        )
+    db.commit()
+    return settings_view(db)
 
 
 @app.post("/api/dispatches", operation_id="start_dispatch")
@@ -703,16 +804,18 @@ def record_decision(claim_id: str, decision: Decision, db: Db) -> dict[str, Any]
         raise HTTPException(409, f"Claim {claim_id} is not waiting or in progress")
     if decision.decision != "approve" and decision.payout > 0:
         raise HTTPException(422, "Only an approved claim has a payout above zero")
-    over_limit = decision.payout > store.load("company.json")["payout_approval_limit"]
+    over_limit = decision.payout > setting(db, "approval_limit")
     status = "waiting_for_sign_off" if over_limit else "decided"
-    set_claim(db, claim_id, status=status, **decision.model_dump())
+    set_claim(
+        db, claim_id, status=status, needs_sign_off=over_limit, **decision.model_dump()
+    )
     db.commit()
     return get_claim(claim_id, db)
 
 
 @app.post("/api/claims/{claim_id}/payment", operation_id="pay_claim")
 def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
-    """Pay an approved claim its payout. A payout over $1,000 needs sign-off first."""
+    """Pay an approved claim its payout. One over the approval limit needs sign-off."""
     row = claim_row(db, claim_id, lock=True)
     if row["decision"] != "approve":
         raise HTTPException(409, f"Claim {claim_id} is not approved")
@@ -721,10 +824,9 @@ def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
         if round(payment.amount, 2) == round(row["paid_amount"], 2):
             return get_claim(claim_id, db)
         raise HTTPException(409, f"Claim {claim_id} has already been paid")
-    limit = store.load("company.json")["payout_approval_limit"]
-    if row["payout"] > limit and row["signed_off_by"] is None:
+    if row["needs_sign_off"] and row["signed_off_by"] is None:
         raise HTTPException(
-            403, f"A payout over ${limit:,.2f} needs a handler's sign-off first"
+            403, "A payout over the approval limit needs a handler's sign-off first"
         )
     if round(payment.amount, 2) != round(row["payout"], 2):
         raise HTTPException(
@@ -741,7 +843,7 @@ def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
 def sign_off(
     claim_id: str, handler: Handler, db: Db, tasks: BackgroundTasks
 ) -> dict[str, Any]:
-    """Sign off a payout over $1,000 as the signed-in handler; the agent pays it."""
+    """Sign off a payout over the approval limit as the signed-in handler."""
     if not handler["can_approve_over_limit"]:
         raise HTTPException(
             403, f"{handler['name']} can't sign off payouts over the approval limit"

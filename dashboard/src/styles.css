@@ -17,8 +17,19 @@
   color-scheme: light;
 }
 
+/* Dark when chosen on the Settings page, or when the computer is dark and light wasn't chosen. */
+:root[data-theme="dark"] {
+  --page: #04232e;
+  --panel: #000000;
+  --ink: #cdd8db;
+  --muted: #8fa7ae;
+  --line: #0b3340;
+  --sea-green-text: #5cf0c4;
+  color-scheme: dark;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --page: #04232e;
     --panel: #000000;
     --ink: #cdd8db;
@@ -426,4 +437,84 @@ input {
 .sign-in button {
   margin-top: 6px;
   padding: 8px 16px;
+}
+
+.setting {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 520px;
+}
+
+/* A slot for "$", the input, then a slot for the unit, so every input lines up. */
+.amount {
+  display: inline-grid;
+  grid-template-columns: 1ch 9rem 5rem;
+  gap: 6px;
+  align-items: center;
+  text-align: left;
+}
+
+.amount input {
+  width: 100%;
+}
+
+.amount input:disabled {
+  opacity: 1;
+  border-color: transparent;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--midnight) 55%, transparent);
+}
+
+.dialog {
+  width: min(520px, 100%);
+}
+
+fieldset {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+legend {
+  padding: 0;
+  float: left;
+  width: 100%;
+}
+
+.choices {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

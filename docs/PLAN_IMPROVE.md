@@ -94,20 +94,20 @@ page. A sign-off records the signed-in handler.
 
 Settings live in the database, and every part of the product reads them from there.
 
-- [ ] `settings` seeded from `data/company.json` (approval limit) and `data/improvement.json`;
+- [x] `settings` seeded from `data/company.json` (approval limit) and `data/improvement.json`;
       `data/models.json` holds the models allowed. `GET /api/settings` (`get_settings`) returns them with
       the models allowed and the latest change to each.
-- [ ] `PUT /api/settings` (`change_settings`) needs a handler who can sign off over the limit, validates
+- [x] `PUT /api/settings` (`change_settings`) needs a handler who can sign off over the limit, validates
       each value, and records who changed what and when. 401 and 403 tests, including Marcus.
-- [ ] A test: a new approval limit applies to the next decision, and a claim already waiting for sign-off
+- [x] A test: a new approval limit applies to the next decision, and a claim already waiting for sign-off
       stays waiting (`needs_sign_off` on the decision).
-- [ ] With `MODEL_NAME` set, the models allowed are that model alone, at effort `default` and price 0. A test.
-- [ ] The Settings page (`#/settings`) shows every setting, the models allowed with their efforts and prices,
+- [x] With `MODEL_NAME` set, the models allowed are that model alone, at effort `default` and price 0. A test.
+- [x] The Settings page (`#/settings`) shows every setting, the models allowed with their efforts and prices,
       and who last changed each; Marcus sees it read only, with a note saying why.
-- [ ] A change asks for confirmation in the dashboard's own dialog, then saves and shows the new value.
-- [ ] The appearance (light, dark, the computer's) switches the colors at once and survives a reload. Vitest
+- [x] A change asks for confirmation in the dashboard's own dialog, then saves and shows the new value.
+- [x] The appearance (light, dark, the computer's) switches the colors at once and survives a reload. Vitest
       covers the switch.
-- [ ] `npm run check` is green; an end-to-end test changes a setting and switches the theme.
+- [x] `npm run check` is green; an end-to-end test changes a setting and switches the theme.
 
 ## Phase 3: The configuration in versions
 

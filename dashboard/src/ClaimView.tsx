@@ -10,6 +10,7 @@ import {
   type PastClaim,
   type Policy,
   type Step,
+  type Teammate,
 } from "./api";
 import { label, money, sectionLabel, when } from "./format";
 import { StatusChip } from "./Queue";
@@ -18,7 +19,7 @@ import { SignOff } from "./SignOff";
 function Payment({
   claim,
   handlers,
-}: Readonly<{ claim: Claim; handlers: Handler[] }>) {
+}: Readonly<{ claim: Claim; handlers: Teammate[] }>) {
   const handler = handlers.find((h) => h.handler_id === claim.signed_off_by);
   return (
     <>
@@ -41,7 +42,7 @@ function Payment({
 function Decision({
   claim,
   handlers,
-}: Readonly<{ claim: Claim; handlers: Handler[] }>) {
+}: Readonly<{ claim: Claim; handlers: Teammate[] }>) {
   if (!claim.decision) {
     return <p className="muted">The agent has not decided this claim yet.</p>;
   }
@@ -130,7 +131,7 @@ export function ClaimView({
   const [steps, setSteps] = useState<Step[]>([]);
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [history, setHistory] = useState<PastClaim[]>([]);
-  const [handlers, setHandlers] = useState<Handler[]>([]);
+  const [handlers, setHandlers] = useState<Teammate[]>([]);
 
   useEffect(() => {
     void loadClaim(claimId).then(([loaded, loadedSteps]) => {

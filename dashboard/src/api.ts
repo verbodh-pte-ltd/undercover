@@ -175,6 +175,41 @@ export interface Handler {
   can_approve_over_limit: boolean;
 }
 
+// Another handler, as the handler list shows them: no email address.
+export type Teammate = Omit<Handler, "email">;
+
+// The noise or the tolerance on each measure.
+export interface Margins {
+  accuracy: number;
+  grade: number;
+  cost_per_claim: number;
+  seconds_per_claim: number;
+}
+
+export interface SettingValues {
+  approval_limit: number;
+  objectives: { accuracy: number; grade: number };
+  noise: Margins;
+  tolerance: Margins;
+  round_spending_limit: number;
+  agents_at_once: number;
+}
+
+export interface AllowedModel {
+  model: string;
+  reasoning_efforts: string[];
+  input_price: number;
+  output_price: number;
+}
+
+export interface Settings {
+  settings: SettingValues;
+  models_allowed: AllowedModel[];
+  changes: Partial<
+    Record<keyof SettingValues, { handler: string; changed_at: string }>
+  >;
+}
+
 // The signed-in handler's access token, which goes with every action.
 async function authorization() {
   const { data } = await supabase.auth.getSession();
@@ -202,7 +237,7 @@ export const getClaimHistory = (id: string) =>
   getJson<PastClaim[]>(`/api/customers/${id}/claims`);
 export const listSteps = (id: string) =>
   getJson<Step[]>(`/api/claims/${id}/steps`);
-export const listHandlers = () => getJson<Handler[]>("/api/handlers");
+export const getSettings = () => getJson<Settings>("/api/settings");
 export const getCurrentRun = () => getJson<Run | null>("/api/runs/current");
 export const getInstructions = () => getJson<Instructions>("/api/instructions");
 export const listEvaluations = () =>
@@ -216,6 +251,28 @@ export async function getSignedInHandler() {
   });
   if (!response.ok) throw new Error(await refusal(response, "Sign-in"));
   return (await response.json()) as Handler;
+}
+
+export async function listHandlers() {
+  const response = await fetch("/api/handlers", {
+    headers: await authorization(),
+  });
+  if (!response.ok) throw new Error(await refusal(response, "Handlers"));
+  return (await response.json()) as Teammate[];
+}
+
+// Saves every setting as the signed-in handler, or throws the reason it was refused.
+export async function changeSettings(values: SettingValues) {
+  const response = await fetch("/api/settings", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authorization()),
+    },
+    body: JSON.stringify(values),
+  });
+  if (!response.ok) throw new Error(await refusal(response, "Saving"));
+  return (await response.json()) as Settings;
 }
 
 async function post(path: string, body: unknown): Promise<string | null> {

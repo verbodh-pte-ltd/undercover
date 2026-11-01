@@ -3,7 +3,7 @@
 The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`), durable state
 (`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
 (`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
-from `docs/IMPROVE.md`), phase 1: handlers sign in. We use Postgres in Docker on this machine, not
+from `docs/IMPROVE.md`), phase 1: handlers sign in, and phase 2: settings and the Settings page. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -47,9 +47,16 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   - Sign-in: `backend/auth.py` checks a Supabase access token against the public keys at
     `{VITE_SUPABASE_URL}/auth/v1/.well-known/jwks.json` with PyJWT's `PyJWKClient`, audience
     `authenticated`, and the backend finds the handler by the token's email. `start_dispatch`,
-    `start_evaluation` and `sign_off` need a signed-in handler (401 without one);
-    `GET /api/handlers/me` (`get_signed_in_handler`) returns the handler. The agent's own calls need
-    no sign-in.
+    `start_evaluation`, `sign_off`, `change_settings` and `list_handlers` (which leaves out the
+    emails) need a signed-in handler (401 without one); `GET /api/handlers/me`
+    (`get_signed_in_handler`) returns the handler. The agent's own calls need no sign-in.
+  - Settings live in the `settings` table, seeded from `data/company.json` (the approval limit,
+    $1,000) and `data/improvement.json` (the objectives, the noise, the tolerance, the spending
+    limit for each round, $0.50, and 25 claim agents at once). `GET /api/settings` (`get_settings`)
+    returns them with the models allowed (`data/models.json`, or `MODEL_NAME` alone at effort
+    `default` and price 0 when it is set) and the latest change to each. `PUT /api/settings`
+    (`change_settings`) takes every setting, checks each value, records who changed which and when
+    in `setting_changes`, and answers 403 for a handler who can't sign off over the limit.
   - `start_dispatch` and `start_evaluation` ask the agent's service through `backend/agent_service.py`,
     and pass on its refusal (409) or say it isn't running (503).
   - An evaluation works copies of its set's claims, with ids such as `E3-CLM-1001`, out of the queue.
@@ -59,8 +66,9 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   - A claim that fails before its decision goes back to `waiting`; after two failures it is
     `needs_handler`. A claim stopped `in_progress` stays there for the next dispatch.
   - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py`.
-  - A payout over $1,000 (`payout_approval_limit` in `data/company.json`) is refused until a handler
-    signs off. A sign-off records the signed-in handler and when (403 for a handler who can't sign
+  - A payout over the approval limit is refused until a handler signs off. Whether a claim needs a
+    sign-off is kept with its decision (`needs_sign_off`), from the limit at that moment, so a new
+    limit applies only to the decisions recorded after it. A sign-off records the signed-in handler and when (403 for a handler who can't sign
     off over the limit), puts the claim back `in_progress`, and asks the agent's
     service to carry on and pay it.
   - The same decision or payment sent again counts as done; a different decision is still refused.
@@ -96,6 +104,11 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     read, the policy and earlier claims. A claim waiting for sign-off has a "Sign off" button, except on
     an evaluation's copy; a handler who can't sign off over the limit sees a note saying so instead.
   - The instructions page (`#/instructions`) shows the claim agent's instructions, read only.
+  - The Settings page (`#/settings`) shows every setting with who last changed it, and the models
+    allowed with their reasoning efforts and prices. Dana can change the settings, after a
+    confirmation in the dashboard's own dialog; Marcus and Priya see them read only, with a note
+    saying why. It also sets the appearance (light, dark or the computer's), kept in the browser
+    under `undercover-theme` and applied through `data-theme` on the page.
 - `e2e/`: Playwright tests, one at a time, on their own servers (backend :8001, dashboard :5174) and
   their own SQLite database, `e2e/e2e.db`, deleted at the start of each run. A stand-in for the agent's
   service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls with their bodies. A
@@ -135,5 +148,5 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The rest of `docs/PLAN_IMPROVE.md`: settings, the configuration's versions, the judge and the
-  improver.
+- The rest of `docs/PLAN_IMPROVE.md`: the configuration's versions, the judge and the improver.
+  Nothing reads the improvement settings yet; the improver will.

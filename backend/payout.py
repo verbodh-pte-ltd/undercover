@@ -135,7 +135,11 @@ def benefit_maximum(policy: dict[str, Any], benefit: Benefit) -> float:
 
 
 def work_out_payout(
-    policy: dict[str, Any], benefit: Benefit, lines: list[Line], paid_by_others: float
+    policy: dict[str, Any],
+    benefit: Benefit,
+    lines: list[Line],
+    paid_by_others: float,
+    limit: float,
 ) -> Payout:
     """Work out the payout on an approved claim, following section 10 of the wording."""
     calculation = [
@@ -174,7 +178,6 @@ def work_out_payout(
         total = 0.0
 
     payout = round(total, 2)
-    limit = store.load("company.json")["payout_approval_limit"]
     return {
         "calculation": calculation,
         "payout": payout,

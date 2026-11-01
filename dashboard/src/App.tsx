@@ -5,6 +5,7 @@ import { ClaimView } from "./ClaimView";
 import { Instructions } from "./Instructions";
 import { Queue } from "./Queue";
 import { EvaluationView, Scoreboard } from "./Scoreboard";
+import { Settings } from "./Settings";
 import { SignIn } from "./SignIn";
 import { supabase } from "./supabase";
 
@@ -45,6 +46,7 @@ function Page({ hash, handler }: Readonly<{ hash: string; handler: Handler }>) {
     return <EvaluationView key={evaluation[1]} runId={evaluation[1]} />;
   if (hash === "#/scoreboard") return <Scoreboard />;
   if (hash === "#/instructions") return <Instructions />;
+  if (hash === "#/settings") return <Settings handler={handler} />;
   return <Queue />;
 }
 
@@ -70,6 +72,7 @@ function SignedIn() {
         <a href="#/">Queue</a>
         <a href="#/scoreboard">Scoreboard</a>
         <a href="#/instructions">Instructions</a>
+        <a href="#/settings">Settings</a>
         <span className="who">
           {handler && <span>{handler.name}</span>}
           <button type="button" className="quiet" onClick={signOut}>

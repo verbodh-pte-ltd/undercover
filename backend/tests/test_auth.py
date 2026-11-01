@@ -37,8 +37,10 @@ def no_agent(monkeypatch):
 
 
 def test_the_handlers_are_seeded_with_their_emails():
-    found = {h["name"]: h for h in client.get("/api/handlers").json()}
-    assert found["Dana Whitfield"]["email"] == DANA
+    found = {
+        h["name"]: h for h in client.get("/api/handlers", headers=headers()).json()
+    }
+    assert client.get("/api/handlers/me", headers=headers()).json()["email"] == DANA
     assert found["Dana Whitfield"]["can_approve_over_limit"] is True
     assert found["Marcus Oyelaran"]["can_approve_over_limit"] is False
     assert found["Priya Raman"]["can_approve_over_limit"] is False

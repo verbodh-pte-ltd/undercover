@@ -9,6 +9,7 @@ from sqlalchemy import QueuePool, func, select
 
 from backend import store
 from backend.main import app
+from backend.tests.signing import headers
 
 client = TestClient(app)
 
@@ -73,8 +74,13 @@ def test_policy_wording():
 
 
 def test_handlers():
-    handlers = client.get("/api/handlers").json()
+    handlers = client.get("/api/handlers", headers=headers()).json()
     assert [h["handler_id"] for h in handlers] == ["HND-01", "HND-02", "HND-03"]
+    assert all("email" not in h for h in handlers)
+
+
+def test_the_handlers_need_a_sign_in():
+    assert client.get("/api/handlers").status_code == 401
 
 
 @pytest.mark.parametrize(

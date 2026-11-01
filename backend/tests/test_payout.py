@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
 from backend import store
 from backend.main import app
@@ -65,18 +66,16 @@ def test_cancellation_is_capped_at_trip_cost_and_never_below_zero():
     assert nothing["calculation"][-1]["step"] == "Nothing is left to pay"
 
 
-def test_needs_sign_off_follows_the_limit_in_company_json(monkeypatch):
+def test_needs_sign_off_follows_the_approval_limit_setting():
     lines = [line("Medical bill", 1250, kind="expense")]
     assert ask(lines, "emergency_medical").json()["needs_sign_off"] is True
-    real = store.load
-
-    def higher_limit(name):
-        data = real(name)
-        return (
-            {**data, "payout_approval_limit": 5000} if name == "company.json" else data
+    with store.connect() as conn:
+        conn.execute(
+            update(store.settings)
+            .where(store.settings.c.name == "approval_limit")
+            .values(value="5000")
         )
-
-    monkeypatch.setattr(store, "load", higher_limit)
+        conn.commit()
     assert ask(lines, "emergency_medical").json()["needs_sign_off"] is False
 
 

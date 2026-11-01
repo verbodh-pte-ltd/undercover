@@ -50,6 +50,8 @@ claims = Table(
     Column("paid_at", String),
     Column("signed_off_by", String),
     Column("signed_off_at", String),
+    # Set with the decision, from the approval limit at that moment.
+    Column("needs_sign_off", Boolean, nullable=False, default=False),
     Column("attempts", Integer, nullable=False, default=0),
     Column("thread_id", String),
     # Set only on an evaluation's copy of a claim: its run and the claim it copies.
@@ -142,6 +144,22 @@ handlers = Table(
     Column("email", String, nullable=False, unique=True),
     Column("can_approve_over_limit", Boolean, nullable=False),
 )
+# The platform's settings, one row each as JSON, and who changed which and when.
+settings = Table(
+    "settings",
+    metadata,
+    Column("name", String, primary_key=True),
+    Column("value", Text, nullable=False),
+)
+setting_changes = Table(
+    "setting_changes",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String, nullable=False),
+    Column("value", Text, nullable=False),
+    Column("handler_id", String, nullable=False),
+    Column("changed_at", String, nullable=False),
+)
 EVAL_SETS = {
     "evaluation": ("claims.json", "evals/decisions.json"),
     "held_out": ("evals/held_out_claims.json", "evals/held_out_decisions.json"),
@@ -161,9 +179,22 @@ def now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def seed_settings(conn: Connection) -> None:
+    """Copy the approval limit from company.json and the rest from improvement.json."""
+    values = {
+        "approval_limit": load("company.json")["payout_approval_limit"],
+        **load("improvement.json"),
+    }
+    conn.execute(
+        insert(settings),
+        [{"name": name, "value": json.dumps(v)} for name, v in values.items()],
+    )
+
+
 def seed(conn: Connection) -> None:
-    """Copy the queue, the policies, the customers and the handlers from data/."""
+    """Copy the queue, the policies, the customers, the handlers and the settings."""
     conn.execute(insert(handlers), load("handlers.json"))
+    seed_settings(conn)
     queue = [
         {"claim_id": c["claim_id"], "position": i, "data": json.dumps(c)}
         for i, c in enumerate(load("claims.json"))
