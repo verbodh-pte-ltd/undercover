@@ -8,6 +8,7 @@ import {
   type Status,
 } from "./api";
 import { cost, label, money, seconds, statusLabels } from "./format";
+import { LoadFailed, PageHeader } from "./Page";
 
 const QUEUE_POLL_MS = 5000;
 const AGENT_CHOICES = Array.from({ length: 25 }, (_, i) => i + 1);
@@ -110,7 +111,10 @@ const runStates = {
 function RunPanel({ run }: Readonly<{ run: Run }>) {
   return (
     <div className="panel stack-sm">
-      <h2>Dispatch {run.run_id}</h2>
+      <div className="panel-head">
+        <h2>Dispatch {run.run_id}</h2>
+        <span className={`chip ${run.status}`}>{runStates[run.status]}</span>
+      </div>
       <p className="muted">
         {runStates[run.status]}, {run.n} claim agents at once, {run.model}.{" "}
         {run.claims.length} claims, model cost {cost(run.cost)}, agent time{" "}
@@ -140,10 +144,21 @@ function RunPanel({ run }: Readonly<{ run: Run }>) {
 export function Queue() {
   const [claims, setClaims] = useState<ClaimSummary[] | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  const [failed, setFailed] = useState(false);
 
   const load = () => {
-    void listClaims().then(setClaims);
-    void getCurrentRun().then(setRun);
+    listClaims().then(
+      (loaded) => {
+        setClaims(loaded);
+        setFailed(false);
+      },
+      () => {
+        setFailed(true);
+      },
+    );
+    getCurrentRun().then(setRun, () => {
+      // The claims' own error says what to do.
+    });
   };
 
   useEffect(() => {
@@ -154,12 +169,29 @@ export function Queue() {
     };
   }, []);
 
-  if (!claims) return <p className="muted">Loading the queue</p>;
+  const header = (
+    <PageHeader title="Claims queue">
+      Every claim and where it stands. A dispatch has the claim agents work the
+      waiting claims.
+    </PageHeader>
+  );
+  if (!claims)
+    return (
+      <section className="stack">
+        {header}
+        {failed ? (
+          <LoadFailed what="The queue" />
+        ) : (
+          <p className="muted">Loading the queue</p>
+        )}
+      </section>
+    );
 
   const statuses = Object.keys(statusLabels) as Status[];
   return (
     <section className="stack">
-      <h1>Claims queue</h1>
+      {header}
+      {failed && <LoadFailed what="The latest claims" />}
       <ul className="counts">
         {statuses.map((status) => (
           <li key={status} className="panel">

@@ -198,21 +198,21 @@ The backend owns the rounds, the rule that keeps or rolls back a version, and th
 
 A handler runs rounds from the dashboard, and every page meets point 8 of the brief.
 
-- [ ] The Improvement page (`#/improvement`) starts and stops a round, with confirmation, and shows its
+- [x] The Improvement page (`#/improvement`) starts and stops a round, with confirmation, and shows its
       stage as it happens: the first evaluations (1, 2 or 3 of 3), the improver working, a change waiting,
       the evaluations, the verdict, a recipe waiting, finished or stopped.
-- [ ] A proposal shows the diff, the model and effort before and after, and the reason, with Approve and
+- [x] A proposal shows the diff, the model and effort before and after, and the reason, with Approve and
       Reject (the reason required). Marcus sees why he can't act.
-- [ ] The rounds so far, newest first, with the scores before and after, the verdict and why, and the cost;
+- [x] The rounds so far, newest first, with the scores before and after, the verdict and why, and the cost;
       an SVG chart of each version's held-out accuracy and grade; the recipe's versions. One diff component
       serves versions and recipes.
-- [ ] Every page has the same header (title and what the page is for), spacing, navigation that shows where
+- [x] Every page has the same header (title and what the page is for), spacing, navigation that shows where
       you are, right-aligned numbers with units, statuses as a color and a word, and loading, empty and
       error states that say what to do next. Nothing jumps as a page refreshes.
-- [ ] Nothing on the existing pages changes how it works: their tests pass unchanged except for the sign-in.
-- [ ] The end-to-end tests sign in, approve a proposal played out through the API, change a setting and
+- [x] Nothing on the existing pages changes how it works: their tests pass unchanged except for the sign-in.
+- [x] The end-to-end tests sign in, approve a proposal played out through the API, change a setting and
       switch the theme.
-- [ ] `npm run check` is green.
+- [x] `npm run check` is green.
 
 ## Phase 8: The live runs and the documents
 

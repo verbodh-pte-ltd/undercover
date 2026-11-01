@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { getSignedInHandler, type Handler } from "./api";
 import { ClaimView } from "./ClaimView";
 import { Configuration } from "./Configuration";
+import { Improvement } from "./Improvement";
 import { Queue } from "./Queue";
 import { EvaluationView, Scoreboard } from "./Scoreboard";
 import { Settings } from "./Settings";
@@ -49,10 +50,26 @@ function Page({ hash, handler }: Readonly<{ hash: string; handler: Handler }>) {
   if (hash === "#/configuration" || hash === "#/instructions")
     return <Configuration />;
   if (hash === "#/settings") return <Settings handler={handler} />;
+  if (hash === "#/improvement") return <Improvement handler={handler} />;
   return <Queue />;
 }
 
 const signOut = () => void supabase.auth.signOut();
+
+const NAV = [
+  ["#/", "Queue"],
+  ["#/scoreboard", "Scoreboard"],
+  ["#/improvement", "Improvement"],
+  ["#/configuration", "Configuration"],
+  ["#/settings", "Settings"],
+];
+
+// The page the address is on, for the navigation; a claim belongs to the queue.
+function here(hash: string) {
+  if (hash === "#/instructions") return "#/configuration";
+  const found = NAV.find(([href]) => href !== "#/" && hash.startsWith(href));
+  return found ? found[0] : "#/";
+}
 
 function SignedIn() {
   const hash = useHash();
@@ -71,10 +88,15 @@ function SignedIn() {
         <a className="brand" href="#/">
           UnderCover <span className="tagline">claims desk</span>
         </a>
-        <a href="#/">Queue</a>
-        <a href="#/scoreboard">Scoreboard</a>
-        <a href="#/configuration">Configuration</a>
-        <a href="#/settings">Settings</a>
+        {NAV.map(([href, text]) => (
+          <a
+            key={href}
+            href={href}
+            aria-current={here(hash) === href ? "page" : undefined}
+          >
+            {text}
+          </a>
+        ))}
         <span className="who">
           {handler && <span>{handler.name}</span>}
           <button type="button" className="quiet" onClick={signOut}>

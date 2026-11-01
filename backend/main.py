@@ -1221,6 +1221,34 @@ def proposal_view(db: Connection, row: RowMapping) -> dict[str, Any] | None:
     }
 
 
+def progress(
+    db: Connection, row: RowMapping, worked: list[dict[str, Any]]
+) -> dict[str, int] | None:
+    """The evaluations the round's stage needs, and how many it has started."""
+    if row["stage"] == "first_evaluations":
+        # Only what earlier rounds left the current version short of.
+        version = row["version_before"]
+        query = (
+            select(runs.c.eval_set, func.count())
+            .where(
+                runs.c.kind == "evaluation",
+                runs.c.tiny.is_(False),
+                runs.c.status == "finished",
+                runs.c.version == version,
+                runs.c.round_id < row["round_id"],
+            )
+            .group_by(runs.c.eval_set)
+        )
+        earlier: dict[str, int] = {s: n for s, n in db.execute(query)}
+        needed = sum(max(n - earlier.get(s, 0), 0) for s, n in NEEDED.items())
+    elif row["stage"] == "evaluations":
+        version, needed = row["version"], sum(NEEDED.values())
+    else:
+        return None
+    started = len([r for r in worked if r["version"] == version])
+    return {"started": started, "needed": needed}
+
+
 def round_view(db: Connection, row: RowMapping) -> dict[str, Any]:
     """A round: where it has got to, what it tried, its verdict and its spending."""
     round_id = row["round_id"]
@@ -1250,6 +1278,7 @@ def round_view(db: Connection, row: RowMapping) -> dict[str, Any]:
         "proposal": proposal_view(db, row),
         "events": events,
         "runs": worked,
+        "progress": progress(db, row, worked),
         "spent": spent,
         "left": settings_["round_spending_limit"] - spent,
     }

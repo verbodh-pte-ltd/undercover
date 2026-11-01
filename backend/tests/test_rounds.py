@@ -632,3 +632,26 @@ def test_the_round_operations_follow_the_api_rules():
         if path.startswith("/api/rounds"):
             for operation in item.values():
                 assert operation["description"].count("\n") == 0
+
+
+def test_a_rounds_progress_counts_the_evaluations_its_stage_needs(service):
+    round_id = start_round()
+    found = client.get(f"/api/rounds/{round_id}").json()
+    assert found["progress"] == {"started": 0, "needed": 3}
+    evaluate(round_id, "evaluation", 1, 20)
+    evaluate(round_id, "held_out", 1, 20)
+    found = client.get(f"/api/rounds/{round_id}").json()
+    assert found["progress"] == {"started": 2, "needed": 3}
+    client.post(f"/api/rounds/{round_id}/stop", headers=headers())
+    # The next round needs only the held-out run the stopped one didn't get to.
+    round_id = start_round()
+    found = client.get(f"/api/rounds/{round_id}").json()
+    assert found["progress"] == {"started": 0, "needed": 1}
+    evaluate(round_id, "held_out", 1, 20)
+    client.post(f"/api/rounds/{round_id}/stage", json={"stage": "improving"})
+    assert client.get(f"/api/rounds/{round_id}").json()["progress"] is None
+    propose_and_approve(round_id)
+    client.post(f"/api/rounds/{round_id}/stage", json={"stage": "evaluations"})
+    evaluate(round_id, "evaluation", 2, 20)
+    found = client.get(f"/api/rounds/{round_id}").json()
+    assert found["progress"] == {"started": 1, "needed": 3}

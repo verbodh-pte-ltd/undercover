@@ -9,6 +9,7 @@ import {
   type EvaluationSummary,
 } from "./api";
 import { cost, grade, label, money, percent, seconds, yesNo } from "./format";
+import { LoadFailed, PageHeader } from "./Page";
 import { AgentPicker } from "./Queue";
 
 const SCOREBOARD_POLL_MS = 5000;
@@ -80,8 +81,18 @@ export function Scoreboard() {
     null,
   );
 
+  const [failed, setFailed] = useState(false);
+
   const load = () => {
-    void listEvaluations().then(setEvaluations);
+    listEvaluations().then(
+      (loaded) => {
+        setEvaluations(loaded);
+        setFailed(false);
+      },
+      () => {
+        setFailed(true);
+      },
+    );
   };
 
   useEffect(() => {
@@ -94,14 +105,21 @@ export function Scoreboard() {
 
   return (
     <section className="stack">
-      <h1>Scoreboard</h1>
-      <p className="muted">
+      <PageHeader title="Scoreboard">
         How the agent's decisions compare with our handlers' on labelled claims.
-      </p>
+      </PageHeader>
       <EvaluationForm onStarted={load} />
-      {evaluations === null && <p className="muted">Loading evaluations</p>}
+      {failed && <LoadFailed what="The evaluations" />}
+      {evaluations === null && !failed && (
+        <p className="muted">Loading evaluations</p>
+      )}
       {evaluations?.length === 0 && (
-        <p className="muted">No evaluations yet.</p>
+        <div className="panel stack-sm">
+          <p>No evaluations yet.</p>
+          <p className="muted">
+            Start one above to score the agent against our handlers' decisions.
+          </p>
+        </div>
       )}
       {evaluations && evaluations.length > 0 && (
         <div className="panel table-wrap">
@@ -129,7 +147,11 @@ export function Scoreboard() {
                     <a href={`#/scoreboard/${String(e.run_id)}`}>
                       Evaluation {e.run_id}
                     </a>
-                    <div className="muted small">{runStates[e.status]}</div>
+                    <div>
+                      <span className={`chip ${e.status}`}>
+                        {runStates[e.status]}
+                      </span>
+                    </div>
                   </td>
                   <td>
                     {setLabels[e.eval_set]}
@@ -178,18 +200,38 @@ function JudgeCells({ c }: Readonly<{ c: EvaluationClaim }>) {
 
 export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
   const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    void getEvaluation(runId).then(setEvaluation);
+    getEvaluation(runId).then(setEvaluation, () => {
+      setFailed(true);
+    });
   }, [runId]);
 
-  if (!evaluation) return <p className="muted">Loading evaluation {runId}</p>;
+  const header = (
+    <>
+      <a href="#/scoreboard">Back to the scoreboard</a>
+      <PageHeader title={`Evaluation ${runId}`}>
+        One evaluation's claims, the agent's decisions beside our handlers'.
+      </PageHeader>
+    </>
+  );
+  if (!evaluation)
+    return (
+      <section className="stack">
+        {header}
+        {failed ? (
+          <LoadFailed what={`Evaluation ${runId}`} />
+        ) : (
+          <p className="muted">Loading evaluation {runId}</p>
+        )}
+      </section>
+    );
 
   const misses = evaluation.claims.filter((c) => !c.right).length;
   return (
     <section className="stack">
-      <a href="#/scoreboard">Back to the scoreboard</a>
-      <h1>Evaluation {evaluation.run_id}</h1>
+      {header}
       <p className="muted">
         {setLabels[evaluation.eval_set]}
         {evaluation.tiny ? ", tiny" : ""}, {evaluation.n} claim agents at once,{" "}
@@ -220,8 +262,10 @@ export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
                   <a className="mono" href={`#/claims/${c.claim_id}`}>
                     {c.claim_id}
                   </a>
-                  <div className="muted small">
-                    {c.right ? "Right" : "Miss"}
+                  <div>
+                    <span className={`chip ${c.right ? "right" : "missed"}`}>
+                      {c.right ? "Right" : "Miss"}
+                    </span>
                   </div>
                 </td>
                 <td>

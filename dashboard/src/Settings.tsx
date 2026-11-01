@@ -9,6 +9,7 @@ import {
 } from "./api";
 import { Confirm } from "./Confirm";
 import { when } from "./format";
+import { LoadFailed, PageHeader } from "./Page";
 import { applyTheme, savedTheme, type Theme } from "./theme";
 
 // A setting on the page, by its name or "name.part"; a scale of 100 shows a share as a percent.
@@ -270,22 +271,16 @@ export function Settings({ handler }: Readonly<{ handler: Handler }>) {
 
   const readOnly = !handler.can_approve_over_limit;
   const header = (
-    <>
-      <h1>Settings</h1>
-      <p className="muted">
-        The platform's settings: the approval limit, what the improver works to,
-        and the models the claim agent may use.
-      </p>
-    </>
+    <PageHeader title="Settings">
+      The platform's settings: the approval limit, what the improver works to,
+      and the models the claim agent may use.
+    </PageHeader>
   );
   if (failed)
     return (
       <section className="stack">
         {header}
-        <p className="refusal" role="alert">
-          The settings couldn't be loaded. Check that the backend is running,
-          then reload the page.
-        </p>
+        <LoadFailed what="The settings" />
       </section>
     );
   if (!loaded)

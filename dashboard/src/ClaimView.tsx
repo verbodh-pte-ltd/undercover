@@ -13,6 +13,7 @@ import {
   type Teammate,
 } from "./api";
 import { label, money, sectionLabel, when } from "./format";
+import { LoadFailed, PageHeader } from "./Page";
 import { StatusChip } from "./Queue";
 import { SignOff } from "./SignOff";
 
@@ -133,13 +134,20 @@ export function ClaimView({
   const [history, setHistory] = useState<PastClaim[]>([]);
   const [handlers, setHandlers] = useState<Teammate[]>([]);
 
+  const [failed, setFailed] = useState(false);
+
   useEffect(() => {
-    void loadClaim(claimId).then(([loaded, loadedSteps]) => {
-      setClaim(loaded);
-      setSteps(loadedSteps);
-      void getPolicy(loaded.policy_id).then(setPolicy);
-      void getClaimHistory(loaded.customer_id).then(setHistory);
-    });
+    loadClaim(claimId).then(
+      ([loaded, loadedSteps]) => {
+        setClaim(loaded);
+        setSteps(loadedSteps);
+        void getPolicy(loaded.policy_id).then(setPolicy);
+        void getClaimHistory(loaded.customer_id).then(setHistory);
+      },
+      () => {
+        setFailed(true);
+      },
+    );
     void listHandlers().then(setHandlers);
   }, [claimId]);
 
@@ -159,16 +167,31 @@ export function ClaimView({
     };
   }, [claimId, undecided]);
 
-  if (!claim) return <p className="muted">Loading {claimId}</p>;
+  if (!claim)
+    return (
+      <section className="stack">
+        <a href="#/">Back to the queue</a>
+        <PageHeader title={<span className="mono">{claimId}</span>}>
+          One claim: the agent's decision, what it did and why.
+        </PageHeader>
+        {failed ? (
+          <LoadFailed what={`Claim ${claimId}`} />
+        ) : (
+          <p className="muted">Loading {claimId}</p>
+        )}
+      </section>
+    );
 
   return (
     <section className="stack">
       <a href="#/">Back to the queue</a>
-      <header className="claim-head">
-        <h1 className="mono">{claim.claim_id}</h1>
-        <StatusChip status={claim.status} />
+      <header className="page-head">
+        <div className="claim-head">
+          <h1 className="mono">{claim.claim_id}</h1>
+          <StatusChip status={claim.status} />
+        </div>
+        <p className="lede">{claim.summary}</p>
       </header>
-      <p className="lede">{claim.summary}</p>
       <div className="columns">
         <div className="stack">
           <div className="panel stack-sm">

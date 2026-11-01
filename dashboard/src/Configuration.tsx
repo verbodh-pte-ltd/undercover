@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { listVersions, type ConfigVersion } from "./api";
 import { Diff } from "./Diff";
 import { cost, grade, percent, seconds, when } from "./format";
+import { useHandlerNames } from "./handlers";
+import { LoadFailed, PageHeader } from "./Page";
 
 function status(v: ConfigVersion) {
   if (v.current) return { name: "current", text: "Current" };
@@ -57,6 +59,7 @@ export function Configuration() {
   const [versions, setVersions] = useState<ConfigVersion[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [shown, setShown] = useState<number | null>(null);
+  const name = useHandlerNames();
 
   useEffect(() => {
     listVersions().then(setVersions, () => {
@@ -65,23 +68,17 @@ export function Configuration() {
   }, []);
 
   const header = (
-    <>
-      <h1>Configuration</h1>
-      <p className="muted">
-        The claim agent's instructions, model and reasoning effort, kept in
-        versions. Every dispatch and evaluation uses the current version and
-        records it.
-      </p>
-    </>
+    <PageHeader title="Configuration">
+      The claim agent's instructions, model and reasoning effort, kept in
+      versions. Every dispatch and evaluation uses the current version and
+      records it.
+    </PageHeader>
   );
   if (failed)
     return (
       <section className="stack">
         {header}
-        <p className="refusal" role="alert">
-          The versions couldn't be loaded. Check that the backend is running,
-          then reload the page.
-        </p>
+        <LoadFailed what="The versions" />
       </section>
     );
   if (!versions)
@@ -107,7 +104,7 @@ export function Configuration() {
             <dd className="mono">{current.effort}</dd>
             <dt>Approved</dt>
             <dd>
-              {current.approved_by}, {when(current.approved_at)}
+              {name(current.approved_by)}, {when(current.approved_at)}
             </dd>
           </dl>
           <h3>Instructions</h3>
@@ -148,13 +145,14 @@ export function Configuration() {
                     <td>
                       <span className={`chip ${s.name}`}>{s.text}</span>
                     </td>
-                    <td className="mono">
-                      {v.model} at {v.effort}
+                    <td>
+                      {v.model}
+                      <div className="muted small">Effort {v.effort}</div>
                     </td>
                     <td>{v.reason}</td>
-                    <td>{v.proposed_by}</td>
+                    <td>{name(v.proposed_by)}</td>
                     <td>
-                      {v.approved_by}
+                      {name(v.approved_by)}
                       <br />
                       <span className="muted small">{when(v.approved_at)}</span>
                     </td>

@@ -126,3 +126,14 @@ it("sends the old Instructions address to the Configuration page", async () => {
     screen.getByRole("link", { name: "Configuration" }).getAttribute("href"),
   ).toBe("#/configuration");
 });
+
+it("shows who approved each version by name", async () => {
+  fakeBackend({
+    "/api/configuration/versions": [second, first],
+    "/api/handlers": [{ handler_id: "HND-01", name: "Dana Whitfield" }],
+  });
+  render(<Configuration />);
+  expect(await screen.findAllByText(/Dana Whitfield/)).toHaveLength(2);
+  expect(screen.getAllByText("Seeded")).toHaveLength(2);
+  expect(screen.queryByText("HND-01")).toBeNull();
+});

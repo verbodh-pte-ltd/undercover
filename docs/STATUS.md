@@ -4,8 +4,8 @@ The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`),
 (`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
 (`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
 from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, phase 3: the
-configuration in versions, phase 4: the judge, phase 5: rounds in the backend, and phase 6: the
-improver. We use Postgres in Docker on this machine, not
+configuration in versions, phase 4: the judge, phase 5: rounds in the backend, phase 6: the
+improver, and phase 7: the Improvement page and the look of the dashboard. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -89,7 +89,9 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     (`POST /rounds/{id}/decision`) with the handler, and the backend records nothing of its own.
     `GET /api/rounds` and `GET /api/rounds/{id}` show each round: its stage, the proposal waiting with
     its diff, the version tried, the verdict and why, the held-out scores before and after, who approved
-    or rejected what, its runs, what it spent and what's left. The service records a round through open
+    or rejected what, its runs, what it spent and what's left, and its `progress` in the first
+    evaluations or the evaluations: how many it has started of those the stage needs (the first
+    evaluations need only what earlier rounds left the current version short of). The service records a round through open
     routes: its stage, a proposed change (422 for a model or effort outside the models allowed) or
     recipe, the handler's decision (an approved change becomes a version under test, an approved recipe
     the next recipe), the improver's own model calls, and its whole-set evaluations
@@ -169,7 +171,10 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   - `uv run -m agent CLM-1001` works named claims with no run.
 - `dashboard/`: the claims desk. Every page needs a signed-in handler: the sign-in page signs in
   with `@supabase/supabase-js` `signInWithPassword` (no sign-up), and the header shows who is signed
-  in with a "Sign out" button. Each action sends the session's access token.
+  in with a "Sign out" button. Each action sends the session's access token. Every page has the
+  same header (its title and what it is for), the navigation marks the page you are on, numbers are
+  right-aligned with their units, statuses are a colored chip with a word, and a page that can't load
+  says to check the backend and reload. Handler ids show as names, and version 1's as "Seeded".
   - The queue (`#/`) has a count per state, a "Claim agents at once" picker (1 to 25, 3 to start) and a
     "Start dispatch" button, and the latest dispatch: its claims and where each stands, its model cost
     and time, and its summary once it has finished.
@@ -184,6 +189,15 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     version with its instructions, and every version with its status, reason, who proposed and
     approved it, and its held-out scores. Each version after the first opens what it changed from
     the one before: the model and effort before and after, and the changed lines in color.
+  - The Improvement page (`#/improvement`) shows the latest round: who started it, what it has spent
+    of its limit, its stages as they happen (the first evaluations and the evaluations with "k of n"),
+    the verdict and why, and who approved or rejected what. Dana starts or stops a round after a
+    confirmation in the dashboard's own dialog. A proposal waiting shows the model and effort before and
+    after, the reason and the diff (the same `Diff` component as the Configuration page), with Approve
+    (after a confirmation) and Reject (a reason required). Marcus and Priya see it all, with a note
+    saying why they can't act. Below are two SVG charts of each scored version's held-out accuracy and
+    grade (filled when kept), the rounds newest first with the scores before and after, the verdict
+    and the cost, and the recipe's versions with their diffs. It refreshes every 3 seconds.
   - The Settings page (`#/settings`) shows every setting with who last changed it, and the models
     allowed with their reasoning efforts and prices. Dana can change the settings, after a
     confirmation in the dashboard's own dialog; Marcus and Priya see them read only, with a note
@@ -195,6 +209,10 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
   stand-in for Supabase Auth on :8004 (`e2e/auth-stand-in.mjs`) signs tokens with its own key,
   serves its public key and answers CORS preflights; every spec signs in first. A stand-in for the
   judge's endpoint on :8005 (`e2e/judge-stand-in.mjs`) gives every claim a B at 2.2.
+  `e2e/rounds.spec.ts` starts a round on the dashboard, records a proposal through the backend's
+  routes as the agent's service would, approves it on the page, checks the approval reached the
+  stand-in with the handler, records it, and stops the round. It runs after `e2e/queue.spec.ts`,
+  which expects version 1 alone.
 
 ## Run it
 
@@ -229,5 +247,5 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The rest of `docs/PLAN_IMPROVE.md`: the Improvement page, and the live rounds. Until then rounds
-  are started and answered through the API.
+- The rest of `docs/PLAN_IMPROVE.md`: the live rounds with the real model and the documents
+  (phase 8).

@@ -334,3 +334,78 @@ export async function signOff(claimId: string) {
   if (!response.ok) throw new Error(await refusal(response, "Sign-off"));
   return (await response.json()) as Claim;
 }
+
+export interface Recipe {
+  version: number;
+  text: string;
+  reason: string;
+  proposed_by: string;
+  approved_by: string;
+  approved_at: string;
+  // The lines changed from the version before; null for version 1.
+  changed_lines: string[] | null;
+}
+
+export type Stage =
+  | "first_evaluations"
+  | "improving"
+  | "change_waiting"
+  | "evaluations"
+  | "verdict"
+  | "recipe_waiting"
+  | "finished"
+  | "stopped";
+
+export type Proposal =
+  | {
+      kind: "change";
+      instructions: string;
+      model: string;
+      effort: string;
+      reason: string;
+      before: { model: string; effort: string };
+      changed_lines: string[];
+    }
+  | { kind: "recipe"; recipe: string; reason: string; changed_lines: string[] };
+
+export interface Round {
+  round_id: number;
+  stage: Stage;
+  recipe_version: number;
+  version_before: number;
+  // The version the round tried, its reason and verdict; null until there is one.
+  version: number | null;
+  reason: string | null;
+  kept: boolean | null;
+  why: string | null;
+  held_out_before: VersionScores | null;
+  held_out_after: VersionScores | null;
+  proposal: Proposal | null;
+  events: {
+    kind: "change" | "recipe";
+    decision: "approve" | "reject";
+    handler: string;
+    reason: string;
+    decided_at: string;
+  }[];
+  // The evaluations the stage needs and how many have started; null outside them.
+  progress: { started: number; needed: number } | null;
+  spent: number;
+  left: number;
+  started_by: string;
+  started_at: string;
+  stopped_by: string | null;
+  finished_at: string | null;
+}
+
+export const listRounds = () => getJson<Round[]>("/api/rounds");
+export const listRecipes = () => getJson<Recipe[]>("/api/recipes");
+
+// Each returns null once done, or the reason it was refused.
+export const startRound = () => post("/api/rounds", {});
+export const stopRound = (id: number) =>
+  post(`/api/rounds/${String(id)}/stop`, {});
+export const approveProposal = (id: number) =>
+  post(`/api/rounds/${String(id)}/approve`, {});
+export const rejectProposal = (id: number, reason: string) =>
+  post(`/api/rounds/${String(id)}/reject`, { reason });
