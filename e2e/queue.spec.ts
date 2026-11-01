@@ -25,7 +25,10 @@ test("the Configuration page shows version 1, read only", async ({ page }) => {
     page.getByRole("heading", { name: "Current version: version 1" }),
   ).toBeVisible();
   await expect(page.getByText(/You decide one travel insurance/)).toBeVisible();
-  await expect(page.getByText("Not scored yet")).toBeVisible();
+  // Other specs may add versions, so look at version 1's own row.
+  await expect(page.getByRole("row", { name: /^1 Current/ })).toContainText(
+    "Not scored yet",
+  );
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });
 
