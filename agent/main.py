@@ -348,7 +348,9 @@ def claim_graph(
     return builder.compile(checkpointer=checkpointer)
 
 
-def traced(thread_id: str, run_id: int | None = None) -> RunnableConfig:
+def traced(
+    thread_id: str, run_id: int | None = None, round_id: int | None = None
+) -> RunnableConfig:
     """The run config for a claim's thread, traced in Langfuse when its keys are set."""
     config: RunnableConfig = {
         "configurable": {"thread_id": thread_id, "run_id": run_id}
@@ -358,6 +360,8 @@ def traced(thread_id: str, run_id: int | None = None) -> RunnableConfig:
         metadata: dict[str, Any] = {"langfuse_session_id": thread_id}
         if run_id is not None:
             metadata["langfuse_tags"] = [f"run-{run_id}"]
+        if round_id is not None:
+            metadata["langfuse_tags"] = [f"run-{run_id}", f"round-{round_id}"]
         config["metadata"] = metadata
     return config
 
@@ -393,7 +397,7 @@ def run(
         claim = client.get(f"/api/claims/{claim_id}").json()
     checkpointer = saver()
     graph = claim_graph(llm or model(version), version["instructions"], checkpointer)
-    config = traced(thread_id, run_id)
+    config = traced(thread_id, run_id, version.get("round_id"))
     config["recursion_limit"] = RECURSION_LIMIT
     saved = graph.get_state(config)
     inputs: Any = {

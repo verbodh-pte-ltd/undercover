@@ -66,7 +66,7 @@ def start_round():
 def evaluate(round_id, eval_set, version, right, cost=0.001):
     """A round's whole-set evaluation: the first `right` claims decided as the
     handler did, the rest wrongly, each costing `cost`."""
-    body = {"eval_set": eval_set, "version": version, **LUNA}
+    body = {"eval_set": eval_set, "version": version}
     response = client.post(f"/api/rounds/{round_id}/evaluations", json=body)
     assert response.status_code == 200, response.text
     run_id = response.json()["run_id"]
@@ -446,32 +446,74 @@ def test_an_evaluation_over_the_rounds_limit_is_refused(service):
     round_id = start_round()
     # $0.03 a claim, 25 claims: $0.75 spent, over the $0.50 limit.
     evaluate(round_id, "evaluation", 1, 25, cost=0.03)
-    body = {"eval_set": "held_out", "version": 1, **LUNA}
+    body = {"eval_set": "held_out", "version": 1}
     response = client.post(f"/api/rounds/{round_id}/evaluations", json=body)
     assert response.status_code == 409
     assert response.json()["detail"].startswith("Refused: the evaluation could cost")
+
+
+GEMINI = {"model": "google/gemini-3.5-flash-lite", "effort": "low"}
 
 
 def test_a_model_with_no_runs_is_estimated_from_the_current_models_prices(service):
     round_id = start_round()
     # $0.001 a claim on Luna; Gemini's output price is 5 times Luna's, its input 3.
     evaluate(round_id, "evaluation", 1, 25, cost=0.001)
+    propose_and_approve(round_id, {**CHANGE, **GEMINI})
     count = sum(k.eval_set == "held_out" for k in answer_key().values())
     left = client.get(f"/api/rounds/{round_id}").json()["left"]
     likely = count * 0.001 * 5
     assert likely < left
-    body = {"eval_set": "held_out", "version": 1, "effort": "low"}
-    body["model"] = "google/gemini-3.5-flash-lite"
+    body = {"eval_set": "held_out", "version": 2}
     assert (
         client.post(f"/api/rounds/{round_id}/evaluations", json=body).status_code == 200
     )
+
+
+def test_a_rounds_evaluation_runs_on_the_versions_own_model(service, monkeypatch):
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    round_id = start_round()
+    propose_and_approve(round_id, {**CHANGE, **GEMINI})
+    # A model in the body is no part of the operation, so it can't swap the version's.
+    body = {"eval_set": "held_out", "version": 2, **LUNA}
+    run = client.post(f"/api/rounds/{round_id}/evaluations", json=body).json()
+    assert (run["model"], run["effort"]) == (GEMINI["model"], GEMINI["effort"])
+    client.post("/api/runs/stop-running")
+    monkeypatch.setenv("MODEL_NAME", "openrouter/free")
+    run = client.post(f"/api/rounds/{round_id}/evaluations", json=body).json()
+    assert (run["model"], run["effort"]) == ("openrouter/free", "default")
+    found = client.get(f"/api/runs/{run['run_id']}/configuration").json()
+    assert (found["version"], found["round_id"]) == (2, round_id)
+
+
+def test_a_restart_stops_a_working_round_and_leaves_a_waiting_one(service):
+    round_id = start_round()
+    assert client.post("/api/rounds/stop-working").json() == {"stopped": 1}
+    found = client.get(f"/api/rounds/{round_id}").json()
+    assert (found["stage"], found["stopped_by"]) == ("stopped", None)
+    waiting = start_round()
+    client.post(f"/api/rounds/{waiting}/proposed-change", json=CHANGE)
+    assert client.post("/api/rounds/stop-working").json() == {"stopped": 0}
+    assert client.get(f"/api/rounds/{waiting}").json()["stage"] == "change_waiting"
+
+
+def test_the_recipes_versions_list_newest_first_with_their_changes(service):
+    round_id = start_round()
+    recipe = {"recipe": "1. Read the results.\n", "reason": "Shorter"}
+    client.post(f"/api/rounds/{round_id}/proposed-recipe", json=recipe)
+    answer = {"decision": "approve", "handler_id": "HND-01", "reason": ""}
+    client.post(f"/api/rounds/{round_id}/decision", json=answer)
+    newest, first = client.get("/api/recipes").json()
+    assert (newest["version"], first["version"]) == (2, 1)
+    assert "+1. Read the results." in newest["changed_lines"]
+    assert first["changed_lines"] is None
 
 
 def test_an_evaluation_cut_short_by_the_limit_is_stopped_and_rolled_back(service):
     round_id = start_round()
     first_evaluations(round_id)
     propose_and_approve(round_id)
-    body = {"eval_set": "evaluation", "version": 2, **LUNA}
+    body = {"eval_set": "evaluation", "version": 2}
     run_id = client.post(f"/api/rounds/{round_id}/evaluations", json=body).json()[
         "run_id"
     ]
@@ -507,7 +549,7 @@ def test_a_stopped_round_refuses_what_it_records_and_leaves_the_current_version(
     round_id = start_round()
     first_evaluations(round_id)
     propose_and_approve(round_id)
-    body = {"eval_set": "evaluation", "version": 2, **LUNA}
+    body = {"eval_set": "evaluation", "version": 2}
     run_id = client.post(f"/api/rounds/{round_id}/evaluations", json=body).json()[
         "run_id"
     ]
@@ -523,7 +565,7 @@ def test_a_stopped_round_refuses_what_it_records_and_leaves_the_current_version(
         ("proposed-recipe", {"recipe": "1. Stop.", "reason": "Shorter"}),
         ("decision", {"decision": "approve", "handler_id": "HND-01", "reason": ""}),
         ("model-calls", {"input_tokens": 1, "output_tokens": 1, "cost": 0.1}),
-        ("evaluations", {"eval_set": "held_out", "version": 1, **LUNA}),
+        ("evaluations", {"eval_set": "held_out", "version": 1}),
         ("verdict", None),
     ]:
         response = client.post(f"/api/rounds/{round_id}/{path}", json=sent)
@@ -536,7 +578,7 @@ def test_a_stopped_round_refuses_what_it_records_and_leaves_the_current_version(
 
 def test_a_round_evaluates_only_its_versions(service):
     round_id = start_round()
-    body = {"eval_set": "held_out", "version": 2, **LUNA}
+    body = {"eval_set": "held_out", "version": 2}
     response = client.post(f"/api/rounds/{round_id}/evaluations", json=body)
     assert response.status_code == 409
     assert (
@@ -584,6 +626,7 @@ def test_the_round_operations_follow_the_api_rules():
         "record_improver_call",
         "create_round_evaluation",
         "apply_verdict",
+        "stop_working_rounds",
     }
     for path, item in schema["paths"].items():
         if path.startswith("/api/rounds"):

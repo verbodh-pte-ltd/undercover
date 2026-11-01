@@ -176,23 +176,23 @@ The backend owns the rounds, the rule that keeps or rolls back a version, and th
 
 `agent/improver.py`, the sixth part of the agent, follows its recipe and pauses for a handler.
 
-- [ ] `create_agent` on GPT-6 Luna at `medium` (or `MODEL_NAME`), with `parallel_tool_calls=False`,
+- [x] `create_agent` on GPT-6 Luna at `medium` (or `MODEL_NAME`), with `parallel_tool_calls=False`,
       `ModelCallLimitMiddleware` at 30, and `HumanInTheLoopMiddleware` on `propose_change` and
       `propose_recipe`, saving to its own `PostgresSaver` with `durability="sync"` and a new thread per round.
-- [ ] Its instructions are goals that wrap the recipe, say what the claim agent works from, and say that a
+- [x] Its instructions are goals that wrap the recipe, say what the claim agent works from, and say that a
       change never names a claim. Its four tools are the lab's, through `agent/improver_api.py`.
-- [ ] A test on a stub model plays a whole round: the first evaluations run, a proposal waits and changes
+- [x] A test on a stub model plays a whole round: the first evaluations run, a proposal waits and changes
       nothing until it's approved, the evaluations run once and twice, the verdict is recorded, and the
       recipe proposal waits.
-- [ ] Tests: a rejection's reason reaches the improver, which proposes again; a proposal outside the models
+- [x] Tests: a rejection's reason reaches the improver, which proposes again; a proposal outside the models
       allowed goes back to it without reaching a handler; a round with no proposal finishes with no version
       tried.
-- [ ] A test: an approval while a dispatch runs is refused, naming what is running, with nothing recorded.
-- [ ] `run_evaluation` works through the dispatcher in a fresh `contextvars.Context`, with the version under
+- [x] A test: an approval while a dispatch runs is refused, naming what is running, with nothing recorded.
+- [x] `run_evaluation` works through the dispatcher in a fresh `contextvars.Context`, with the version under
       test, and the claims are tagged with the round as well as the run in Langfuse. The improver's work goes
       in one Langfuse session named after the round.
-- [ ] The improver's model calls are recorded with its round, with OpenRouter's `usage.cost`.
-- [ ] `npm run check` is green.
+- [x] The improver's model calls are recorded with its round, with OpenRouter's `usage.cost`.
+- [x] `npm run check` is green.
 
 ## Phase 7: The Improvement page, and the look of the whole dashboard
 

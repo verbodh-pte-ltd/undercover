@@ -9,7 +9,7 @@
 
 ## The agent's parts
 
-The agent has five parts:
+The agent has six parts:
 
 7. **Tools** (`agent/main.py`): the claim agent's tools, which reach the backend only through its API.
 8. **The claim graph** (`claim_graph` in `agent/main.py`): the model, its tools, the sign-off and the
@@ -19,5 +19,7 @@ The agent has five parts:
 10. **The dispatcher** (`agent/dispatcher.py`): works a dispatch or an evaluation with up to N claim
     agents at once. It touches the claim agent only through `work()`, so it can later call the agent in
     the cloud instead.
-11. **The service** (`agent/service.py`): starts dispatches and evaluations, and resumes signed-off
-    claims, for the backend.
+11. **The service** (`agent/service.py`): starts dispatches, evaluations and rounds, carries a round
+    on from a handler's answer, and resumes signed-off claims, for the backend.
+12. **The improver** (`agent/improver.py`): follows its recipe to propose new versions and recipes,
+    pausing for a handler. It reaches the backend only through `agent/improver_api.py`.

@@ -153,6 +153,7 @@ def test_a_runs_configuration_is_its_version_with_its_model_and_effort():
     assert client.get(f"/api/runs/{run['run_id']}/configuration").json() == {
         **body,
         "instructions": "Version 2.",
+        "round_id": None,
     }
 
 

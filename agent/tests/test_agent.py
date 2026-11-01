@@ -781,5 +781,12 @@ def test_the_claim_agents_client_never_reaches_the_scores_or_the_handlers_decisi
         for forbidden in FORBIDDEN:
             assert forbidden not in source, (route.operation_id, forbidden)
     agent_source = Path("agent/main.py").read_text(encoding="utf-8")
-    for path in ["/api/evaluations", "/api/settings", "/api/configuration/v"]:
+    for path in [
+        "/api/evaluations",
+        "/api/settings",
+        "/api/configuration/v",
+        "/api/rounds",
+        "/api/recipes",
+        "improver",
+    ]:
         assert path not in agent_source

@@ -735,9 +735,22 @@ def get_run_configuration(run_id: int, db: Db) -> dict[str, Any]:
     """Get the instructions, model and effort a run's claim agents work to."""
     run = run_row(db, run_id)
     query = select(config_versions).where(config_versions.c.version == run["version"])
-    return configuration(
+    found = configuration(
         db.execute(query).mappings().one(), run["model"], run["effort"]
     )
+    # The round, if any, only tags the claims' traces.
+    return {**found, "round_id": run["round_id"]}
+
+
+@app.get("/api/recipes", operation_id="list_recipes")
+def list_recipes(db: Db) -> list[dict[str, Any]]:
+    """List every version of the improver's recipe, newest first, with its changes."""
+    rows = db.execute(select(recipes).order_by(recipes.c.version)).mappings().all()
+    found = [
+        {**row, "changed_lines": before and changed_lines(before["text"], row["text"])}
+        for before, row in zip([None, *rows], rows, strict=False)
+    ]
+    return found[::-1]
 
 
 @app.get("/api/handlers", operation_id="list_handlers")
@@ -1046,6 +1059,8 @@ def sign_off(
 # the limit; the agent's service records the rest of a round through open routes, as
 # it does its runs.
 CLOSED = {"finished", "stopped"}
+# The stages in which a round waits for a handler and does no work.
+WAITING = {"change_waiting", "recipe_waiting"}
 # A version's evaluations in a round: once on the evaluation set, twice on the held-out.
 NEEDED = {"evaluation": 1, "held_out": 2}
 # A check of the judge's at this probability or above counts as yes.
@@ -1081,8 +1096,6 @@ class Rejection(BaseModel):
 class RoundEvaluation(BaseModel):
     eval_set: Literal["evaluation", "held_out"]
     version: int
-    model: str
-    effort: str
 
 
 class ImproverCall(BaseModel):
@@ -1369,16 +1382,18 @@ def get_round(round_id: int, db: Db) -> dict[str, Any]:
 def stop_round(round_id: int, handler: Handler, db: Db) -> dict[str, Any]:
     """Stop an open round; a version not yet judged is rolled back."""
     may_act(handler, "stop a round")
-    row = open_round(db, round_id)
+    stop(db, open_round(db, round_id), handler["handler_id"])
+    db.commit()
+    return round_view(db, round_row(db, round_id))
+
+
+def stop(db: Connection, row: RowMapping, by: str | None) -> None:
+    """Stop a round and its running runs; a version not yet judged is rolled back."""
+    round_id = row["round_id"]
     db.execute(
         update(rounds)
         .where(rounds.c.round_id == round_id)
-        .values(
-            stage="stopped",
-            proposal=None,
-            stopped_by=handler["handler_id"],
-            finished_at=store.now(),
-        )
+        .values(stage="stopped", proposal=None, stopped_by=by, finished_at=store.now())
     )
     if row["version"] is not None and row["kept"] is None:
         query = update(config_versions)
@@ -1386,8 +1401,17 @@ def stop_round(round_id: int, handler: Handler, db: Db) -> dict[str, Any]:
         db.execute(query.values(kept=False))
     query = update(runs).where(runs.c.round_id == round_id, runs.c.status == "running")
     db.execute(query.values(status="stopped", finished_at=store.now()))
+
+
+@app.post("/api/rounds/stop-working", operation_id="stop_working_rounds")
+def stop_working_rounds(db: Db) -> dict[str, int]:
+    """Stop any round at work, not waiting for a handler, when the service starts."""
+    query = select(rounds).where(rounds.c.stage.not_in(CLOSED | WAITING))
+    working = db.execute(query.with_for_update()).mappings().all()
+    for row in working:
+        stop(db, row, None)
     db.commit()
-    return round_view(db, round_row(db, round_id))
+    return {"stopped": len(working)}
 
 
 def answer_proposal(
@@ -1574,9 +1598,14 @@ def create_round_evaluation(
         raise HTTPException(
             409, f"Version {wanted.version} isn't under test in round {round_id}"
         )
+    query = select(config_versions).where(config_versions.c.version == wanted.version)
+    version = db.execute(query).mappings().one()
+    # On a free model, as the agent's service records a run: MODEL_NAME at `default`.
+    model = os.getenv("MODEL_NAME") or version["model"]
+    effort = "default" if os.getenv("MODEL_NAME") else version["effort"]
     query = select(func.count()).select_from(answer_key)
     count = db.scalar(query.where(answer_key.c.eval_set == wanted.eval_set)) or 0
-    likely, left = estimate(db, wanted.model, count), round_left(db, row)
+    likely, left = estimate(db, model, count), round_left(db, row)
     if likely > left:
         raise HTTPException(
             409,
@@ -1588,8 +1617,8 @@ def create_round_evaluation(
         n=json.loads(row["settings"])["agents_at_once"],
         eval_set=wanted.eval_set,
         tiny=False,
-        model=wanted.model,
-        effort=wanted.effort,
+        model=model,
+        effort=effort,
         version=wanted.version,
     )
     return add_run(db, create, round_id)

@@ -4,7 +4,8 @@ The claims pilot (`docs/PLAN.md`), the agent's harness (`docs/PLAN_HARNESS.md`),
 (`docs/PLAN_DURABLE.md`, from `docs/DURABLE_LOCAL.md`) and the swarm and scoreboard
 (`docs/PLAN_SWARM.md`, from `docs/SWARM.md`) are built, and of the improver (`docs/PLAN_IMPROVE.md`,
 from `docs/IMPROVE.md`), phase 1: handlers sign in, phase 2: settings and the Settings page, phase 3: the
-configuration in versions, phase 4: the judge, and phase 5: rounds in the backend. We use Postgres in Docker on this machine, not
+configuration in versions, phase 4: the judge, phase 5: rounds in the backend, and phase 6: the
+improver. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
@@ -92,7 +93,8 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     routes: its stage, a proposed change (422 for a model or effort outside the models allowed) or
     recipe, the handler's decision (an approved change becomes a version under test, an approved recipe
     the next recipe), the improver's own model calls, and its whole-set evaluations
-    (`POST /api/rounds/{id}/evaluations`, on the round's versions only, with the round's agents at once).
+    (`POST /api/rounds/{id}/evaluations`, on the round's versions only, with the round's agents at once,
+    on the version's own model and effort, or `MODEL_NAME` at `default`).
     `POST /api/rounds/{id}/verdict` applies the rule in `backend/rule.py` (the lab's): kept when the
     version meets the objectives, a measure improves by more than its noise and none gets worse by more
     than its tolerance, with accuracy and the grade as differences and cost and time as fractions of the
@@ -123,11 +125,13 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     `GET /api/configuration/versions` (`list_versions`) lists every version newest first, with its
     held-out scores (the averages of the whole held-out evaluations rounds ran on it; none until the
     improver runs rounds) and, from `difflib`, the lines it changed from the version before. The
-    improver's recipe is kept in versions in `recipes`.
+    improver's recipe is kept in versions in `recipes`; `GET /api/recipes` (`list_recipes`) lists
+    them newest first with the lines each changed. When the agent's service starts, it stops any round
+    at work (`POST /api/rounds/stop-working`); a round waiting for a handler stays open.
 - `backend/instructions/claim.md` and `backend/instructions/recipe.md`: version 1 of the claim agent's
   instructions (on `openai/gpt-6-luna` at low effort) and of the improver's recipe (the lab's first),
   which seeding copies into the database.
-- `agent/`: the UnderCover Agent, in five parts (`docs/CODE_STANDARDS.md`).
+- `agent/`: the UnderCover Agent, in six parts (`docs/CODE_STANDARDS.md`).
   - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`) with seven tools and no pay
     or sign-off tool. It works to its run's configuration version (the current one for a claim in no
     run): its instructions, model and reasoning effort, or `MODEL_NAME` at the model's default effort. At
@@ -145,7 +149,23 @@ In the swarm build's live runs on local Postgres with GPT-6 Luna, after one rese
     current version, recording its model and effort (`default` with `MODEL_NAME`), refusing a
     second while one runs, resumes signed-off claims, and marks any run still running as stopped when
     it starts.
-  - Each claim is traced in Langfuse in a session named after its thread, tagged `run-<run_id>`.
+  - The improver (`agent/improver.py`) is a LangChain `create_agent` on `openai/gpt-6-luna` at medium
+    effort (or `MODEL_NAME`), with the lab's four tools (`read_results`, `propose_change`,
+    `run_evaluation`, `propose_recipe`), which reach the backend only through `agent/improver_api.py`.
+    Its instructions wrap the round's recipe. `HumanInTheLoopMiddleware` pauses it on each proposal,
+    saved by a `PostgresSaver` of its own (in memory without `DATABASE_URL`) on the round's own thread.
+    Parallel tool calls are off, at most 30 model calls each stretch of work, and each call's cost is
+    recorded with its round. A proposal the backend refuses (a model not allowed) goes back to it as a
+    rejection without reaching a handler.
+  - A round runs in the agent's service (`POST /rounds`, `POST /rounds/{id}/decision`): the first
+    evaluations the current version lacks (1 on the evaluation set, 2 on the held-out), then the
+    improver until it pauses. A handler's answer is recorded with the backend, then the improver
+    carries on; after an approved change `run_evaluation` runs the version once and twice through the
+    dispatcher, in a fresh `contextvars.Context`, and asks for the verdict. Each stretch holds the
+    one-run lock and lets it go at a pause; a start or an answer while something else runs is refused,
+    naming it. A stopped round makes no more model calls; a round that fails is stopped.
+  - Each claim is traced in Langfuse in a session named after its thread, tagged `run-<run_id>`, and
+    `round-<round_id>` in a round's evaluations. The improver's work is in one session, `Round <id>`.
   - `uv run -m agent CLM-1001` works named claims with no run.
 - `dashboard/`: the claims desk. Every page needs a signed-in handler: the sign-in page signs in
   with `@supabase/supabase-js` `signInWithPassword` (no sign-up), and the header shows who is signed
@@ -209,6 +229,5 @@ npm run check    # Python checks, TypeScript checks, then the end-to-end tests
 
 - Rejecting a held payout. A handler can only sign off for now.
 - Real payments and messages to customers, as `docs/SPEC.md` says.
-- The rest of `docs/PLAN_IMPROVE.md`: the improver (phase 6), which drives the rounds through the
-  routes above, and the Improvement page. The agent's service has no `/rounds` routes yet, so a start
-  from the backend fails and leaves no round.
+- The rest of `docs/PLAN_IMPROVE.md`: the Improvement page, and the live rounds. Until then rounds
+  are started and answered through the API.
