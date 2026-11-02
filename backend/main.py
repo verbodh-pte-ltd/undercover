@@ -3,6 +3,7 @@
 import difflib
 import json
 import os
+import secrets
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -11,7 +12,7 @@ from typing import Annotated, Any, Literal
 
 import httpx
 import jwt
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import (
@@ -163,12 +164,23 @@ def get_db() -> Iterator[Connection]:
 Db = Annotated[Connection, Depends(get_db)]
 
 
-def signed_in_handler(
-    token: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())], db: Db
-) -> RowMapping:
-    """The handler whose Supabase access token came with the request, or raise 401."""
+def has_key(request: Request) -> bool:
+    """Whether the request carries the agent's API key; never when no key is set."""
+    expected = os.getenv("UNDERCOVER_API_KEY", "")
+    sent = request.headers.get("X-API-Key", "")
+    return bool(expected) and secrets.compare_digest(sent.encode(), expected.encode())
+
+
+def agent_key(request: Request) -> None:
+    """Refuse a request without the agent's API key with 401."""
+    if not has_key(request):
+        raise HTTPException(401, "This needs the agent's API key in X-API-Key")
+
+
+def handler_for(token: str, db: Connection) -> RowMapping:
+    """The handler whose Supabase access token this is, or raise 401."""
     try:
-        email = auth.email(token.credentials)
+        email = auth.email(token)
     except jwt.PyJWTError as exc:
         raise HTTPException(
             401, "Your sign-in has expired or isn't valid. Sign in again"
@@ -182,7 +194,30 @@ def signed_in_handler(
     return handler
 
 
+def signed_in_handler(
+    token: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())], db: Db
+) -> RowMapping:
+    """The handler whose Supabase access token came with the request, or raise 401."""
+    return handler_for(token.credentials, db)
+
+
+def key_or_handler(request: Request, db: Db) -> None:
+    """Let in the agent's API key or a signed-in handler; refuse neither with 401."""
+    if has_key(request):
+        return
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(
+            401, "This needs the agent's API key or a handler's sign-in"
+        )
+    handler_for(token, db)
+
+
 Handler = Annotated[RowMapping, Depends(signed_in_handler)]
+# Who may call a route, read from the headers so the operations get no inputs for it.
+AGENT = [Depends(agent_key)]
+SHARED = [Depends(key_or_handler)]
+HANDLER = [Depends(signed_in_handler)]
 
 
 def setting(db: Connection, name: str) -> Any:
@@ -620,7 +655,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/claims", operation_id="list_claims")
+@app.get("/api/claims", operation_id="list_claims", dependencies=HANDLER)
 def list_claims(db: Db) -> list[dict[str, Any]]:
     """List the claims queue in order, with where each claim stands."""
     query = select(claims).where(claims.c.run_id.is_(None))
@@ -630,7 +665,7 @@ def list_claims(db: Db) -> list[dict[str, Any]]:
     return [{f: v for f, v in claim_view(db, r).items() if f in fields} for r in rows]
 
 
-@app.get("/api/claims/waiting", operation_id="list_waiting_claims")
+@app.get("/api/claims/waiting", operation_id="list_waiting_claims", dependencies=AGENT)
 def list_waiting_claims(db: Db) -> list[dict[str, Any]]:
     """List the waiting claims in queue order, with their failed attempts."""
     query = select(claims).where(
@@ -641,7 +676,9 @@ def list_waiting_claims(db: Db) -> list[dict[str, Any]]:
     return [{f: v for f, v in claim_view(db, r).items() if f in fields} for r in rows]
 
 
-@app.get("/api/claims/unfinished", operation_id="list_unfinished_claims")
+@app.get(
+    "/api/claims/unfinished", operation_id="list_unfinished_claims", dependencies=AGENT
+)
 def list_unfinished_claims(db: Db) -> list[dict[str, Any]]:
     """List the claims in progress, stopped or signed off, for the agent to carry on."""
     query = select(claims).where(
@@ -652,25 +689,29 @@ def list_unfinished_claims(db: Db) -> list[dict[str, Any]]:
     return [{f: v for f, v in claim_view(db, r).items() if f in fields} for r in rows]
 
 
-@app.get("/api/claims/{claim_id}", operation_id="get_claim")
+@app.get("/api/claims/{claim_id}", operation_id="get_claim", dependencies=SHARED)
 def get_claim(claim_id: str, db: Db) -> dict[str, Any]:
     """Get one claim in full: the story, the items, the documents and its decision."""
     return claim_view(db, claim_row(db, claim_id))
 
 
-@app.get("/api/policies/{policy_id}", operation_id="get_policy")
+@app.get("/api/policies/{policy_id}", operation_id="get_policy", dependencies=SHARED)
 def get_policy(policy_id: str, db: Db) -> dict[str, Any]:
     """Get a policy: the plan, the add-ons, the trip and the travelers."""
     return record(db, "policies", policy_id)
 
 
-@app.get("/api/customers/{customer_id}/claims", operation_id="get_claim_history")
+@app.get(
+    "/api/customers/{customer_id}/claims",
+    operation_id="get_claim_history",
+    dependencies=SHARED,
+)
 def get_claim_history(customer_id: str, db: Db) -> list[dict[str, Any]]:
     """Get the customer's earlier claims, with the outcome and amount paid."""
     return record(db, "customers", customer_id)["previous_claims"]
 
 
-@app.get("/api/policy-wording", operation_id="get_policy_wording")
+@app.get("/api/policy-wording", operation_id="get_policy_wording", dependencies=AGENT)
 def get_policy_wording() -> dict[str, str]:
     """Get the policy wording, the contract that decisions follow."""
     return {"text": (store.DATA / "policy_wording.md").read_text(encoding="utf-8")}
@@ -689,13 +730,21 @@ def sections(document: str) -> list[dict[str, str]]:
     return found
 
 
-@app.get("/api/documents/{document}/sections", operation_id="list_sections")
+@app.get(
+    "/api/documents/{document}/sections",
+    operation_id="list_sections",
+    dependencies=AGENT,
+)
 def list_sections(document: str) -> list[dict[str, str]]:
     """List the numbered sections of policy_wording or claims_manual."""
     return [{"number": s["number"], "title": s["title"]} for s in sections(document)]
 
 
-@app.get("/api/documents/{document}/sections/{number}", operation_id="read_section")
+@app.get(
+    "/api/documents/{document}/sections/{number}",
+    operation_id="read_section",
+    dependencies=AGENT,
+)
 def read_section(document: str, number: str) -> dict[str, str]:
     """Read one numbered section of policy_wording or claims_manual."""
     for section in sections(document):
@@ -704,7 +753,7 @@ def read_section(document: str, number: str) -> dict[str, str]:
     raise HTTPException(404, f"Section {number} of {document} not found")
 
 
-@app.post("/api/payouts", operation_id="work_out_payout")
+@app.post("/api/payouts", operation_id="work_out_payout", dependencies=AGENT)
 def work_out_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
     """Work out the payout on an approved claim with UnderCover's payout rules."""
     policy = record(db, "policies", question.policy_id)
@@ -717,14 +766,20 @@ def work_out_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
     )
 
 
-@app.get("/api/configuration/current", operation_id="get_current_configuration")
+@app.get(
+    "/api/configuration/current",
+    operation_id="get_current_configuration",
+    dependencies=AGENT,
+)
 def get_current_configuration(db: Db) -> dict[str, Any]:
     """Get the current version of the claim agent's instructions, model and effort."""
     row = current_version(db)
     return configuration(row, row["model"], row["effort"])
 
 
-@app.get("/api/configuration/versions", operation_id="list_versions")
+@app.get(
+    "/api/configuration/versions", operation_id="list_versions", dependencies=HANDLER
+)
 def list_versions(db: Db) -> list[dict[str, Any]]:
     """List every configuration version, newest first, with its scores and changes."""
     query = select(config_versions).order_by(config_versions.c.version)
@@ -745,7 +800,11 @@ def list_versions(db: Db) -> list[dict[str, Any]]:
     return found[::-1]
 
 
-@app.get("/api/runs/{run_id}/configuration", operation_id="get_run_configuration")
+@app.get(
+    "/api/runs/{run_id}/configuration",
+    operation_id="get_run_configuration",
+    dependencies=AGENT,
+)
 def get_run_configuration(run_id: int, db: Db) -> dict[str, Any]:
     """Get the instructions, model and effort a run's claim agents work to."""
     run = run_row(db, run_id)
@@ -757,7 +816,7 @@ def get_run_configuration(run_id: int, db: Db) -> dict[str, Any]:
     return {**found, "round_id": run["round_id"]}
 
 
-@app.get("/api/recipes", operation_id="list_recipes")
+@app.get("/api/recipes", operation_id="list_recipes", dependencies=SHARED)
 def list_recipes(db: Db) -> list[dict[str, Any]]:
     """List every version of the improver's recipe, newest first, with its changes."""
     rows = db.execute(select(recipes).order_by(recipes.c.version)).mappings().all()
@@ -782,7 +841,7 @@ def get_signed_in_handler(handler: Handler) -> dict[str, Any]:
     return dict(handler)
 
 
-@app.get("/api/settings", operation_id="get_settings")
+@app.get("/api/settings", operation_id="get_settings", dependencies=HANDLER)
 def get_settings(db: Db) -> dict[str, Any]:
     """Get the platform's settings, the models allowed and who last changed each."""
     return settings_view(db)
@@ -846,13 +905,13 @@ def add_run(db: Connection, create: RunCreate, round_id: int | None) -> dict[str
     return run_view(db, run_row(db, run_id))
 
 
-@app.post("/api/runs", operation_id="create_run")
+@app.post("/api/runs", operation_id="create_run", dependencies=AGENT)
 def create_run(create: RunCreate, db: Db) -> dict[str, Any]:
     """Record a new dispatch or evaluation; an evaluation's copies are made here."""
     return add_run(db, create, None)
 
 
-@app.get("/api/runs/current", operation_id="get_current_run")
+@app.get("/api/runs/current", operation_id="get_current_run", dependencies=HANDLER)
 def get_current_run(db: Db) -> dict[str, Any] | None:
     """Get the latest dispatch with its claims and summary, or null if there is none."""
     query = select(runs).where(runs.c.kind == "dispatch")
@@ -860,7 +919,9 @@ def get_current_run(db: Db) -> dict[str, Any] | None:
     return None if row is None else run_view(db, row)
 
 
-@app.get("/api/runs/{run_id}/claims", operation_id="list_run_claims")
+@app.get(
+    "/api/runs/{run_id}/claims", operation_id="list_run_claims", dependencies=AGENT
+)
 def list_run_claims(run_id: int, db: Db) -> list[str]:
     """List the claims a run should work: in progress first, then oldest submitted."""
     row = run_row(db, run_id)
@@ -879,7 +940,7 @@ def list_run_claims(run_id: int, db: Db) -> list[str]:
     return [r["claim_id"] for r in ordered]
 
 
-@app.post("/api/runs/{run_id}/finish", operation_id="finish_run")
+@app.post("/api/runs/{run_id}/finish", operation_id="finish_run", dependencies=AGENT)
 def finish_run(run_id: int, db: Db) -> dict[str, Any]:
     """Mark a running run finished, then have the judge grade an evaluation's claims."""
     kind = run_row(db, run_id)["kind"]
@@ -893,7 +954,9 @@ def finish_run(run_id: int, db: Db) -> dict[str, Any]:
     return run_view(db, run_row(db, run_id))
 
 
-@app.post("/api/runs/stop-running", operation_id="stop_running_runs")
+@app.post(
+    "/api/runs/stop-running", operation_id="stop_running_runs", dependencies=AGENT
+)
 def stop_running_runs(db: Db) -> dict[str, int]:
     """Mark every run still running as stopped, when the agent's service starts."""
     query = update(runs).where(runs.c.status == "running")
@@ -902,7 +965,7 @@ def stop_running_runs(db: Db) -> dict[str, int]:
     return {"stopped": stopped.rowcount}
 
 
-@app.get("/api/evaluations", operation_id="list_evaluations")
+@app.get("/api/evaluations", operation_id="list_evaluations", dependencies=HANDLER)
 def list_evaluations(db: Db) -> list[dict[str, Any]]:
     """List the evaluations, newest first, with their measures."""
     query = select(runs).where(runs.c.kind == "evaluation")
@@ -912,7 +975,9 @@ def list_evaluations(db: Db) -> list[dict[str, Any]]:
     ]
 
 
-@app.get("/api/evaluations/{run_id}", operation_id="get_evaluation")
+@app.get(
+    "/api/evaluations/{run_id}", operation_id="get_evaluation", dependencies=HANDLER
+)
 def get_evaluation(run_id: int, db: Db) -> dict[str, Any]:
     """Get one evaluation: its measures and each claim beside the handler's decision."""
     row = run_row(db, run_id)
@@ -921,7 +986,9 @@ def get_evaluation(run_id: int, db: Db) -> dict[str, Any]:
     return evaluation_view(db, row)
 
 
-@app.post("/api/claims/{claim_id}/start", operation_id="start_claim")
+@app.post(
+    "/api/claims/{claim_id}/start", operation_id="start_claim", dependencies=AGENT
+)
 def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
     """Start a claim in a run, or none, on its thread; a first try clears old steps."""
     row = claim_row(db, claim_id, lock=True)
@@ -945,7 +1012,9 @@ def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
     return get_claim(claim_id, db)
 
 
-@app.post("/api/claims/{claim_id}/release", operation_id="release_claim")
+@app.post(
+    "/api/claims/{claim_id}/release", operation_id="release_claim", dependencies=AGENT
+)
 def release_claim(claim_id: str, failure: Release, db: Db) -> dict[str, Any]:
     """Release a claim that failed before its decision, recording the error."""
     row = claim_row(db, claim_id, lock=True)
@@ -959,7 +1028,7 @@ def release_claim(claim_id: str, failure: Release, db: Db) -> dict[str, Any]:
     return get_claim(claim_id, db)
 
 
-@app.post("/api/claims/{claim_id}/steps", operation_id="add_step")
+@app.post("/api/claims/{claim_id}/steps", operation_id="add_step", dependencies=AGENT)
 def add_step(claim_id: str, step: Step, db: Db) -> dict[str, str]:
     """Record one step the agent took on a claim."""
     claim_row(db, claim_id)
@@ -968,7 +1037,11 @@ def add_step(claim_id: str, step: Step, db: Db) -> dict[str, str]:
     return {"status": "recorded"}
 
 
-@app.post("/api/claims/{claim_id}/model-calls", operation_id="record_model_call")
+@app.post(
+    "/api/claims/{claim_id}/model-calls",
+    operation_id="record_model_call",
+    dependencies=AGENT,
+)
 def record_model_call(claim_id: str, used: ModelCall, db: Db) -> dict[str, str]:
     """Record one model call's tokens and cost on a claim, with its run or none."""
     claim_row(db, claim_id)
@@ -977,7 +1050,11 @@ def record_model_call(claim_id: str, used: ModelCall, db: Db) -> dict[str, str]:
     return {"status": "recorded"}
 
 
-@app.post("/api/claims/{claim_id}/work-times", operation_id="record_work_time")
+@app.post(
+    "/api/claims/{claim_id}/work-times",
+    operation_id="record_work_time",
+    dependencies=AGENT,
+)
 def record_work_time(claim_id: str, spent: WorkTime, db: Db) -> dict[str, str]:
     """Record seconds the agent spent working a claim, with its run or none."""
     claim_row(db, claim_id)
@@ -986,7 +1063,9 @@ def record_work_time(claim_id: str, spent: WorkTime, db: Db) -> dict[str, str]:
     return {"status": "recorded"}
 
 
-@app.get("/api/claims/{claim_id}/steps", operation_id="list_steps")
+@app.get(
+    "/api/claims/{claim_id}/steps", operation_id="list_steps", dependencies=HANDLER
+)
 def list_steps(claim_id: str, db: Db) -> list[dict[str, Any]]:
     """List the steps the agent took on a claim, in order."""
     claim_row(db, claim_id)
@@ -995,7 +1074,11 @@ def list_steps(claim_id: str, db: Db) -> list[dict[str, Any]]:
     return [dict(r) for r in db.execute(query).mappings()]
 
 
-@app.post("/api/claims/{claim_id}/decision", operation_id="record_decision")
+@app.post(
+    "/api/claims/{claim_id}/decision",
+    operation_id="record_decision",
+    dependencies=AGENT,
+)
 def record_decision(claim_id: str, decision: Decision, db: Db) -> dict[str, Any]:
     """Approve, decline or refer a claim, with payout, reasons and policy section."""
     row = claim_row(db, claim_id, lock=True)
@@ -1018,7 +1101,9 @@ def record_decision(claim_id: str, decision: Decision, db: Db) -> dict[str, Any]
     return get_claim(claim_id, db)
 
 
-@app.post("/api/claims/{claim_id}/payment", operation_id="pay_claim")
+@app.post(
+    "/api/claims/{claim_id}/payment", operation_id="pay_claim", dependencies=AGENT
+)
 def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
     """Pay an approved claim its payout. One over the approval limit needs sign-off."""
     row = claim_row(db, claim_id, lock=True)
@@ -1071,8 +1156,8 @@ def sign_off(
 
 
 # The improver's rounds. The handler's actions need a handler who can sign off over
-# the limit; the agent's service records the rest of a round through open routes, as
-# it does its runs.
+# the limit; the agent's service records the rest of a round with the agent's API key,
+# as it does its runs.
 CLOSED = {"finished", "stopped"}
 # The stages in which a round waits for a handler and does no work.
 WAITING = {"change_waiting", "recipe_waiting"}
@@ -1409,14 +1494,14 @@ def start_round(handler: Handler, db: Db) -> dict[str, Any]:
     return round_view(db, round_row(db, round_id))
 
 
-@app.get("/api/rounds", operation_id="list_rounds")
+@app.get("/api/rounds", operation_id="list_rounds", dependencies=HANDLER)
 def list_rounds(db: Db) -> list[dict[str, Any]]:
     """List the improver's rounds, newest first."""
     query = select(rounds).order_by(rounds.c.round_id.desc())
     return [round_view(db, r) for r in db.execute(query).mappings().all()]
 
 
-@app.get("/api/rounds/{round_id}", operation_id="get_round")
+@app.get("/api/rounds/{round_id}", operation_id="get_round", dependencies=AGENT)
 def get_round(round_id: int, db: Db) -> dict[str, Any]:
     """Get one round: its stage, its proposal waiting, its verdict and its spending."""
     return round_view(db, round_row(db, round_id))
@@ -1447,7 +1532,9 @@ def stop(db: Connection, row: RowMapping, by: str | None) -> None:
     db.execute(query.values(status="stopped", finished_at=store.now()))
 
 
-@app.post("/api/rounds/stop-working", operation_id="stop_working_rounds")
+@app.post(
+    "/api/rounds/stop-working", operation_id="stop_working_rounds", dependencies=AGENT
+)
 def stop_working_rounds(db: Db) -> dict[str, int]:
     """Stop any round at work, not waiting for a handler, when the service starts."""
     query = select(rounds).where(rounds.c.stage.not_in(CLOSED | WAITING))
@@ -1487,7 +1574,11 @@ def reject_proposal(
     return answer_proposal(db, round_id, handler, "reject", rejection.reason)
 
 
-@app.get("/api/rounds/{round_id}/results", operation_id="read_round_results")
+@app.get(
+    "/api/rounds/{round_id}/results",
+    operation_id="read_round_results",
+    dependencies=AGENT,
+)
 def read_round_results(round_id: int, db: Db) -> dict[str, Any]:
     """Get what the improver reads: scores, mistakes, earlier rounds, rule, budget."""
     row = round_row(db, round_id)
@@ -1512,7 +1603,11 @@ def read_round_results(round_id: int, db: Db) -> dict[str, Any]:
     }
 
 
-@app.post("/api/rounds/{round_id}/stage", operation_id="record_round_stage")
+@app.post(
+    "/api/rounds/{round_id}/stage",
+    operation_id="record_round_stage",
+    dependencies=AGENT,
+)
 def record_round_stage(round_id: int, stage: RoundStage, db: Db) -> dict[str, Any]:
     """Record where an open round has got to; finished closes it."""
     open_round(db, round_id)
@@ -1533,7 +1628,9 @@ def wait_for_handler(db: Connection, round_id: int, proposal: dict[str, Any]) ->
 
 
 @app.post(
-    "/api/rounds/{round_id}/proposed-change", operation_id="record_proposed_change"
+    "/api/rounds/{round_id}/proposed-change",
+    operation_id="record_proposed_change",
+    dependencies=AGENT,
 )
 def record_proposed_change(
     round_id: int, change: ProposedChange, db: Db
@@ -1554,7 +1651,9 @@ def record_proposed_change(
 
 
 @app.post(
-    "/api/rounds/{round_id}/proposed-recipe", operation_id="record_proposed_recipe"
+    "/api/rounds/{round_id}/proposed-recipe",
+    operation_id="record_proposed_recipe",
+    dependencies=AGENT,
 )
 def record_proposed_recipe(
     round_id: int, recipe: ProposedRecipe, db: Db
@@ -1591,7 +1690,11 @@ def approved(db: Connection, round_id: int, proposal: dict[str, Any], by: str) -
     db.execute(query.values(version=record_["version"], reason=proposal["reason"]))
 
 
-@app.post("/api/rounds/{round_id}/decision", operation_id="record_round_decision")
+@app.post(
+    "/api/rounds/{round_id}/decision",
+    operation_id="record_round_decision",
+    dependencies=AGENT,
+)
 def record_round_decision(
     round_id: int, answer: RoundDecision, db: Db
 ) -> dict[str, Any]:
@@ -1623,7 +1726,11 @@ def record_round_decision(
     return round_view(db, round_row(db, round_id))
 
 
-@app.post("/api/rounds/{round_id}/model-calls", operation_id="record_improver_call")
+@app.post(
+    "/api/rounds/{round_id}/model-calls",
+    operation_id="record_improver_call",
+    dependencies=AGENT,
+)
 def record_improver_call(round_id: int, used: ImproverCall, db: Db) -> dict[str, str]:
     """Record one of the improver's own model calls with its round."""
     open_round(db, round_id)
@@ -1632,7 +1739,11 @@ def record_improver_call(round_id: int, used: ImproverCall, db: Db) -> dict[str,
     return {"status": "recorded"}
 
 
-@app.post("/api/rounds/{round_id}/evaluations", operation_id="create_round_evaluation")
+@app.post(
+    "/api/rounds/{round_id}/evaluations",
+    operation_id="create_round_evaluation",
+    dependencies=AGENT,
+)
 def create_round_evaluation(
     round_id: int, wanted: RoundEvaluation, db: Db
 ) -> dict[str, Any]:
@@ -1689,7 +1800,9 @@ def verdict(db: Connection, row: RowMapping) -> tuple[bool, str]:
     return rule.keep_or_roll_back(after or {}, before, json.loads(row["settings"]))
 
 
-@app.post("/api/rounds/{round_id}/verdict", operation_id="apply_verdict")
+@app.post(
+    "/api/rounds/{round_id}/verdict", operation_id="apply_verdict", dependencies=AGENT
+)
 def apply_verdict(round_id: int, db: Db) -> dict[str, Any]:
     """Keep or roll back the version a round tried, by the rule, from its runs."""
     row = open_round(db, round_id)

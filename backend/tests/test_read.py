@@ -9,9 +9,9 @@ from sqlalchemy import QueuePool, func, select
 
 from backend import store
 from backend.main import app
-from backend.tests.signing import headers
+from backend.tests.signing import AGENT, headers
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 DECLINE = {
     "decision": "decline",
@@ -25,7 +25,7 @@ def test_queue_is_seeded_from_claims_json():
     queue_ids = [
         c["claim_id"] for c in json.loads(Path("data/claims.json").read_text())
     ]
-    claims = client.get("/api/claims").json()
+    claims = client.get("/api/claims", headers=headers()).json()
     assert [c["claim_id"] for c in claims] == queue_ids
     assert len(claims) == 25
     assert {c["status"] for c in claims} == {"waiting"}
@@ -33,7 +33,7 @@ def test_queue_is_seeded_from_claims_json():
 
 
 def test_list_claims_fields():
-    first = client.get("/api/claims").json()[0]
+    first = client.get("/api/claims", headers=headers()).json()[0]
     assert first == {
         "claim_id": "CLM-1001",
         "summary": "Flight home canceled by the airline, rebooked the next morning",
@@ -145,9 +145,11 @@ def test_connection_works_across_threads():
 
 def test_concurrent_first_requests_seed_once():
     with ThreadPoolExecutor(max_workers=8) as pool:
-        responses = list(pool.map(lambda _: client.get("/api/claims"), range(8)))
+        responses = list(
+            pool.map(lambda _: client.get("/api/claims", headers=headers()), range(8))
+        )
     assert {r.status_code for r in responses} == {200}
-    assert len(client.get("/api/claims").json()) == 25
+    assert len(client.get("/api/claims", headers=headers()).json()) == 25
 
 
 def test_reseed_puts_the_queue_back():

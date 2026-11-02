@@ -6,9 +6,9 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service, store
 from backend.main import app
-from backend.tests.signing import headers
+from backend.tests.signing import AGENT, headers
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 DECLINE = {
     "decision": "decline",
@@ -52,7 +52,7 @@ def approve(payout):
 
 
 def test_no_run_yet():
-    assert client.get("/api/runs/current").json() is None
+    assert client.get("/api/runs/current", headers=headers()).json() is None
 
 
 def test_create_a_dispatch():
@@ -67,7 +67,10 @@ def test_create_a_dispatch():
         "version": 1,
     }
     assert (run["status"], run["claims"], run["finished_at"]) == ("running", [], None)
-    assert client.get("/api/runs/current").json()["run_id"] == run["run_id"]
+    assert (
+        client.get("/api/runs/current", headers=headers()).json()["run_id"]
+        == run["run_id"]
+    )
 
 
 def test_only_one_run_at_a_time():
@@ -85,8 +88,10 @@ def test_only_an_evaluation_has_a_set():
 def test_stopped_runs_are_marked_when_the_service_starts():
     run_id = new_run().json()["run_id"]
     assert client.post("/api/runs/stop-running").json() == {"stopped": 1}
-    assert client.get("/api/runs/current").json()["status"] == "stopped"
-    assert client.get("/api/runs/current").json()["run_id"] == run_id
+    assert (
+        client.get("/api/runs/current", headers=headers()).json()["status"] == "stopped"
+    )
+    assert client.get("/api/runs/current", headers=headers()).json()["run_id"] == run_id
 
 
 def test_unknown_run_is_404():
@@ -122,7 +127,7 @@ def test_the_summary_is_built_from_the_records():
     decide("CLM-1003", approve(1250))
     release("CLM-1004")
     release("CLM-1004")
-    run = client.get("/api/runs/current").json()
+    run = client.get("/api/runs/current", headers=headers()).json()
     assert [c["claim_id"] for c in run["claims"]][:2] == ["CLM-1001", "CLM-1002"]
     assert run["summary"] == {
         "approved": 1,
@@ -158,7 +163,7 @@ def test_cost_and_time_are_recorded_with_their_run():
     for run, seconds in [(run_id, 3.0), (None, 2.0)]:
         spent = {"run_id": run, "seconds": seconds}
         client.post("/api/claims/CLM-1001/work-times", json=spent)
-    run = client.get("/api/runs/current").json()
+    run = client.get("/api/runs/current", headers=headers()).json()
     assert run["cost"] == pytest.approx(0.03)
     assert run["seconds"] == pytest.approx(3.0)
     claim = client.get("/api/claims/CLM-1001").json()
@@ -248,7 +253,7 @@ def test_n_is_from_1_to_25():
 
 def counts():
     found = {}
-    for claim in client.get("/api/claims").json():
+    for claim in client.get("/api/claims", headers=headers()).json():
         found[claim["status"]] = found.get(claim["status"], 0) + 1
     return found
 
@@ -329,7 +334,7 @@ def test_the_measures_match_ones_worked_out_by_hand():
     expected_right = sum(
         d == key(o)["decision"] and abs(p - key(o)["payout"]) <= 1 for o, d, p in graded
     )
-    evaluation = client.get(f"/api/evaluations/{run_id}").json()
+    evaluation = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()
     assert evaluation["decision_accuracy"] == pytest.approx(
         sum(d == key(o)["decision"] for o, d, _ in graded) / 5
     )
@@ -344,22 +349,26 @@ def test_the_measures_match_ones_worked_out_by_hand():
     assert evaluation["seconds_per_claim"] == pytest.approx(16 / 5)
     assert evaluation["run_seconds"] >= 0
     assert [c["claim_id"] for c in evaluation["claims"]] == copies
-    assert client.get("/api/evaluations").json()[0]["run_id"] == run_id
+    assert (
+        client.get("/api/evaluations", headers=headers()).json()[0]["run_id"] == run_id
+    )
 
 
 def test_evaluations_are_listed_newest_first_and_stopped_shows():
     first = new_run("evaluation", "held_out", tiny=True).json()["run_id"]
     client.post("/api/runs/stop-running")
     second = new_run("evaluation", "evaluation", tiny=True).json()["run_id"]
-    listed = client.get("/api/evaluations").json()
+    listed = client.get("/api/evaluations", headers=headers()).json()
     assert [e["run_id"] for e in listed] == [second, first]
     assert [e["status"] for e in listed] == ["running", "stopped"]
-    assert client.get("/api/evaluations/999").status_code == 404
+    assert client.get("/api/evaluations/999", headers=headers()).status_code == 404
 
 
 def test_a_dispatch_is_not_an_evaluation():
     run_id = new_run().json()["run_id"]
-    assert client.get(f"/api/evaluations/{run_id}").status_code == 404
+    assert (
+        client.get(f"/api/evaluations/{run_id}", headers=headers()).status_code == 404
+    )
 
 
 def test_new_operations_follow_the_api_rules():

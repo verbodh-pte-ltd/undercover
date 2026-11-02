@@ -94,9 +94,14 @@ class Line(BaseModel):
     )
 
 
+def key_header() -> dict[str, str]:
+    """The agent's API key for the backend, read as each client is made."""
+    return {"X-API-Key": os.getenv("UNDERCOVER_API_KEY", "")}
+
+
 def backend() -> httpx.Client:
-    """Return a client for the UnderCover backend."""
-    return httpx.Client(base_url=BACKEND_URL, timeout=30)
+    """Return a client for the UnderCover backend that sends the agent's API key."""
+    return httpx.Client(base_url=BACKEND_URL, timeout=30, headers=key_header())
 
 
 def call(method: str, path: str, body: Any = None) -> str:

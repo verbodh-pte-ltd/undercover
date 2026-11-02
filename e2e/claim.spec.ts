@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { AGENT } from "./agent";
 import { signIn } from "./sign-in";
 
 test.beforeEach(async ({ page }) => {
@@ -13,9 +14,13 @@ test("steps appear on the claim while the agent works", async ({
   await expect(page.getByText("No steps yet.")).toBeVisible();
 
   await request.post("/api/claims/CLM-1002/start", {
+    headers: AGENT,
     data: { run_id: null },
   });
-  const step = (text: string) => ({ data: { kind: "tool_call", text } });
+  const step = (text: string) => ({
+    headers: AGENT,
+    data: { kind: "tool_call", text },
+  });
   await request.post("/api/claims/CLM-1002/steps", step("get_claim(CLM-1002)"));
   await expect(page.getByText("get_claim(CLM-1002)")).toBeVisible();
   await request.post(
@@ -31,6 +36,7 @@ test("a handler's sign-off reaches the agent, which then pays", async ({
   request,
 }) => {
   await request.post("/api/claims/CLM-1003/decision", {
+    headers: AGENT,
     data: {
       decision: "approve",
       payout: 1250,
@@ -39,6 +45,7 @@ test("a handler's sign-off reaches the agent, which then pays", async ({
     },
   });
   const blocked = await request.post("/api/claims/CLM-1003/payment", {
+    headers: AGENT,
     data: { amount: 1250 },
   });
   expect(blocked.status()).toBe(403);
@@ -60,6 +67,7 @@ test("a handler's sign-off reaches the agent, which then pays", async ({
 
   // The stand-in doesn't pay, so the test pays as the agent would.
   await request.post("/api/claims/CLM-1003/payment", {
+    headers: AGENT,
     data: { amount: 1250 },
   });
   await expect(page.getByText(/^Paid \$1,250\.00 on /)).toBeVisible();

@@ -2,9 +2,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.tests.signing import MARCUS, headers
+from backend.tests.signing import AGENT, MARCUS, headers
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 LAB = {
     "approval_limit": 1000.0,
@@ -41,7 +41,7 @@ def change(sent=None, **values):
 
 def test_the_settings_start_with_the_labs_values_and_the_models_allowed(monkeypatch):
     monkeypatch.delenv("MODEL_NAME", raising=False)
-    found = client.get("/api/settings").json()
+    found = client.get("/api/settings", headers=headers()).json()
     assert found["settings"] == LAB
     assert found["changes"] == {}
     luna = found["models_allowed"][0]
@@ -56,7 +56,7 @@ def test_the_settings_start_with_the_labs_values_and_the_models_allowed(monkeypa
 
 def test_with_model_name_set_that_model_is_the_only_one_allowed(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
-    assert client.get("/api/settings").json()["models_allowed"] == [
+    assert client.get("/api/settings", headers=headers()).json()["models_allowed"] == [
         {
             "model": "openrouter/free",
             "reasoning_efforts": ["default"],
@@ -72,7 +72,7 @@ def test_a_change_records_who_made_it_and_when():
     assert set(found["changes"]) == {"approval_limit", "agents_at_once"}
     assert found["changes"]["approval_limit"]["handler"] == "Dana Whitfield"
     assert found["changes"]["approval_limit"]["changed_at"]
-    assert client.get("/api/settings").json() == found
+    assert client.get("/api/settings", headers=headers()).json() == found
 
 
 @pytest.mark.parametrize(
@@ -89,7 +89,7 @@ def test_a_change_records_who_made_it_and_when():
 )
 def test_each_value_is_checked(values):
     assert change(**values).status_code == 422
-    assert client.get("/api/settings").json()["settings"] == LAB
+    assert client.get("/api/settings", headers=headers()).json()["settings"] == LAB
 
 
 def test_every_setting_is_needed():
@@ -99,7 +99,7 @@ def test_every_setting_is_needed():
 
 def test_a_change_needs_a_sign_in():
     assert change(sent={}, approval_limit=2000.0).status_code == 401
-    assert client.get("/api/settings").json()["settings"] == LAB
+    assert client.get("/api/settings", headers=headers()).json()["settings"] == LAB
 
 
 def test_marcus_cant_change_a_setting():
@@ -109,7 +109,7 @@ def test_marcus_cant_change_a_setting():
         "Marcus Oyelaran can't change the settings. Only a handler who can sign off"
         " payouts over the approval limit can"
     )
-    assert client.get("/api/settings").json()["changes"] == {}
+    assert client.get("/api/settings", headers=headers()).json()["changes"] == {}
 
 
 def test_a_new_approval_limit_applies_to_the_next_decision():

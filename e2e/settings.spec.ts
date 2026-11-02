@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { asHandler } from "./agent";
 import { signIn } from "./sign-in";
 
 test.beforeEach(async ({ page }) => {
@@ -26,7 +27,9 @@ test("a handler changes a setting after confirming it", async ({
   await expect(page.getByText(/Last changed by Dana Whitfield/)).toBeVisible();
   await page.reload();
   await expect(limit).toHaveValue("0.75");
-  const saved = (await (await request.get("/api/settings")).json()) as {
+  const saved = (await (
+    await request.get("/api/settings", { headers: await asHandler(request) })
+  ).json()) as {
     settings: { round_spending_limit: number };
   };
   expect(saved.settings.round_spending_limit).toBe(0.75);

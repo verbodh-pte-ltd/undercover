@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { AGENT, asHandler } from "./agent";
 import { signIn } from "./sign-in";
 
 test.beforeEach(async ({ page }) => {
@@ -17,7 +18,9 @@ test("a handler approves a proposal played out through the API", async ({
     .getByRole("dialog", { name: "Start a round?" })
     .getByRole("button", { name: "Start a round" })
     .click();
-  const [round] = (await (await request.get("/api/rounds")).json()) as {
+  const [round] = (await (
+    await request.get("/api/rounds", { headers: await asHandler(request) })
+  ).json()) as {
     round_id: number;
   }[];
   const id = String(round.round_id);
@@ -29,12 +32,14 @@ test("a handler approves a proposal played out through the API", async ({
   );
 
   const current = (await (
-    await request.get("/api/configuration/current")
+    await request.get("/api/configuration/current", { headers: AGENT })
   ).json()) as { instructions: string };
   await request.post(`/api/rounds/${id}/stage`, {
+    headers: AGENT,
     data: { stage: "improving" },
   });
   await request.post(`/api/rounds/${id}/proposed-change`, {
+    headers: AGENT,
     data: {
       instructions: `${current.instructions}\nDecline a claim with no receipt.`,
       model: "openai/gpt-6-luna",
@@ -71,6 +76,7 @@ test("a handler approves a proposal played out through the API", async ({
     })
     .toEqual({ decision: "approve", reason: "", handler_id: "HND-01" });
   await request.post(`/api/rounds/${id}/decision`, {
+    headers: AGENT,
     data: { decision: "approve", handler_id: "HND-01", reason: "" },
   });
   await expect(

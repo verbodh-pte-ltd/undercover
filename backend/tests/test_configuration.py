@@ -5,8 +5,9 @@ from sqlalchemy import func, insert, select, update
 
 from backend import store
 from backend.main import app, changed_lines
+from backend.tests.signing import AGENT, headers
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 CLAIM = Path("backend/instructions/claim.md").read_text(encoding="utf-8")
 RECIPE = Path("backend/instructions/recipe.md").read_text(encoding="utf-8")
@@ -52,7 +53,7 @@ def finished_in_a_round(run_id):
 
 
 def test_seeding_makes_version_1_of_the_configuration_and_the_recipe():
-    [first] = client.get("/api/configuration/versions").json()
+    [first] = client.get("/api/configuration/versions", headers=headers()).json()
     assert {k: first[k] for k in ["version", "instructions", "model", "effort"]} == {
         "version": 1,
         "instructions": CLAIM,
@@ -85,9 +86,10 @@ def test_reseeding_takes_both_back_to_version_1():
             )
         )
     store.reseed()
-    assert [v["version"] for v in client.get("/api/configuration/versions").json()] == [
-        1
-    ]
+    assert [
+        v["version"]
+        for v in client.get("/api/configuration/versions", headers=headers()).json()
+    ] == [1]
     with store.connect() as conn:
         assert conn.scalar(select(func.count()).select_from(store.recipes)) == 1
 
@@ -105,7 +107,7 @@ def test_the_current_version_is_the_newest_kept():
     add_version(2, CLAIM + "Kept rule.\n", True)
     add_version(3, CLAIM + "Rolled back rule.\n", False)
     assert client.get("/api/configuration/current").json()["version"] == 2
-    found = client.get("/api/configuration/versions").json()
+    found = client.get("/api/configuration/versions", headers=headers()).json()
     assert [(v["version"], v["current"]) for v in found] == [
         (3, False),
         (2, True),
@@ -116,7 +118,7 @@ def test_the_current_version_is_the_newest_kept():
 def test_each_version_shows_what_changed_from_the_one_before():
     changed = CLAIM.replace("Work the claim in this order:", "Work in this order:")
     add_version(2, changed + "Never approve without a receipt.\n", True, "x/model")
-    second = client.get("/api/configuration/versions").json()[0]
+    second = client.get("/api/configuration/versions", headers=headers()).json()[0]
     assert second["before"] == {"model": "openai/gpt-6-luna", "effort": "low"}
     assert (second["model"], second["effort"]) == ("x/model", "medium")
     found = second["changed_lines"]
@@ -160,8 +162,11 @@ def test_a_dispatch_and_an_evaluation_record_their_version():
     assert dispatch["version"] == 2
     client.post("/api/runs/stop-running")
     run_id = new_run(version=1).json()["run_id"]
-    assert client.get(f"/api/evaluations/{run_id}").json()["version"] == 1
-    assert client.get("/api/evaluations").json()[0]["version"] == 1
+    assert (
+        client.get(f"/api/evaluations/{run_id}", headers=headers()).json()["version"]
+        == 1
+    )
+    assert client.get("/api/evaluations", headers=headers()).json()[0]["version"] == 1
 
 
 def test_a_run_on_an_unknown_version_is_refused():
@@ -188,7 +193,12 @@ def test_a_runs_configuration_is_its_version_with_its_model_and_effort():
 def test_scores_average_only_whole_held_out_evaluations_that_rounds_ran():
     outside = new_run().json()["run_id"]
     client.post(f"/api/runs/{outside}/finish")
-    assert client.get("/api/configuration/versions").json()[0]["held_out"] is None
+    assert (
+        client.get("/api/configuration/versions", headers=headers()).json()[0][
+            "held_out"
+        ]
+        is None
+    )
     counted = []
     for eval_set, tiny in [
         ("held_out", False),
@@ -209,10 +219,14 @@ def test_scores_average_only_whole_held_out_evaluations_that_rounds_ran():
             }
             client.post(f"/api/claims/{copy_id}/model-calls", json=used)
         finished_in_a_round(run_id)
-    scores = client.get("/api/configuration/versions").json()[0]["held_out"]
+    scores = client.get("/api/configuration/versions", headers=headers()).json()[0][
+        "held_out"
+    ]
     # Two runs count: 25 claims each, none decided, so each an F, and $2.50 and $5.00
     # between them.
-    accuracy = client.get(f"/api/evaluations/{counted[0]}").json()["accuracy"]
+    accuracy = client.get(f"/api/evaluations/{counted[0]}", headers=headers()).json()[
+        "accuracy"
+    ]
     assert scores == {
         "accuracy": accuracy,
         "grade": 0.0,

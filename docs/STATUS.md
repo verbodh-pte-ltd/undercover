@@ -9,6 +9,10 @@ improver, phase 7: the Improvement page and the look of the dashboard, and phase
 the documents, with the designer's review of the screenshots and its fixes. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
+Of the security changes before AWS (`docs/PLAN_SECURE.md`, from `docs/SECURE.md`), phase 1 is built: an
+API key for the agent. Phases 2 to 5 (the check for hidden instructions, the agent's own API and the
+sign-off that pays, the Lambda package, and the live checks) are not built yet.
+
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
 
 - A dispatch at N=3, started on the dashboard, was killed partway by stopping everything on port 8002,
@@ -97,10 +101,17 @@ What changed for it, in the look only:
     instructions, model and effort.
   - Sign-in: `backend/auth.py` checks a Supabase access token against the public keys at
     `{VITE_SUPABASE_URL}/auth/v1/.well-known/jwks.json` with PyJWT's `PyJWKClient`, audience
-    `authenticated`, and the backend finds the handler by the token's email. `start_dispatch`,
-    `start_evaluation`, `sign_off`, `change_settings` and `list_handlers` (which leaves out the
-    emails) need a signed-in handler (401 without one); `GET /api/handlers/me`
-    (`get_signed_in_handler`) returns the handler. The agent's own calls need no sign-in.
+    `authenticated`, and the backend finds the handler by the token's email. `GET /api/handlers/me`
+    (`get_signed_in_handler`) returns the handler; `list_handlers` leaves out the emails.
+  - Who may call what (`docs/PLAN_SECURE.md`, choice 3; a test fails if a route is in no group or
+    two). Only `GET /api/health` is open. The agent's side sends `UNDERCOVER_API_KEY` in an
+    `X-API-Key` header, compared with `secrets.compare_digest`. The reads both use (`get_claim`,
+    `get_policy`, `get_claim_history`, `list_recipes`) take the key or a signed-in handler. Every
+    other route the dashboard calls, its reads and its actions, needs a signed-in handler, and the
+    key never stands in for one. Every route only the agent's side calls needs the key. Anything
+    refused answers 401. The checks read the request's headers themselves, so no operation has a
+    key or token parameter. With `UNDERCOVER_API_KEY` unset or empty the backend still starts and
+    handlers work, but every route that needs the key refuses.
   - Settings live in the `settings` table, seeded from `data/company.json` (the approval limit,
     $1,000) and `data/improvement.json` (the objectives, the noise, the tolerance, the spending
     limit for each round, $0.50, and 25 claim agents at once). `GET /api/settings` (`get_settings`)
@@ -138,8 +149,8 @@ What changed for it, in the look only:
     its diff, the version tried, the verdict and why, the held-out scores before and after, who approved
     or rejected what, its runs, what it spent and what's left, and its `progress` in the first
     evaluations or the evaluations: how many it has started of those the stage needs (the first
-    evaluations need only what earlier rounds left the current version short of). The service records a round through open
-    routes: its stage, a proposed change (422 for a model or effort outside the models allowed) or
+    evaluations need only what earlier rounds left the current version short of). The service records a round with the
+    agent's key: its stage, a proposed change (422 for a model or effort outside the models allowed) or
     recipe, the handler's decision (an approved change becomes a version under test, an approved recipe
     the next recipe), the improver's own model calls, and its whole-set evaluations
     (`POST /api/rounds/{id}/evaluations`, on the round's versions only, with the round's agents at once,
@@ -181,6 +192,10 @@ What changed for it, in the look only:
   instructions (on `openai/gpt-6-luna` at low effort) and of the improver's recipe (the lab's first),
   which seeding copies into the database.
 - `agent/`: the UnderCover Agent, in six parts (`docs/CODE_STANDARDS.md`).
+  - Every call to the backend, from the claim agent's tools, the harness, the dispatcher, the
+    improver's client and the service, goes through `backend()` in `agent/main.py`, which sends
+    `X-API-Key` with `UNDERCOVER_API_KEY` read as each client is made, so the command line's key from
+    `.env` reaches it. The service refuses to start without the key and says it's missing.
   - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`) with seven tools and no pay
     or sign-off tool. It works to its run's configuration version (the current one for a claim in no
     run): its instructions, model and reasoning effort, or `MODEL_NAME` at the model's default effort. At
@@ -218,7 +233,7 @@ What changed for it, in the look only:
   - `uv run -m agent CLM-1001` works named claims with no run.
 - `dashboard/`: the claims desk. Every page needs a signed-in handler: the sign-in page signs in
   with `@supabase/supabase-js` `signInWithPassword` (no sign-up), and the header shows who is signed
-  in with a "Sign out" button. Each action sends the session's access token. Every page has the
+  in with a "Sign out" button. Each read and action sends the session's access token. Every page has the
   same header (its title and what it is for), the navigation marks the page you are on, numbers are
   right-aligned with their units, statuses are a colored chip with a word, and a page that can't load
   says to check the backend and reload. Handler ids show as names, and version 1's as "Seeded".
@@ -255,7 +270,10 @@ What changed for it, in the look only:
   service on :8003 (`e2e/agent-stand-in.mjs`) records the backend's calls with their bodies. A
   stand-in for Supabase Auth on :8004 (`e2e/auth-stand-in.mjs`) signs tokens with its own key,
   serves its public key and answers CORS preflights; every spec signs in first. A stand-in for the
-  judge's endpoint on :8005 (`e2e/judge-stand-in.mjs`) gives every claim a B at 2.2.
+  judge's endpoint on :8005 (`e2e/judge-stand-in.mjs`) gives every claim a B at 2.2. The test
+  backend has a fixed `UNDERCOVER_API_KEY` from `e2e/agent.ts`, which the specs send when they call
+  the backend as the agent's side would; `asHandler` there signs in through the stand-in for a read
+  outside the page.
   `e2e/rounds.spec.ts` starts a round on the dashboard, records a proposal through the backend's
   routes as the agent's service would, approves it on the page, checks the approval reached the
   stand-in with the handler, records it, and stops the round. The specs pass in any order.
@@ -272,6 +290,10 @@ without a run:
 ```bash
 uv run --env-file .env -m agent CLM-1001
 ```
+
+`.env` needs `UNDERCOVER_API_KEY`, a random value of at least 32 characters (for example from
+Python's `secrets.token_urlsafe(32)`): the agent's service won't start without it, and the backend
+refuses the agent's calls without it.
 
 Sign in as a handler from `data/handlers.json` with `HANDLER_PASSWORD` from `.env`. Supabase's local
 stack must be running (`npx supabase start`, as in `labs/week2/week2day5.ipynb`), with

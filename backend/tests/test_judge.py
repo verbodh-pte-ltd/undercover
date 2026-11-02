@@ -10,10 +10,11 @@ from sqlalchemy import select
 
 from backend import judge, main, store
 from backend.main import app
+from backend.tests.signing import AGENT, headers
 
 # The real grade, before the tests' stub takes its place.
 real_grade = judge.grade
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 HANDLER = {"decision": "decline", "reason": "Not covered.", "reference": "9.2"}
 AGENT = {"decision": "decline", "rationale": "Excluded by 9.2.", "section": "9.2"}
@@ -149,7 +150,7 @@ def test_finishing_grades_in_parallel_and_an_undecided_claim_is_an_f(monkeypatch
     handler, agent = asked[0]
     assert set(handler) == {"decision", "reason", "reference"}
     assert agent["rationale"] == "Needs a handler."
-    found = client.get(f"/api/evaluations/{run_id}").json()
+    found = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()
     undecided, decided = found["claims"][0], found["claims"][1]
     assert {k: undecided[k] for k in B} == {**B, **main.UNDECIDED}
     assert {k: decided[k] for k in B} == B
@@ -172,7 +173,7 @@ def test_a_claim_the_judge_cant_grade_is_left_out_of_the_average(monkeypatch):
 
     monkeypatch.setattr(judge, "grade", judge_)
     client.post(f"/api/runs/{run_id}/finish")
-    found = client.get(f"/api/evaluations/{run_id}").json()
+    found = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()
     graded = [c["grade"] for c in found["claims"] if c["grade"] is not None]
     assert sorted(graded) == [2.0, 2.0, 2.0, 3.0]
     assert found["grade"] == pytest.approx(9 / 4)
@@ -185,7 +186,10 @@ def test_a_run_with_no_graded_claims_has_no_grade():
     for copy_id in copies:
         decide(copy_id, run_id)
     client.post(f"/api/runs/{run_id}/finish")
-    assert client.get(f"/api/evaluations/{run_id}").json()["grade"] is None
+    assert (
+        client.get(f"/api/evaluations/{run_id}", headers=headers()).json()["grade"]
+        is None
+    )
     assert main.average([2.0, None, 3.0]) == 2.5
     assert main.average([None]) is None
 
@@ -197,7 +201,7 @@ def test_on_a_free_model_the_judge_isnt_called(monkeypatch):
     run_id, copies = evaluation(tiny=True)
     decide(copies[0], run_id)
     client.post(f"/api/runs/{run_id}/finish")
-    found = client.get(f"/api/evaluations/{run_id}").json()
+    found = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()
     assert asked == []
     assert all(c["grade"] is None for c in found["claims"])
     assert (found["grade"], found["judge_cost"]) == (None, 0)

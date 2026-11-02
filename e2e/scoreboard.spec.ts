@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { AGENT } from "./agent";
 import { signIn } from "./sign-in";
 
 test.beforeEach(async ({ page }) => {
@@ -10,8 +11,9 @@ test("the scoreboard shows an evaluation played out through the API", async ({
   request,
 }) => {
   // The tests run one at a time; finish any run an earlier test left going.
-  await request.post("/api/runs/stop-running");
+  await request.post("/api/runs/stop-running", { headers: AGENT });
   const created = await request.post("/api/runs", {
+    headers: AGENT,
     data: {
       kind: "evaluation",
       n: 5,
@@ -25,13 +27,17 @@ test("the scoreboard shows an evaluation played out through the API", async ({
   const { run_id } = (await created.json()) as { run_id: number };
   const run = String(run_id);
   const copies = (await (
-    await request.get(`/api/runs/${run}/claims`)
+    await request.get(`/api/runs/${run}/claims`, { headers: AGENT })
   ).json()) as string[];
   expect(copies).toHaveLength(5);
 
   for (const copy of copies) {
-    await request.post(`/api/claims/${copy}/start`, { data: { run_id } });
+    await request.post(`/api/claims/${copy}/start`, {
+      headers: AGENT,
+      data: { run_id },
+    });
     await request.post(`/api/claims/${copy}/decision`, {
+      headers: AGENT,
       data: {
         decision: "refer",
         payout: 0,
@@ -40,7 +46,7 @@ test("the scoreboard shows an evaluation played out through the API", async ({
       },
     });
   }
-  await request.post(`/api/runs/${run}/finish`);
+  await request.post(`/api/runs/${run}/finish`, { headers: AGENT });
 
   await page.goto("/#/scoreboard");
   const row = page.getByRole("row", { name: new RegExp(`Evaluation ${run}`) });

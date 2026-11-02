@@ -17,10 +17,10 @@ from agent.tests.test_agent import (
 )
 from backend import agent_service, judge, store
 from backend.main import app
-from backend.tests.signing import headers
+from backend.tests.signing import AGENT, headers
 from backend.tests.test_rounds import GRADED, answer_key
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 LUNA = {"model": "openai/gpt-6-luna", "reasoning_effort": "low"}
 CHANGE = {
@@ -72,7 +72,9 @@ def contexts(monkeypatch):
 
     def dispatch(run_id, n, llm=None):
         seen.append(var_child_runnable_config.get())
-        version = client.get(f"/api/evaluations/{run_id}").json()["version"]
+        version = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()[
+            "version"
+        ]
         key = answer_key()
         for copy_id in client.get(f"/api/runs/{run_id}/claims").json():
             started = client.post(
@@ -147,7 +149,10 @@ def improver_costs(round_id):
 
 
 def versions():
-    return [v["version"] for v in client.get("/api/configuration/versions").json()]
+    return [
+        v["version"]
+        for v in client.get("/api/configuration/versions", headers=headers()).json()
+    ]
 
 
 def test_a_whole_round(monkeypatch, contexts):
@@ -377,7 +382,9 @@ def test_a_rounds_claims_are_tagged_with_the_round_and_the_run(monkeypatch, cont
     monkeypatch.setattr(
         main, "traced", lambda *args: tagged.append(args) or real(*args)
     )
-    copy_id = client.get(f"/api/evaluations/{run_id}").json()["claims"][0]["claim_id"]
+    copy_id = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()[
+        "claims"
+    ][0]["claim_id"]
     main.run(
         copy_id, f"{copy_id}-1", StubModel(messages=Script(AIMessage("?"))), run_id
     )

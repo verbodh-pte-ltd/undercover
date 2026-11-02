@@ -4,9 +4,9 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service
 from backend.main import app
-from backend.tests.signing import DANA, MARCUS, headers, token
+from backend.tests.signing import AGENT, DANA, MARCUS, headers, token
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 LARGE = {
     "decision": "approve",

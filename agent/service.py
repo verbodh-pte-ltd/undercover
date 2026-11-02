@@ -1,5 +1,6 @@
 """The agent's service: starts dispatches, evaluations and rounds; resumes claims."""
 
+import os
 import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
@@ -40,6 +41,11 @@ class RoundAnswer(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """When the service starts, mark any run or round it was working as stopped."""
+    if not os.getenv("UNDERCOVER_API_KEY"):
+        raise RuntimeError(
+            "UNDERCOVER_API_KEY is missing. Add it to .env: the agent's service needs"
+            " it for every call to the backend"
+        )
     # The backend may not be up yet; the next start then marks nothing. A round waiting
     # for a handler stays open, and carries on from its checkpoint when answered.
     with suppress(httpx.HTTPError), main.backend() as client:

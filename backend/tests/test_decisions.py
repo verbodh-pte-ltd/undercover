@@ -3,9 +3,9 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service
 from backend.main import app
-from backend.tests.signing import headers
+from backend.tests.signing import AGENT, headers
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 SMALL = {
     "decision": "approve",
@@ -35,7 +35,7 @@ def start(claim_id):
 def test_start_claim_clears_old_steps():
     client.post("/api/claims/CLM-1001/steps", json={"kind": "reply", "text": "old"})
     assert start("CLM-1001").json()["status"] == "in_progress"
-    assert client.get("/api/claims/CLM-1001/steps").json() == []
+    assert client.get("/api/claims/CLM-1001/steps", headers=headers()).json() == []
 
 
 def test_start_decided_claim_is_409():
@@ -48,12 +48,14 @@ def test_steps_in_order():
         client.post(
             "/api/claims/CLM-1002/steps", json={"kind": "tool_call", "text": text}
         )
-    steps = client.get("/api/claims/CLM-1002/steps").json()
+    steps = client.get("/api/claims/CLM-1002/steps", headers=headers()).json()
     assert [s["text"] for s in steps] == ["one", "two", "three"]
 
 
 def test_steps_on_unknown_claim_is_404():
-    assert client.get("/api/claims/CLM-0000/steps").status_code == 404
+    assert (
+        client.get("/api/claims/CLM-0000/steps", headers=headers()).status_code == 404
+    )
     step = {"kind": "reply", "text": "x"}
     assert client.post("/api/claims/CLM-0000/steps", json=step).status_code == 404
 

@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { API_KEY } from "./e2e/agent";
 
 // The end-to-end tests run their own backend and dashboard on their own ports and database,
 // so they never change the data behind `npm run dev`. A stand-in on port 8003 takes the agent
@@ -43,6 +44,8 @@ export default defineConfig({
         VITE_SUPABASE_URL: AUTH,
         JUDGE_URL: JUDGE,
         OPENROUTER_API_KEY: "e2e-key",
+        // A fixed key, which the specs send as the agent's side would.
+        UNDERCOVER_API_KEY: API_KEY,
         // The judge is called only off the free models.
         MODEL_NAME: "",
       },

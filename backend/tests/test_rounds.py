@@ -7,10 +7,10 @@ from sqlalchemy import select
 
 from backend import agent_service, judge, rule, store
 from backend.main import app
-from backend.tests.signing import MARCUS, headers
+from backend.tests.signing import AGENT, MARCUS, headers
 from backend.tests.test_settings import LAB
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 LUNA = {"model": "openai/gpt-6-luna", "effort": "low"}
 CHANGE = {
@@ -179,7 +179,7 @@ def test_only_a_handler_who_can_sign_off_over_the_limit_acts_on_a_round(service)
             " payouts over the approval limit can"
         )
     assert service == []
-    assert client.get("/api/rounds").json() == []
+    assert client.get("/api/rounds", headers=headers()).json() == []
 
 
 def test_a_round_starts_in_the_agents_service_one_at_a_time(service):
@@ -212,7 +212,7 @@ def test_a_refused_start_leaves_no_round(monkeypatch):
         409,
         "A dispatch is running",
     )
-    assert client.get("/api/rounds").json() == []
+    assert client.get("/api/rounds", headers=headers()).json() == []
 
 
 def test_a_start_the_service_cant_take_leaves_no_round(monkeypatch):
@@ -223,7 +223,7 @@ def test_a_start_the_service_cant_take_leaves_no_round(monkeypatch):
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: NotFound(404, {}))
     with pytest.raises(httpx.HTTPStatusError):
         client.post("/api/rounds", headers=headers())
-    assert client.get("/api/rounds").json() == []
+    assert client.get("/api/rounds", headers=headers()).json() == []
 
 
 def test_a_round_keeps_its_settings_when_they_change(service):
@@ -234,7 +234,7 @@ def test_a_round_keeps_its_settings_when_they_change(service):
     assert found["settings"] == LAB
     assert found["left"] == 0.5
     run_id = evaluate(round_id, "held_out", 1, 0, cost=0)
-    assert client.get(f"/api/evaluations/{run_id}").json()["n"] == 25
+    assert client.get(f"/api/evaluations/{run_id}", headers=headers()).json()["n"] == 25
 
 
 def test_a_whole_round_keeps_a_better_version(service, monkeypatch):
@@ -281,7 +281,7 @@ def test_a_version_with_no_grade_is_rolled_back(service):
     found = client.post(f"/api/rounds/{round_id}/verdict").json()
     assert (found["kept"], found["why"]) == (False, "it has no grade")
     assert current() == 1
-    versions = client.get("/api/configuration/versions").json()
+    versions = client.get("/api/configuration/versions", headers=headers()).json()
     assert (versions[0]["version"], versions[0]["kept"]) == (2, False)
 
 
@@ -291,7 +291,7 @@ def test_a_proposal_changes_nothing_until_approved(service):
     assert found["stage"] == "change_waiting"
     assert found["proposal"]["before"] == LUNA
     assert found["proposal"]["changed_lines"][-1] == "+Decline a claim with no receipt."
-    assert len(client.get("/api/configuration/versions").json()) == 1
+    assert len(client.get("/api/configuration/versions", headers=headers()).json()) == 1
     response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     assert response.json() == {"status": "started"}
     assert service[-1] == (
@@ -300,7 +300,7 @@ def test_a_proposal_changes_nothing_until_approved(service):
     )
     # The backend records nothing of its own: the service records the answer.
     assert client.get(f"/api/rounds/{round_id}").json()["events"] == []
-    assert len(client.get("/api/configuration/versions").json()) == 1
+    assert len(client.get("/api/configuration/versions", headers=headers()).json()) == 1
 
 
 def test_a_rejection_records_the_handlers_reason(service):
@@ -323,7 +323,7 @@ def test_a_rejection_records_the_handlers_reason(service):
         "Dana Whitfield",
         reason["reason"],
     )
-    assert len(client.get("/api/configuration/versions").json()) == 1
+    assert len(client.get("/api/configuration/versions", headers=headers()).json()) == 1
     response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     assert response.status_code == 409
 
@@ -525,7 +525,10 @@ def test_an_evaluation_cut_short_by_the_limit_is_stopped_and_rolled_back(service
     assert response.status_code == 409
     assert response.json()["detail"] == f"Round {round_id} has spent its limit"
     client.post(f"/api/runs/{run_id}/finish")
-    assert client.get(f"/api/evaluations/{run_id}").json()["status"] == "stopped"
+    assert (
+        client.get(f"/api/evaluations/{run_id}", headers=headers()).json()["status"]
+        == "stopped"
+    )
     found = client.post(f"/api/rounds/{round_id}/verdict").json()
     assert (found["kept"], found["why"]) == (False, "its evaluations were stopped")
     assert current() == 1
@@ -555,7 +558,10 @@ def test_a_stopped_round_refuses_what_it_records_and_leaves_the_current_version(
     ]
     found = client.post(f"/api/rounds/{round_id}/stop", headers=headers()).json()
     assert (found["stage"], found["stopped_by"]) == ("stopped", "HND-01")
-    assert client.get(f"/api/evaluations/{run_id}").json()["status"] == "stopped"
+    assert (
+        client.get(f"/api/evaluations/{run_id}", headers=headers()).json()["status"]
+        == "stopped"
+    )
     copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
     response = client.post(f"/api/claims/{copy_id}/start", json={"run_id": run_id})
     assert response.json()["detail"] == f"Round {round_id} was stopped"
@@ -572,7 +578,7 @@ def test_a_stopped_round_refuses_what_it_records_and_leaves_the_current_version(
         assert response.status_code == 409, path
         assert response.json()["detail"] == f"Round {round_id} is stopped"
     assert current() == 1
-    versions = client.get("/api/configuration/versions").json()
+    versions = client.get("/api/configuration/versions", headers=headers()).json()
     assert (versions[0]["version"], versions[0]["kept"]) == (2, False)
 
 

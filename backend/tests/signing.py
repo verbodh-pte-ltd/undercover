@@ -11,6 +11,9 @@ KEY = ec.generate_private_key(ec.SECP256R1())
 JWKS = {"keys": [{**json.loads(ECAlgorithm.to_jwk(KEY.public_key())), "kid": "t"}]}
 DANA = "dana.whitfield@undercover.example"
 MARCUS = "marcus.oyelaran@undercover.example"
+# The agent's API key in every test, and the header the agent's side sends it in.
+API_KEY = "test-agent-key-of-at-least-32-characters"
+AGENT = {"X-API-Key": API_KEY}
 
 
 def token(

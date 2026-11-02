@@ -17,9 +17,11 @@ from agent import __main__ as runner
 from agent import dispatcher, main, service
 from backend import store
 from backend.main import app
-from backend.tests.signing import headers
+from backend.tests.signing import AGENT, headers
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
+# The agent's own client, before the tests swap it for one on the app in process.
+REAL_BACKEND = main.backend
 
 
 class Script:
@@ -51,7 +53,9 @@ def stub(*items):
 
 @pytest.fixture(autouse=True)
 def in_process_backend(monkeypatch):
-    monkeypatch.setattr(main, "backend", lambda: TestClient(app))
+    monkeypatch.setattr(
+        main, "backend", lambda: TestClient(app, headers=main.key_header())
+    )
     monkeypatch.setattr(main, "RETRY_DELAY", 0)
     memory = InMemorySaver()
     monkeypatch.setattr(main, "saver", lambda: memory)
@@ -137,7 +141,10 @@ def test_refusal_comes_back_as_text():
 
 
 def steps_of(claim_id):
-    return [s["text"] for s in client.get(f"/api/claims/{claim_id}/steps").json()]
+    return [
+        s["text"]
+        for s in client.get(f"/api/claims/{claim_id}/steps", headers=headers()).json()
+    ]
 
 
 def test_claim_agent_reads_sections_approves_and_pays():
@@ -314,7 +321,7 @@ def test_cost_is_recorded_for_each_model_call_with_its_run():
         response_metadata={"token_usage": {"cost": 0.0021}},
     )
     main.work("CLM-1001", run_id, stub(reply, AIMessage(content="Declined.")))
-    run = client.get("/api/runs/current").json()
+    run = client.get("/api/runs/current", headers=headers()).json()
     assert run["cost"] == pytest.approx(0.0021)
     assert run["claims"][0]["claim_id"] == "CLM-1001"
     assert claim("CLM-1001")["cost"] == pytest.approx(0.0021)
@@ -327,7 +334,7 @@ def test_time_is_recorded_with_its_run_and_leaves_out_a_sign_off_wait(monkeypatc
     hold(run_id=run_id)
     client.post("/api/claims/CLM-1001/sign-off", headers=headers())
     main.run("CLM-1001", "CLM-1001-1", stub())
-    run = client.get("/api/runs/current").json()
+    run = client.get("/api/runs/current", headers=headers()).json()
     assert run["seconds"] == pytest.approx(7.0)
     assert claim("CLM-1001")["seconds"] == pytest.approx(9.0)
 
@@ -340,7 +347,7 @@ def test_a_failed_attempts_cost_and_time_count_toward_its_run():
         response_metadata={"token_usage": {"cost": 0.01}},
     )
     main.work("CLM-1001", run_id, stub(costly, TimeoutError("one"), TimeoutError("2")))
-    run = client.get("/api/runs/current").json()
+    run = client.get("/api/runs/current", headers=headers()).json()
     assert run["cost"] == pytest.approx(0.01)
     assert len(run["claims"]) == 1
     assert run["seconds"] > 0
@@ -434,7 +441,10 @@ def test_never_more_than_n_claims_at_once(monkeypatch):
     assert len(results) == 25
     assert len(record) == 25
     assert most_at_once(record) == 3
-    assert client.get("/api/runs/current").json()["status"] == "finished"
+    assert (
+        client.get("/api/runs/current", headers=headers()).json()["status"]
+        == "finished"
+    )
 
 
 def test_a_dispatch_works_claims_in_progress_first(monkeypatch):
@@ -498,20 +508,61 @@ def test_a_claim_still_rate_limited_stays_in_progress_and_the_dispatch_goes_on(
     assert replies["CLM-1001"].startswith("left in progress after 3 tries")
     assert len(replies) == 25
     assert claim("CLM-1001")["status"] == "in_progress"
-    assert client.get("/api/runs/current").json()["status"] == "finished"
+    assert (
+        client.get("/api/runs/current", headers=headers()).json()["status"]
+        == "finished"
+    )
 
 
 def test_an_evaluation_works_its_copies_and_leaves_the_queue_alone():
-    before = [(c["claim_id"], c["status"]) for c in client.get("/api/claims").json()]
+    before = [
+        (c["claim_id"], c["status"])
+        for c in client.get("/api/claims", headers=headers()).json()
+    ]
     run_id = new_run("evaluation", "evaluation", tiny=True, n=1)
     copies = client.get(f"/api/runs/{run_id}/claims").json()
     replies = [m for copy_id in copies for m in decide(copy_id)]
     dispatcher.dispatch(run_id, 1, stub(*replies))
-    evaluation = client.get(f"/api/evaluations/{run_id}").json()
+    evaluation = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()
     assert [c["agent"] for c in evaluation["claims"]] == ["decline"] * 5
     assert evaluation["status"] == "finished"
-    after = [(c["claim_id"], c["status"]) for c in client.get("/api/claims").json()]
+    after = [
+        (c["claim_id"], c["status"])
+        for c in client.get("/api/claims", headers=headers()).json()
+    ]
     assert after == before
+
+
+# The agent's API key
+
+
+def test_the_agent_sends_its_key_read_as_each_request_is_sent(monkeypatch):
+    monkeypatch.setenv("UNDERCOVER_API_KEY", "a-key-set-after-the-agent-was-imported")
+    with REAL_BACKEND() as backend:
+        request = backend.build_request("GET", "/api/claims/CLM-1001")
+    assert request.headers["X-API-Key"] == "a-key-set-after-the-agent-was-imported"
+
+
+def test_everything_in_the_agent_calls_the_backend_through_one_client():
+    sources = {
+        f.name: f.read_text(encoding="utf-8") for f in Path("agent").glob("*.py")
+    }
+    assert sum(s.count("httpx.Client(") for s in sources.values()) == 1
+    assert "httpx.Client(" in inspect.getsource(REAL_BACKEND)
+    for name in ["dispatcher.py", "improver_api.py", "service.py"]:
+        assert "main.backend()" in sources[name]
+    for source in sources.values():
+        for call in ["httpx.get(", "httpx.post(", "httpx.put(", "httpx.request("]:
+            assert call not in source
+
+
+def test_the_service_wont_start_without_the_key(monkeypatch):
+    monkeypatch.delenv("UNDERCOVER_API_KEY")
+    with (
+        pytest.raises(RuntimeError, match="UNDERCOVER_API_KEY is missing"),
+        TestClient(service.app),
+    ):
+        pass
 
 
 # The agent's service
@@ -555,7 +606,7 @@ def test_the_service_starts_a_dispatch_and_refuses_a_second(monkeypatch):
             if not service.running.locked():
                 break
             time.sleep(0.01)
-    run = client.get("/api/runs/current").json()
+    run = client.get("/api/runs/current", headers=headers()).json()
     assert started == [(run["run_id"], 4)]
     assert run["n"] == 4
 
@@ -564,7 +615,9 @@ def test_the_service_marks_a_stopped_run_when_it_starts():
     new_run()
     with TestClient(service.app):
         pass
-    assert client.get("/api/runs/current").json()["status"] == "stopped"
+    assert (
+        client.get("/api/runs/current", headers=headers()).json()["status"] == "stopped"
+    )
 
 
 def test_claim_agents_starting_together_share_one_pool(monkeypatch):
@@ -631,8 +684,8 @@ def started(monkeypatch, path, body):
                 break
             time.sleep(0.01)
     if path == "/dispatches":
-        return client.get("/api/runs/current").json()
-    return client.get("/api/evaluations").json()[0]
+        return client.get("/api/runs/current", headers=headers()).json()
+    return client.get("/api/evaluations", headers=headers()).json()[0]
 
 
 def test_a_dispatch_and_an_evaluation_record_the_current_version(monkeypatch):
@@ -753,7 +806,9 @@ def test_the_claim_agents_client_never_reaches_the_scores_or_the_handlers_decisi
             reached.append(operation(method.upper(), str(url).split("?")[0]))
             return super().request(method, url, *args, **kwargs)
 
-    monkeypatch.setattr(main, "backend", lambda: Recording(app))
+    monkeypatch.setattr(
+        main, "backend", lambda: Recording(app, headers=main.key_header())
+    )
     every_tool = [
         calls(
             ("get_claim", {"claim_id": "CLM-1001"}),

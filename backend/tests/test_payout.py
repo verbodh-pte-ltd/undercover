@@ -3,8 +3,9 @@ from sqlalchemy import update
 
 from backend import store
 from backend.main import app
+from backend.tests.signing import AGENT
 
-client = TestClient(app)
+client = TestClient(app, headers=AGENT)
 
 
 def line(description, amount, kind="item", quantity=1, **extra):

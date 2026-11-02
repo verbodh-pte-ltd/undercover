@@ -244,7 +244,7 @@ export interface Settings {
   >;
 }
 
-// The signed-in handler's access token, which goes with every action.
+// The signed-in handler's access token, which goes with every read and action.
 async function authorization() {
   const { data } = await supabase.auth.getSession();
   return { Authorization: `Bearer ${data.session?.access_token ?? ""}` };
@@ -258,7 +258,7 @@ async function refusal(response: Response, fallback: string) {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+  const response = await fetch(path, { headers: await authorization() });
   if (!response.ok)
     throw new Error(`${path} returned ${String(response.status)}`);
   return (await response.json()) as T;
