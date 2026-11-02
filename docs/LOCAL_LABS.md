@@ -125,7 +125,8 @@ Truststore and local Postgres:
 
 - `week2/week2day3free.ipynb`: the same changes as `week2day3.ipynb`.
 
-Needs a decision first (section 4):
+Needs a decision first (section 4). `week3/week3day2_lab2.ipynb` already has truststore; its database
+waits on the decision. `week3/week3day2_lab2free.ipynb` has no code cells, so it needs nothing.
 
 - `week3/week3day1free.ipynb`, `week3/week3day2_lab2.ipynb`, `week3/week3day2_lab2free.ipynb`,
   `week3/week3day3.ipynb`, `week3/week3day4_lab1.ipynb`, `week3/week3day4_lab2.ipynb`,
