@@ -7,7 +7,7 @@ The data behind UnderCover Travel Insurance, a fictional insurer. Everything her
 - `company.json`: company settings, including the $1,000 payout approval limit, which seeds the approval limit setting. After seeding, the limit is changed on the dashboard's Settings page, not here.
 - `improvement.json`: the starting values of the improver's settings, from the Week 2 Day 5 lab: the business objectives (floors on held-out accuracy and the judge's grade, 0 to 3), the noise and the tolerance on accuracy, the grade, cost per claim and time per claim (accuracy and the grade as differences, cost and time as fractions of the old value), the spending limit for each round in dollars, and how many claim agents work at once in its evaluations.
 - `models.json`: the models the claim agent may use, with their reasoning efforts and prices in dollars per million input and output tokens. It can't be changed on the dashboard. With `MODEL_NAME` set, that model alone is allowed instead.
-- `plans.json`: the three plans (Economy, Premium, First) with their limits, waiting periods and deductibles, and the three add-ons.
+- `plans.json`: the three plans (Economy, Premium, First) with their limits, waiting periods and deductibles, and the three add-ons. The product no longer reads it: seeding loads the plans from `context/plans.yaml`, data governance's copy.
 - `policies.json`: one policy per trip, with the plan, the add-ons, the purchase date, the trip and the travelers.
 - `customers.json`: contact details and claim history, with the date and a one line summary of each earlier claim. This is personal data.
 - `handlers.json`: the claims handlers, with the email each signs in with and whether each can sign off payouts over the approval limit. Only Dana Whitfield can; only she may also run the improver's rounds and change the settings.
@@ -15,8 +15,8 @@ The data behind UnderCover Travel Insurance, a fictional insurer. Everything her
 
 ## The documents
 
-- `policy_wording.md`: the contract with the customer. Short enough to fit in a prompt.
-- `claims_manual.md`: the internal handling manual. Longer, and it holds rules the wording does not, such as the third claim in 12 months, losses to wild animals and meals without receipts.
+- `policy_wording.md`: the contract with the customer. Short enough to fit in a prompt. The product reads `context/policy_wording.md` instead, which seeding loads with its version.
+- `claims_manual.md`: the internal handling manual. The product reads `context/claims_manual.md` instead, which seeding loads with its version. Longer, and it holds rules the wording does not, such as the third claim in 12 months, losses to wild animals and meals without receipts.
 
 ## The evaluation set
 

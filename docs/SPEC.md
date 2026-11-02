@@ -55,6 +55,45 @@ The reads both use, a claim, a policy, a claim history, the recipes and the agen
 take the key or a signed-in handler, and everything else the dashboard calls needs a signed-in handler:
 the key never stands in for one. Only the health check is open.
 
+## What the agent works from
+
+The agent works from three sources, each with its own owner:
+
+- **The context layer**: data governance's files in `context/`, each naming the system it comes from,
+  its owner and when it was last reviewed: the meaning of each field, the terms the wording defines,
+  the plans, the claim rules, outside reference data such as storms, strikes, places and product
+  prices, and the policy wording and the claims manual by section. The agent only reads it, through
+  the AgentCore Gateway when the agent is on the Gateway, or straight from the context layer's own
+  service on the laptop.
+- **Memory**: the agent's own notes on each customer, in AgentCore Memory. After the agent decides a
+  claim it saves the claim (its summary, the benefit, the date and place and the items, never the
+  story or the documents) and its decision, and it can search what it remembers about that claim's
+  customer, and no other. Nothing is saved for a claim the check referred or for an evaluation's
+  copy, and evaluations work without memory. The claim history in our records still counts for
+  repeat claims.
+- **Our records**, through the app: claims, policies, customers, decisions and payments.
+
+The agent's tools know the claim it works, its policy and its customer, so the model never gives an
+id. When the agent is on the Gateway, its tools and the payment go through the Gateway, whose Policy
+refuses any payment over $1,000. A payment the Gateway refuses is recorded on the claim, which then
+waits for a handler's sign-off, and the sign-off panel says the Gateway refused it.
+
+## A complete decision record
+
+Every decision record holds what claims manual section 14 asks for: the decision, the payout, the
+calculation (for an approval, each line of the payout calculation as the payout rules gave it), the
+section relied on, the reason, who or what made the decision (the UnderCover Agent with its
+configuration version, or the security check) and when, and the claims manual's version in force. The
+backend refuses a record that falls short with a reason naming section 14: a blank reason, section or
+maker, an approval that pays nothing, a decline or referral that pays something, an approval with no
+calculation on file for the claim's current attempt, or a payout that isn't the calculation's. A
+handler's sign-off adds who signed off and when.
+
+The claim page shows every step the agent takes as it happens: each tool call, each lookup in the
+context layer with the file it came from, each memory search and save, and each refusal, the Gateway's
+labelled as its. A Context used panel lists everything looked up, grouped by file with each file's
+source.
+
 ## The improver
 
 The claim agent's instructions, model and reasoning effort make up one configuration, kept in
@@ -125,7 +164,7 @@ is ever decided or paid twice.
 
 ## Our records
 
-Everything is in `data/`, described in `data/README.md`: the claims queue, the policies, the customers, the plans, the handlers, the policy wording and the claims manual. The held-out claims in `data/evals/` are for checking the agent later and stay out of the queue.
+Everything is in `data/`, described in `data/README.md`: the claims queue, the policies, the customers and the handlers. The plans, the policy wording and the claims manual come from data governance's `context/`, which seeding loads into the app. The held-out claims in `data/evals/` are for checking the agent later and stay out of the queue.
 
 ## Not for now
 

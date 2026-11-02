@@ -14,25 +14,61 @@ for the agent, a check for instructions hidden in a claim, the agent's own API a
 pays, ready for Lambda (`npm run build`, the backend serving the dashboard's build, a Lambda handler and
 connections for Lambda), and the live checks. Nothing is deployed.
 
-The context layer, memory and the Gateway (`docs/PLAN_CONTEXT.md`, from `docs/CONTEXT.md`) are being
-built. Done so far: phase 1, the claim agent's tools on two routes, and phase 2, the context layer: data
-governance's seven files in `context/` served as MCP tools by `context/server.py` (`uv run -m context`
-on :8006, started by `npm run dev`; `context.server.handler` on Lambda), with the plans and the two
-documents seeded from `context/` into the `plans` and `documents` tables. The app's section routes are
-gone, and the agent's API document has six operations. Phase 3: every decision record meets claims manual
-section 14: `record_decision` takes `decided_by`, refuses a short record with a 422 naming section 14,
-and an approval needs the latest `calculate_payout` of the attempt and its payout; the record holds
-the calculation, who decided, when, and the manual's version (2026.2). Phase 4: with `UNDERCOVER_MEMORY_ID` set, the
-claim graph saves each decided claim to AgentCore Memory (`agent/memory.py`) as two events, the
-claim and the decision, and the model gets `search_memory`, kept to the claim's customer; never for
-an evaluation's copy or a claim the check referred. Phase 5: every step on the claim page, with step kinds
-`lookup`, `memory_search`, `memory_save` and `refusal` (the Gateway's labelled as its), a Context used
-panel grouped by file with each file's source, and the whole decision record with its calculation. With `UNDERCOVER_GATEWAY_URL` set,
-the model's tools and the graph's payment go through the AgentCore Gateway as MCP tools named
-`undercover-app___<operation>`, signed with SigV4 (`agent/gateway.py`); without it they go straight to
-the app with the key (`agent/direct.py`). The model's tools take no ids: they know the claim, its
-policy and its customer. A payment the Gateway refuses is held for a handler's sign-off
-(`hold_for_sign_off`). Nothing is deployed, and the Gateway is checked against a stand-in.
+The context layer, memory and the Gateway (`docs/PLAN_CONTEXT.md`, from `docs/CONTEXT.md`) are built
+on this machine, phases 1 to 6; phase 7 (the Gateway, the Policy and Memory on AWS, with RDS and
+Cognito) is not. What it adds:
+
+- The claim agent's tools and the graph's payment go through the AgentCore Gateway when
+  `UNDERCOVER_GATEWAY_URL` is set, as MCP tools named `undercover-app___<operation>` and
+  `undercover-context___<tool>`, signed with SigV4 (`agent/gateway.py`); otherwise straight to the app
+  with the key and to the context layer unsigned (`agent/direct.py`). The model's tools take no ids. A
+  payment the Gateway refuses is held for a handler's sign-off (`hold_for_sign_off`), and the sign-off
+  panel says so.
+- The context layer (`context/server.py`) serves data governance's seven files in `context/` as eight
+  read-only MCP tools, each answer naming its file and source: `uv run -m context` on :8006, started
+  by `npm run dev`, and `context.server.handler` for Lambda. Seeding loads the plans and the two
+  documents from `context/` into the `plans` and `documents` tables. The agent's API document has six
+  operations.
+- Every decision record meets claims manual section 14: the calculation, who decided, when and the
+  manual's version, and a short record is refused with a 422 naming section 14.
+- With `UNDERCOVER_MEMORY_ID` set, each decided claim is saved to AgentCore Memory and the model can
+  search what it remembers about the claim's customer (`agent/memory.py`).
+- The claim page shows every step: tool calls named as the route names them, lookups with where each
+  came from, memory searches and saves, refusals in Raspberry (the Gateway's labelled as its), a
+  Context used panel and the whole decision record with its calculation.
+
+In the context build's live checks on local Postgres with GPT-6 Luna (version 1, low effort) and local
+Supabase Auth, after one `npm run seed`, with `npm run dev` running, on the direct route and with
+memory off:
+
+- `uv run --env-file .env -m agent CLM-1001` approved CLM-1001 for $420 and paid it, as before, with a
+  complete record: the calculation's three lines, "UnderCover Agent, version 1" and manual version
+  2026.2. Its lookups in the context layer answered: the claim rules, the claim's fields, the Premium
+  plan, both documents' sections and nine sections read.
+- Oliver Grant's two claims from the command line: CLM-1005 (the passport a giraffe ate) approved $243
+  under wording 6, and CLM-1006 (the coconut) approved $425 under wording 7, First plan, no deductible.
+  On CLM-1006 the agent read the claim history, which is empty in our records (CLM-1005 is in the
+  queue, not in his earlier claims), the First plan, the claim rules, manual section 9 (repeat
+  claims) and wording sections 7 and 9. With memory off it had nothing to tell it about CLM-1005.
+- A dispatch at N=25 from the queue page worked the other 23 claims, CLM-1901 among them, in 43 seconds. CLM-1901
+  was referred with "Security check" as its section and its maker and the check's reason. No record
+  was refused by the section 14 check. In all: 17 approved (4 waiting for sign-off: CLM-1003 $3,750,
+  CLM-1008 $2,240, CLM-1011 $1,150 and CLM-1012 $1,500), 5 declined and 4 referred of 26, against the
+  security build's 15, 7 and 4. Of the four claims the security build decided differently from the
+  swarm build, CLM-1018 was referred again, CLM-1021 was approved $825 (the swarm build's figure; the
+  security build's was $730), CLM-1025 was approved $71 (the security build referred it) and CLM-1012
+  was approved $1,500 (the security build declined it; the swarm build approved $620).
+- An evaluation of the evaluation set's five tiny claims at N=5 from the Scoreboard page got 4 of 5
+  right in 19 seconds: E2-CLM-1020 was declined where the handler approved $240. The judge recorded no
+  grades, as in the security build.
+- Signed in as Dana Whitfield at `http://[::1]:5173` with a Playwright script, CLM-1005's and CLM-1006's
+  pages showed the tool calls, the lookups with where each came from, the Context used panel by file
+  with each file's system, owner and review date, and the decision with its calculation line by line,
+  who decided, when and the manual's version, in light and dark mode.
+- No step on any claim is a memory search or save or names a Gateway tool.
+- What the live runs spent, from the costs in the database: $0.0362 for the dispatch (141 model calls,
+  the check's included), $0.0073 for the evaluation (29 calls) and $0.0051 for the three claims from
+  the command line (22 calls), $0.0486 in all, and nothing for the judge.
 
 In the security build's live checks on local Postgres with GPT-6 Luna and local Supabase Auth, after one
 reseed, with `npm run dev` running:
@@ -159,8 +195,8 @@ What changed for it, in the look only:
   - When `dashboard/dist` exists, the backend serves the dashboard's build at `/`: a file gets itself,
     any other path outside `/api/` gets `index.html`, and an unknown `/api/` path gets a JSON 404.
     `handler` at the end of `backend/main.py` is `Mangum(app, lifespan="off")`, the Lambda handler.
-  - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
-    wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
+  - Read routes for claims, policies, claim history, the policy wording (from the `documents` table)
+    and the handlers. The sections of the two documents are the context layer's (`context/server.py`).
   - Write routes: start a claim in a run or none, record steps, record a decision, pay, sign off,
     release a claim that failed, and record a model call's tokens and cost or a stretch of work.
   - Runs are dispatches or evaluations: `create_run`, `list_run_claims` (claims in progress first, then
@@ -373,7 +409,7 @@ What changed for it, in the look only:
 ## Run it
 
 ```bash
-npm run dev      # backend on :8000, dashboard on :5173, agent service on :8002
+npm run dev      # backend on :8000, dashboard on :5173, agent service on :8002, context layer on :8006
 ```
 
 Start a dispatch from the queue page and an evaluation from the Scoreboard page. To work named claims
@@ -410,7 +446,7 @@ unchanged.
 ## Check it
 
 ```bash
-npm run check    # Python checks, the server group check, TypeScript checks, then the end-to-end tests
+npm run check    # Python checks, the server and context group checks, TypeScript checks, then the end-to-end tests
 ```
 
 `npm run check` passes with `.env` moved away.

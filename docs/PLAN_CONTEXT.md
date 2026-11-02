@@ -405,22 +405,22 @@ whole decision record.
 After one `npm run seed`, with `npm run dev` running (local Postgres, local Supabase and the context
 layer), on the default model, on the direct route and with memory off.
 
-- [ ] First, `uv run -m agent CLM-1001` decides CLM-1001 as before, with a complete record, its
+- [x] First, `uv run -m agent CLM-1001` decides CLM-1001 as before, with a complete record, its
       calculation and "UnderCover Agent, version 1", and its tool calls to the context layer answer
       (checked in `undercover.claims` with `docker exec undercover-postgres psql`).
-- [ ] `uv run -m agent CLM-1005`, then `uv run -m agent CLM-1006`. Report each decision, and whether the
+- [x] `uv run -m agent CLM-1005`, then `uv run -m agent CLM-1006`. Report each decision, and whether the
       agent used the context layer and the claim history for Oliver Grant's second claim.
-- [ ] A dispatch at N=25 from the queue page works the rest of the queue as before, and refers CLM-1901
+- [x] A dispatch at N=25 from the queue page works the rest of the queue as before, and refers CLM-1901
       with the check's reason and "Security check". Report each claim's decision against the security
       build's dispatch, and any section 14 refusal and what the agent did next.
-- [ ] An evaluation of the evaluation set's five tiny claims from the Scoreboard page. Report its scores.
-- [ ] Signed in as Dana Whitfield, through the Chrome DevTools MCP server: CLM-1005's and CLM-1006's pages
+- [x] An evaluation of the evaluation set's five tiny claims from the Scoreboard page. Report its scores.
+- [x] Signed in as Dana Whitfield, through the Chrome DevTools MCP server: CLM-1005's and CLM-1006's pages
       show the tool calls, the lookups with where each came from, the Context used panel, and the decision
       with its calculation. Screenshots in light and dark mode.
-- [ ] With `UNDERCOVER_MEMORY_ID` and `UNDERCOVER_GATEWAY_URL` unset, no memory tool and no Gateway call
+- [x] With `UNDERCOVER_MEMORY_ID` and `UNDERCOVER_GATEWAY_URL` unset, no memory tool and no Gateway call
       appear on any claim.
-- [ ] What the live runs spent, from the costs in the database.
-- [ ] `docs/SPEC.md` (the context layer, the memory, the complete record, the Gateway's refusal of a
+- [x] What the live runs spent, from the costs in the database.
+- [x] `docs/SPEC.md` (the context layer, the memory, the complete record, the Gateway's refusal of a
       payment), `docs/TECH_STACK.md` (with the Deployment section the brief asks for), `docs/PROCESS.md`
       (the context layer in `npm run dev`, `check:context`), `docs/CODE_STANDARDS.md` (one module for each
       route, the context layer, the memory), `docs/STATUS.md` and `data/README.md` (the plans and the two
@@ -582,3 +582,18 @@ Phase 5:
 - `sections_read` is gone from the claim view and the dashboard; the Context used panel groups the
   claim's lookup steps by file, each lookup once. `sectionLabel` in `format.ts` went with it.
 - The dashboard's build is 486.9 kB of JavaScript (485 kB before), under Vite's 500 kB warning.
+
+Phase 6:
+
+- The browser checks used a short Playwright script, not the Chrome DevTools MCP server: it signed in
+  as Dana at `http://[::1]:5173` with `HANDLER_PASSWORD` read from `.env` inside the script, started the
+  dispatch and the evaluation from their pages, and took the four screenshots (kept outside the repo).
+- CUS-3005's claim history in our records is empty: CLM-1005 is in the queue, not among his earlier
+  claims. So on the direct route with memory off nothing told the agent about the giraffe when it worked
+  CLM-1006, as the brief expects; memory is what Phase 7 adds.
+- No record was refused by the section 14 check in the live runs: the agent called `calculate_payout`
+  before every approval and recorded its payout.
+- CLM-1011's policy section came back as four sections joined with semicolons. The record took it, as
+  a section is free text; worth a word in the instructions if handlers mind.
+- `npm run check` ran once with `.env` moved to `.env.moved`, and `.env` was moved back after it.
+- `npm run check` passed: 362 Python tests (coverage over 80%), 57 vitest tests and 14 end-to-end tests; no break from an earlier phase.
