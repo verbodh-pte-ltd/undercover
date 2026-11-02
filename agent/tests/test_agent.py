@@ -835,9 +835,9 @@ def test_a_runs_claim_agents_work_to_its_version(monkeypatch):
     seen = []
     real = main.claim_graph
 
-    def claim_graph(llm, instructions, checkpointer):
+    def claim_graph(llm, instructions, checkpointer, store=None):
         seen.append(instructions)
-        return real(llm, instructions, checkpointer)
+        return real(llm, instructions, checkpointer, store)
 
     built = []
     stubs = iter([stub(*decide("CLM-1001")), stub(*decide("CLM-1002"))])

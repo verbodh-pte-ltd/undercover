@@ -355,25 +355,25 @@ Every decision holds what claims manual section 14 asks for, and the app refuses
 With `UNDERCOVER_MEMORY_ID` set, the claim graph saves each decided claim to AgentCore Memory, and the
 model can search what it remembers about this customer.
 
-- [ ] `langgraph-checkpoint-aws` is in the dependencies. With `UNDERCOVER_MEMORY_ID` set, the graph's
+- [x] `langgraph-checkpoint-aws` is in the dependencies. With `UNDERCOVER_MEMORY_ID` set, the graph's
       store is `AgentCoreMemoryStore` with that id, in the region from `boto3.Session()`, read when the
       graph is built (test on the store's arguments). The checkpoints stay in Postgres.
-- [ ] After a decision the agent recorded, the stand-in store gets two events under
+- [x] After a decision the agent recorded, the stand-in store gets two events under
       `(customer, claim)`. The customer's message is the summary, the benefit, the incident's date and
       place, and the items. The agent's message is the decision, the payout, the section and the reason.
       Neither holds the story or the documents (test).
-- [ ] Work carried on after a restart past `remember` saves nothing twice (test with a stopped graph).
-- [ ] Nothing is saved for a claim the check referred, or for an evaluation's copy (tests).
-- [ ] `search_memory(query)` searches only under `("customers", <this claim's customer>)`, returns each
+- [x] Work carried on after a restart past `remember` saves nothing twice (test with a stopped graph).
+- [x] Nothing is saved for a claim the check referred, or for an evaluation's copy (tests).
+- [x] `search_memory(query)` searches only under `("customers", <this claim's customer>)`, returns each
       memory's text, and leaves out the summary of the claim being worked (tests).
-- [ ] With memory off, or on an evaluation's copy, the model has no `search_memory` tool (tests).
-- [ ] When the stand-in store raises a botocore error, saving logs a warning and the claim keeps its
+- [x] With memory off, or on an evaluation's copy, the model has no `search_memory` tool (tests).
+- [x] When the stand-in store raises a botocore error, saving logs a warning and the claim keeps its
       decision, and a search gives the model the error as a refusal (tests).
-- [ ] `backend/instructions/claim.md` names, as goals, what the agent has to go on: the context layer's
+- [x] `backend/instructions/claim.md` names, as goals, what the agent has to go on: the context layer's
       definitions, plans, rules, reference data and documents, and its memory of the customer. The
       claim history still counts for repeat claims (manual section 9). The improver's sentence in
       `agent/improver.py` names the claim agent's new tools.
-- [ ] The commit's pre-commit hook passes.
+- [x] The commit's pre-commit hook passes.
 
 ## Phase 5: Every step on the claim page
 
@@ -551,3 +551,19 @@ Phase 3:
   the e2e specs use `recordDecision` in `e2e/agent.ts`. No expected payout changed.
 - The claim view now has a `calculation` field of its own (empty until a decision), so the test that a
   copy holds nothing from the handlers' decisions checks that field is empty instead of absent.
+
+Phase 4:
+
+- `langgraph-checkpoint-aws` 1.2.6 joined the dependencies with no change to any locked version
+  (it needs `langgraph-checkpoint` 3 or 4 and `boto3` 1.43.64 or later; we have 4.2.0 and 1.43.108).
+- The memory is the graph's LangGraph store (`compile(store=...)`), so the `remember` node and the
+  `search_memory` tool reach it as `runtime.store`. `run()` gives an evaluation's copy no store, so a
+  copy's graph has neither the tool nor anything to save.
+- `remember` sits between the model's last reply and `settle`, and is saved like any node, so work
+  carried on after a stop in `settle` starts from `settle` and saves nothing twice (tested by stopping
+  the graph in `settle`).
+- In `agent/main.py` the module is imported as `customers`, since `memory()` there is already the
+  in-memory checkpointer for runs without `DATABASE_URL`.
+- The memory's search filters out any result whose namespace holds this claim's id, which is how the
+  Summary strategy's `/customers/{actorId}/claims/{sessionId}/` record of the claim being worked shows.
+  That namespace shape is from the brief and the lab, not seen on AWS.

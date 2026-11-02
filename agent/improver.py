@@ -45,10 +45,12 @@ reasons, at a lower cost and in less time, while it meets the business objective
 the held-out set.
 
 The configuration is the claim agent's instructions, its model and its reasoning \
-effort. The claim agent works from its instructions with the contents of the policy \
-wording and the claims manual; the claim, the customer's policy and the customer's \
-earlier claims; and its tools for listing and reading the sections of the two \
-documents and for working out a payout.
+effort. The claim agent works from its instructions; the claim, the customer's policy \
+and the customer's earlier claims; the context layer's tools for the terms the wording \
+defines, the meaning of each field, the plans, the claim rules, outside reference \
+data, and searching, listing and reading the sections of the policy wording and the \
+claims manual; its memory of the customer from earlier claims, when memory is on; and \
+its tools for working out a payout and recording a decision.
 
 A change must help every claim like the ones it fixes, so it never names a claim, a \
 customer or a policy. Nothing you propose takes effect until a handler approves it, \

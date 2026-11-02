@@ -34,11 +34,13 @@ from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.runtime import Runtime
+from langgraph.store.base import BaseStore
 from langgraph.types import Command, interrupt
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field, SecretStr
 
+from agent import memory as customers
 from agent.direct import CONTEXT_URL, Direct
 from agent.gateway import Gateway
 from agent.mcp_client import Answer
@@ -316,6 +318,21 @@ def record_decision(
     return use(runtime, "record_decision", body)
 
 
+@tool(response_format="content_and_artifact")
+def search_memory(query: str, runtime: Context) -> Used:
+    """Search what we remember about this claim's customer from their earlier claims."""
+    claim = runtime.context
+    if runtime.store is None:
+        return "Refused: memory is off", {"refused_by": "memory"}
+    try:
+        found = customers.search(
+            runtime.store, claim.customer_id, claim.claim_id, query
+        )
+    except customers.UNREACHABLE as exc:
+        return f"Refused: memory can't be reached: {exc}", {"refused_by": "memory"}
+    return json.dumps(found), {"refused_by": None}
+
+
 MODEL_TOOLS = [
     get_claim,
     get_policy,
@@ -514,10 +531,17 @@ def check(
 
 
 def claim_graph(
-    llm: BaseChatModel, instructions: str, checkpointer: BaseCheckpointSaver
+    llm: BaseChatModel,
+    instructions: str,
+    checkpointer: BaseCheckpointSaver,
+    store: BaseStore | None = None,
 ) -> ClaimGraph:
-    """The claim agent: the check, the model and tools, then payment or sign-off."""
-    model_with_tools = llm.bind_tools(MODEL_TOOLS)
+    """The claim agent: the check, the model and tools, then payment or sign-off.
+
+    With a memory store, the model can search it, and each decided claim is saved.
+    """
+    tools = [*MODEL_TOOLS, search_memory] if store is not None else MODEL_TOOLS
+    model_with_tools = llm.bind_tools(tools)
     system = SystemMessage(instructions)
 
     def agent(state: ClaimState, config: RunnableConfig) -> dict[str, Any]:
@@ -529,23 +553,43 @@ def claim_graph(
         record_model_call(state["claim_id"], run_id, reply)
         return {"messages": [reply], "model_calls": state["model_calls"] + 1}
 
-    def after_agent(state: ClaimState) -> Literal["tools", "settle"]:
-        """Run the tools the model asked for, or settle the claim."""
+    def after_agent(state: ClaimState) -> Literal["tools", "remember"]:
+        """Run the tools the model asked for, or remember and settle the claim."""
         last = state["messages"][-1]
-        return "tools" if isinstance(last, AIMessage) and last.tool_calls else "settle"
+        asked = isinstance(last, AIMessage) and last.tool_calls
+        return "tools" if asked else "remember"
 
     builder = StateGraph(ClaimState, context_schema=ClaimContext)
     builder.add_node("check", check)
     builder.add_node("agent", agent)
-    builder.add_node("tools", ToolNode(MODEL_TOOLS))
+    builder.add_node("tools", ToolNode(tools))
+    builder.add_node("remember", remember)
     builder.add_node("settle", settle)
     builder.add_node("sign_off", sign_off)
     builder.add_node("pay", pay)
     builder.add_edge(START, "check")
-    builder.add_conditional_edges("agent", after_agent, ["tools", "settle"])
+    builder.add_conditional_edges("agent", after_agent, ["tools", "remember"])
     builder.add_edge("tools", "agent")
+    builder.add_edge("remember", "settle")
     builder.add_edge("sign_off", END)
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile(checkpointer=checkpointer, store=store)
+
+
+def remember(state: ClaimState, runtime: Runtime[ClaimContext]) -> dict[str, Any]:
+    """Save a claim the agent decided to the customer's memory, once, in code.
+
+    Nothing is saved without memory, for an evaluation's copy, or for a claim the
+    check referred, which never reaches this step.
+    """
+    if runtime.store is None or runtime.context.copy:
+        return {}
+    claim = json.loads(call("GET", f"/api/claims/{state['claim_id']}"))
+    if claim["decision"] is None:
+        return {}
+    saved = customers.save(runtime.store, claim)
+    text = " | ".join(saved) if saved else "memory can't be reached, nothing saved"
+    record_step(state["claim_id"], "tool_result", f"remember: {text}")
+    return {}
 
 
 def settle(state: ClaimState) -> Command[Literal["sign_off", "pay", "__end__"]]:
@@ -635,7 +679,11 @@ def run(
         version = client.get(path).json()
         claim = client.get(f"/api/claims/{claim_id}").json()
     checkpointer = saver()
-    graph = claim_graph(llm or model(version), version["instructions"], checkpointer)
+    # An evaluation's copy works without memory, so its scores don't depend on it.
+    store = None if claim["run_id"] is not None else customers.memory_store()
+    graph = claim_graph(
+        llm or model(version), version["instructions"], checkpointer, store
+    )
     context = ClaimContext(
         claim_id=claim_id,
         policy_id=claim["policy_id"],
