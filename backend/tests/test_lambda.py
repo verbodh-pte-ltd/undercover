@@ -272,14 +272,18 @@ def test_the_backend_reads_only_these_environment_variables():
     found = set()
     for path in source_files():
         text = path.read_text(encoding="utf-8")
-        found |= set(re.findall(r"getenv\(\s*['\"](\w+)['\"]", text))
+        found |= set(re.findall(r"(?:getenv|env\.get)\(\s*['\"](\w+)['\"]", text))
         found |= set(re.findall(r"environ\[['\"](\w+)['\"]\]", text))
-    # The three a Lambda function sets, Lambda's own name, and the rest, each with a
-    # default or needed only by work that can't start on Lambda (the agent's service
-    # and the judge, which an evaluation needs).
+    # The ones a Lambda function sets (the sign-in's either Supabase's URL or the three
+    # AUTH_ settings for Cognito), Lambda's own name, and the rest, each with a default
+    # or needed only by work that can't start on Lambda (the agent's service and the
+    # judge, which an evaluation needs).
     assert found == {
         "DATABASE_URL",
         "VITE_SUPABASE_URL",
+        "AUTH_JWKS_URL",
+        "AUTH_ISSUER",
+        "AUTH_AUDIENCE",
         "UNDERCOVER_API_KEY",
         "AWS_LAMBDA_FUNCTION_NAME",
         "UNDERCOVER_DB",

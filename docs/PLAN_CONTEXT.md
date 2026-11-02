@@ -441,11 +441,11 @@ Cognito is free at three users. `uv run monitor.py` shows the real spend.
 
 **Sign-in that works with either provider** (built and tested locally first, with stand-ins):
 
-- [ ] The backend checks a handler's token against the keys at `AUTH_JWKS_URL`, with the issuer and
+- [x] The backend checks a handler's token against the keys at `AUTH_JWKS_URL`, with the issuer and
       audience in `AUTH_ISSUER` and `AUTH_AUDIENCE`. With these unset it uses local Supabase's, as today.
       Tests sign tokens as Supabase's and as Cognito's ID tokens (`token_use` `id`, `aud` the app client
       id) with a stand-in key, and the handler is still found by the token's email.
-- [ ] The dashboard signs in through Cognito when `VITE_COGNITO_USER_POOL_ID` and `VITE_COGNITO_CLIENT_ID`
+- [x] The dashboard signs in through Cognito when `VITE_COGNITO_USER_POOL_ID` and `VITE_COGNITO_CLIENT_ID`
       are set at build time (`InitiateAuth` with `USER_PASSWORD_AUTH`, by `fetch`, no new SDK), and
       through Supabase otherwise. Vitest covers both; the e2e specs still sign in through the Supabase
       stand-in. The bundle stays under Vite's 500 kB warning.
@@ -459,7 +459,7 @@ deleted by code in notebook cells, not by the build agent's own commands. The ce
 cell is safe to run again, and each create cell has a matching delete cell in the teardown. The student
 runs the cells, or asks for them to be run; each box below is ticked from the cell's output.
 
-- [ ] The new cells are in the notebook, `ruff check` passes on their code, and the lab's own cells are
+- [x] The new cells are in the notebook, `ruff check` passes on their code, and the lab's own cells are
       unchanged (`git diff` shows only added cells).
 
 - [ ] The course policy gains `rds:*`, `cognito-idp:*` and the EC2 security-group actions it needs, on
@@ -597,3 +597,32 @@ Phase 6:
   a section is free text; worth a word in the instructions if handlers mind.
 - `npm run check` ran once with `.env` moved to `.env.moved`, and `.env` was moved back after it.
 - `npm run check` passed: 362 Python tests (coverage over 80%), 57 vitest tests and 14 end-to-end tests; no break from an earlier phase.
+
+Phase 7 (built in a separate worktree, merged after Phase 6):
+
+- **Phase 7, sign-in with either provider.** `backend/auth.py` reads `AUTH_JWKS_URL`, `AUTH_ISSUER`
+  and `AUTH_AUDIENCE` once, through `settings()`; unset, they are local Supabase's JWKS, no issuer
+  check and `authenticated`, as before. `backend/tests/test_cognito.py` signs RS256 Cognito ID tokens
+  with a stand-in key and finds Dana by email, and refuses a Cognito access token (no `aud`), another
+  app client, another pool, an expired token, and a Supabase token when set up for Cognito (9
+  tests). The dashboard's sign-in is `dashboard/src/auth.ts`: `chooseAuth` picks Cognito when both
+  `VITE_COGNITO_*` are set, otherwise Supabase, whose client (`supabase()`) is now made on first use
+  so a Cognito build needs no Supabase settings. Cognito's tokens are kept in `localStorage`, and the
+  ID token is renewed with `REFRESH_TOKEN_AUTH` a minute before it expires; a failed renewal signs
+  out. `dashboard/src/auth.test.ts` covers both providers (7 tests); the e2e sign-in and settings
+  specs pass through the Supabase stand-in. `npm run build` with dummy values gives one 487.07 kB
+  chunk in both modes, under the 500 kB warning, with little room left.
+- **Phase 7, the notebook cells.** `labs/week3/week3day3.ipynb` gains 32 cells (20 code) under
+  `AWS without Supabase:` headings, none run: after the settings check, the course policy widened
+  through `AWS_ADMIN_PROFILE` (Day 1's policy file plus `FdeLab...` statements, re-provisioned), a
+  check on the course role, the security group, RDS (password saved in `.env` as `AWS_DATABASE_URL`
+  before the database is made, never printed), seeding and a count with a TLS check, and Cognito
+  (pool, app client, the three handlers, a sign-in check); after the lab's build, a Cognito build of
+  the dashboard; after the app's deploy, its `DATABASE_URL` and `AUTH_*`; after the Gateway role, the
+  `label=FDE-lab` tag on the functions and roles; after Part 5's reseed, RDS reseeded; and after Part
+  6, the teardown and a listing by tag and by name. Cognito's ids go in `.env` as
+  `AWS_COGNITO_USER_POOL_ID` and `AWS_COGNITO_CLIENT_ID`, not `VITE_COGNITO_*`, because `npm run dev`
+  reads `.env` and the laptop keeps local Supabase sign-in. Cognito pool ARNs carry ids, not names,
+  so its permissions cover the account's pools; EC2's are limited by the `label=FDE-lab` tag. `ruff
+  check` with the project's rules passes on the new cells (exported with the lab's setup cells, and on
+  the notebook itself); `git diff` shows 913 lines added and none removed.

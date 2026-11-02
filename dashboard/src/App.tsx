@@ -1,6 +1,6 @@
-import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 import { getSignedInHandler, type Handler } from "./api";
+import { auth } from "./auth";
 import { ClaimView } from "./ClaimView";
 import { Configuration } from "./Configuration";
 import { Improvement } from "./Improvement";
@@ -8,7 +8,6 @@ import { Queue } from "./Queue";
 import { EvaluationView, Scoreboard } from "./Scoreboard";
 import { Settings } from "./Settings";
 import { SignIn } from "./SignIn";
-import { supabase } from "./supabase";
 
 function useHash() {
   const [hash, setHash] = useState(window.location.hash);
@@ -24,18 +23,11 @@ function useHash() {
   return hash;
 }
 
-// The saved sign-in: undefined until it has been read, then null when signed out.
-function useSession() {
-  const [session, setSession] = useState<Session | null | undefined>();
-  useEffect(() => {
-    const { data } = supabase.auth.onAuthStateChange((_event, changed) => {
-      setSession(changed);
-    });
-    return () => {
-      data.subscription.unsubscribe();
-    };
-  }, []);
-  return session;
+// The signed-in user: undefined until the saved sign-in has been read, then null when signed out.
+function useUser() {
+  const [user, setUser] = useState<string | null | undefined>();
+  useEffect(() => auth.onChange(setUser), []);
+  return user;
 }
 
 function Page({ hash, handler }: Readonly<{ hash: string; handler: Handler }>) {
@@ -54,7 +46,7 @@ function Page({ hash, handler }: Readonly<{ hash: string; handler: Handler }>) {
   return <Queue />;
 }
 
-const signOut = () => void supabase.auth.signOut();
+const signOut = () => void auth.signOut();
 
 const NAV = [
   ["#/", "Queue"],
@@ -117,7 +109,7 @@ function SignedIn() {
 }
 
 export function App() {
-  const session = useSession();
-  if (session === undefined) return null;
-  return session ? <SignedIn key={session.user.id} /> : <SignIn />;
+  const user = useUser();
+  if (user === undefined) return null;
+  return user ? <SignedIn key={user} /> : <SignIn />;
 }

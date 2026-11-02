@@ -45,4 +45,6 @@ The agent has six parts:
 
 16. **The Supabase client** (`dashboard/src/supabase.ts`): the dashboard's one Supabase client, used
     only for Supabase Auth: signing in and out and the session's access token. The dashboard sends
-    that token with each action to the backend, and never reads data from Supabase.
+    that token with each action to the backend, and never reads data from Supabase. It is made on
+    first use, through `dashboard/src/auth.ts`, which signs in through Cognito instead when the
+    build has `VITE_COGNITO_USER_POOL_ID` and `VITE_COGNITO_CLIENT_ID`.

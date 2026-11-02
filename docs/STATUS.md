@@ -208,7 +208,10 @@ What changed for it, in the look only:
   - Sign-in: `backend/auth.py` checks a Supabase access token against the public keys at
     `{VITE_SUPABASE_URL}/auth/v1/.well-known/jwks.json` with PyJWT's `PyJWKClient`, audience
     `authenticated`, and the backend finds the handler by the token's email. `GET /api/handlers/me`
-    (`get_signed_in_handler`) returns the handler; `list_handlers` leaves out the emails.
+    (`get_signed_in_handler`) returns the handler; `list_handlers` leaves out the emails. With
+    `AUTH_JWKS_URL`, `AUTH_ISSUER` and `AUTH_AUDIENCE` set, it checks a Cognito ID token instead
+    (audience the app client's id), and the dashboard, built with `VITE_COGNITO_USER_POOL_ID` and
+    `VITE_COGNITO_CLIENT_ID`, signs in through Cognito's `InitiateAuth` (`dashboard/src/auth.ts`).
   - Who may call what (`docs/PLAN_SECURE.md`, choice 3; a test fails if a route is in no group or
     two). Only `GET /api/health` is open. The agent's side sends `UNDERCOVER_API_KEY` in an
     `X-API-Key` header, compared with `secrets.compare_digest`. The reads both use (`get_claim`,

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { supabase } from "./supabase";
+import { auth } from "./auth";
 
 export function SignIn() {
   const [email, setEmail] = useState("");
@@ -14,17 +14,10 @@ export function SignIn() {
         onSubmit={(event) => {
           event.preventDefault();
           setBusy(true);
-          void supabase.auth
-            .signInWithPassword({ email, password })
-            .then(({ error: refused }) => {
-              setBusy(false);
-              if (!refused) return;
-              setError(
-                refused.code === "invalid_credentials"
-                  ? "That email and password don't match. Check them and try again."
-                  : `${refused.message}. Try again in a moment.`,
-              );
-            });
+          void auth.signIn(email, password).then((refused) => {
+            setBusy(false);
+            setError(refused);
+          });
         }}
       >
         <h1>

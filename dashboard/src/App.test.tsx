@@ -217,7 +217,7 @@ it("follows the hash from the queue to a claim", async () => {
 it("asks a handler to sign in, with no way to sign up", async () => {
   signIn(null);
   const signInWithPassword = vi
-    .spyOn(supabase.auth, "signInWithPassword")
+    .spyOn(supabase().auth, "signInWithPassword")
     .mockResolvedValue({
       data: { user: null, session: null },
       error: null,
@@ -242,7 +242,7 @@ it("asks a handler to sign in, with no way to sign up", async () => {
 
 it("says what to do when the password is wrong", async () => {
   signIn(null);
-  vi.spyOn(supabase.auth, "signInWithPassword").mockResolvedValue({
+  vi.spyOn(supabase().auth, "signInWithPassword").mockResolvedValue({
     data: { user: null, session: null },
     error: {
       code: "invalid_credentials",
@@ -269,7 +269,7 @@ it("shows who is signed in, and signs out", async () => {
     "/api/handlers/me": marcus,
   });
   const signOut = vi
-    .spyOn(supabase.auth, "signOut")
+    .spyOn(supabase().auth, "signOut")
     .mockResolvedValue({ error: null });
   render(<App />);
   expect(await screen.findByText("Marcus Oyelaran")).toBeDefined();
