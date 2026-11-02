@@ -97,9 +97,9 @@ later with its own teardown. I won't create anything on AWS unless you ask.
 below, after the six local phases. **No Supabase project.** The deployed app's data goes in Amazon RDS for
 PostgreSQL on the smallest instance, and its sign-in in an Amazon Cognito user pool. Everything Phase 7
 makes on AWS is deleted when the lab is finished. AWS is reached through the `[default]` profile, the
-`undercover-course` role from `labs/week3/week3day1.ipynb`, signed in through the `<AWS_ADMIN_PROFILE>` session.
+`undercover-course` role from `labs/week3/week3day1.ipynb`, signed in through the Identity Center session.
 That role has no RDS, Cognito or EC2 permissions today, so Phase 7 first adds them to the course policy
-through the `<AWS_ADMIN_PROFILE>` administrator profile, limited to resources named `undercover...`.
+through the administrator profile named in `AWS_ADMIN_PROFILE` in `.env`, limited to resources named `undercover...`.
 Phases 1 to 6 don't depend on any of this. The laptop keeps local Postgres and local Supabase Auth.
 
 Estimated cost of the lab, if you run it. These figures are from AWS's price list as I remember it, not
@@ -463,7 +463,7 @@ runs the cells, or asks for them to be run; each box below is ticked from the ce
       unchanged (`git diff` shows only added cells).
 
 - [ ] The course policy gains `rds:*`, `cognito-idp:*` and the EC2 security-group actions it needs, on
-      resources named `undercover...` where AWS allows it, applied with the `<AWS_ADMIN_PROFILE>` administrator
+      resources named `undercover...` where AWS allows it, applied with the `AWS_ADMIN_PROFILE` administrator
       profile. `aws sts get-caller-identity` then shows `undercover-course`, and it can describe RDS.
 - [ ] RDS for PostgreSQL 17, `db.t4g.micro`, 20 GB gp3, single-AZ, no Multi-AZ, backups 1 day, named
       `undercover-db`, with a random master password kept only in `.env` as `AWS_DATABASE_URL`. It is
