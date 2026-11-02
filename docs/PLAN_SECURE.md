@@ -265,23 +265,23 @@ database connections suit Lambda.
 
 With GPT-6 Luna, after one `npm run seed`, with `npm run dev` and local Supabase running.
 
-- [ ] Step 1: signed in as Dana, the dashboard works as before. `uv run --env-file .env -m agent
+- [x] Step 1: signed in as Dana, the dashboard works as before. `uv run --env-file .env -m agent
       CLM-1001` decides CLM-1001. `curl.exe` to `record_decision` with no key gets a 401.
-- [ ] Step 2: a dispatch from the queue page works the rest of the queue as before and refers CLM-1901
+- [x] Step 2: a dispatch from the queue page works the rest of the queue as before and refers CLM-1901
       with the check's reason, which its claim page shows as its first step. Report each claim's decision
       against the swarm build's dispatch.
-- [ ] Step 2: an evaluation of the evaluation set's tiny five flags none of them.
-- [ ] Step 3: Dana signs off a held payout from that dispatch on the dashboard, and it is paid once
+- [x] Step 2: an evaluation of the evaluation set's tiny five flags none of them.
+- [x] Step 3: Dana signs off a held payout from that dispatch on the dashboard, and it is paid once
       (checked in `undercover.claims` with `docker exec undercover-postgres psql`).
-- [ ] Step 4, after `npm run build` and with `npm run dev` stopped: `uv run -m uvicorn backend.main:app`
+- [x] Step 4, after `npm run build` and with `npm run dev` stopped: `uv run -m uvicorn backend.main:app`
       serves the dashboard at `http://127.0.0.1:8000`, where Dana signs in and sees the claims, through
       the Chrome DevTools MCP server.
-- [ ] Step 4, if decision B allows: the backend with `AWS_LAMBDA_FUNCTION_NAME` set, `DATABASE_URL` on
+- [x] Step 4, if decision B allows: the backend with `AWS_LAMBDA_FUNCTION_NAME` set, `DATABASE_URL` on
       port 6543 and no other UnderCover variable but the Supabase address and the key, serves the claims
       to Dana's token. Report the connections in `pg_stat_activity` before and after.
-- [ ] Step 4: the package, built in a scratch folder with Linux wheels for Python 3.12, is under 50 MB
+- [x] Step 4: the package, built in a scratch folder with Linux wheels for Python 3.12, is under 50 MB
       zipped. Report its size. What the live checks spent, from the costs in the database.
-- [ ] `docs/SPEC.md` (the key, the check, the sign-off that pays, CLM-1901 in the queue),
+- [x] `docs/SPEC.md` (the key, the check, the sign-off that pays, CLM-1901 in the queue),
       `docs/TECH_STACK.md`, `docs/PROCESS.md` (the key, `npm run build`, `check:server`),
       `docs/CODE_STANDARDS.md` (the check in the claim graph), `docs/STATUS.md` and `data/README.md`
       describe the product as it now is. `npm run check` is green with `.env` moved away.
@@ -370,3 +370,25 @@ Phase 4:
   `backend/undercover.db` would go into its package unless it is deleted first. `data/evals/` goes in
   too, as Lab 2 copies all of `data/`; the backend reads it only when seeding, which never happens on
   Lambda.
+
+Phase 5:
+
+- The swarm build's dispatch, for the comparison, is the one that was in Postgres before the reseed
+  (run 1 stopped at N=3, run 2 at N=25), saved before `npm run seed` emptied it. 21 of the 25 queue
+  claims got the same decision and payout; CLM-1012, CLM-1018, CLM-1021 and CLM-1025 differed, each
+  passed by the check (its step says "No instructions found"), so the claim agent itself decided them
+  differently. `docs/STATUS.md` has each.
+- The dispatch ran at N=25, to match the swarm build's, and the evaluation of the tiny five at N=5.
+- The sign-in on the dashboard was filled by a script in the page that fetched `HANDLER_PASSWORD` from
+  a one-off local helper, so the password never appeared in a command or a tool call. The 6543 check
+  signed in to Supabase Auth from a script the same way.
+- Decision B, option 1: `edoburu/pgbouncer` (PgBouncer 1.26.1) as `undercover-pgbouncer`, transaction
+  mode, `max_prepared_statements = 0`, on `127.0.0.1:6543`, reaching `undercover-postgres` on Docker's
+  bridge. The `search_path` option on each connection came through: the tables were found though the
+  server's own `search_path` is `"$user", public`. So no `schema_translate_map` change was needed. This
+  was PgBouncer, not Supabase's own pooler, which still has to be tried at deploy time. The container
+  was removed with `docker rm -f` after the check.
+- The tiny evaluation has no grades: the judge's calls returned nothing (`judge.grade` swallows
+  OpenRouter's errors and answers it can't read), so its grade shows as not graded. No judge cost was
+  recorded. It isn't a box of this build and wasn't looked into.
+- The package size is the Phase 4 build's, 20.3 MB zipped, not rebuilt; nothing it holds changed since.

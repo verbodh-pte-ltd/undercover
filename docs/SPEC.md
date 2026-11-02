@@ -26,10 +26,18 @@ is tried once more in the same dispatch, and one that fails twice is left for a 
 never stops the dispatch.
 
 When the agent approves a payout that needs a handler's sign-off, it waits for the sign-off and keeps
-everything it has worked out. As soon as a handler signs off, it picks the claim up from where it stopped
-and pays it; until then the claim shows as waiting for sign-off, and between the sign-off and the
-payment as in progress. If the agent isn't running at that moment, it pays the claim the next time it
-runs. A handler can only sign off for now.
+everything it has worked out; until then the claim shows as waiting for sign-off. The sign-off itself
+pays the claim: the backend records the handler, the time and the payment together, and the claim is
+decided and paid at once, whether or not the agent is running. The agent then only finishes its own
+record of the claim and never pays it. A handler can only sign off for now.
+
+Before the agent's model sees a claim, a second model reads what the customer wrote and says whether
+it tries to instruct whoever handles the claim. A claim that does is referred to a handler with a
+payout of zero, the check's reason and the section "Security check", and the agent's model never sees
+it. The check's result is the first step shown on the claim, it runs once at the start of a claim's
+work, its model calls count in the claim's cost, and the improver can't change it. The security team's
+CLM-1901, a claim with such an instruction in its story, is seeded at the end of the queue, without its
+handler's decision, so it is in neither evaluation set.
 
 ## Handlers sign in
 
@@ -40,6 +48,12 @@ an evaluation or a round, stopping a round, approving or rejecting a proposal an
 sign-off records the signed-in handler. Dana Whitfield is our senior handler. Only a handler who can
 sign off payouts over the approval limit may start or stop a round, approve or reject the improver's
 proposals or change a setting; anyone else sees what they can't do and why, and the backend refuses it.
+
+The agent's side identifies itself to the backend with an API key. Every route only the agent calls,
+such as recording a decision, a payment, its steps and its costs, refuses a request without the key.
+The reads both use, a claim, a policy, a claim history, the recipes and the agent's own API document,
+take the key or a signed-in handler, and everything else the dashboard calls needs a signed-in handler:
+the key never stands in for one. Only the health check is open.
 
 ## The improver
 
@@ -102,7 +116,7 @@ is ever decided or paid twice.
 
 ## Rules
 
-- A payout over the approval limit, a setting that starts at $1,000, needs a handler's sign-off. The agent can approve such a claim, but the payment waits until a handler signs off. The system must block the payment until then, even if the agent tries to pay.
+- A payout over the approval limit, a setting that starts at $1,000, needs a handler's sign-off. The agent can approve such a claim, but only the handler's sign-off pays it. The payment the agent calls refuses any amount over the limit, on any claim, so it can never pay such a claim itself.
 - Decisions follow the policy wording and the claims manual. The wording comes first; the manual says
   how to read it and covers what it leaves open, such as a third claim within 12 months, losses to wild
   animals and meals without receipts.

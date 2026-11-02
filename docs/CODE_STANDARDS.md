@@ -14,8 +14,9 @@ The agent has six parts:
 7. **Tools** (`agent/main.py`): the claim agent's tools, which reach the backend only through its API,
    with `backend()` in `agent/main.py` as their client. That client has no call to the scores, the
    handlers' decisions, the rounds or the settings, and a test checks it.
-8. **The claim graph** (`claim_graph` in `agent/main.py`): the model, its tools, the sign-off and the
-   payment, saved after every step.
+8. **The claim graph** (`claim_graph` in `agent/main.py`): the check for instructions hidden in the
+   claim (its first node, on a second model, outside the versioned configuration), then the model, its
+   tools, the sign-off and the payment of a claim within the limit, saved after every step.
 9. **The harness** (`run`, `carry_on` and `work` in `agent/main.py`): starts, carries on and resumes a
    claim, records its working time, and releases it when it fails.
 10. **The dispatcher** (`agent/dispatcher.py`): works a dispatch or an evaluation with up to N claim

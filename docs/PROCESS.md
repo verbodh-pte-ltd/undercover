@@ -1,10 +1,18 @@
 # Process
 
-`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend, the dashboard and the agent's service, with the settings in `.env`. `npm run seed` reseeds the database. On this machine the database is the `undercover-postgres` Docker container, which must be running, and sign-in needs Supabase's local stack (`npx supabase start`). Sign in as a handler from `data/handlers.json` with `HANDLER_PASSWORD` from `.env`.
+`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend, the dashboard and the agent's service, with the settings in `.env`. `npm run seed` reseeds the database. On this machine the database is the `undercover-postgres` Docker container, which must be running, and sign-in needs Supabase's local stack (`npx supabase start`). Sign in as a handler from `data/handlers.json` with `HANDLER_PASSWORD` from `.env`. `.env` also holds
+`UNDERCOVER_API_KEY`, the agent's key to the backend, a random value of at least 32 characters: the
+agent's service won't start without it, and the backend refuses the agent's calls without it. Never
+print it.
+
+`npm run build` builds the dashboard into `dashboard/dist`, which the backend then serves at `/`, as it
+will on AWS Lambda (`docs/TECH_STACK.md`, Deployment).
 
 `npm run check` runs every check:
 
 - Python: ruff (lint and format), pyright, and pytest with 80% coverage
+- The server group: `npm run check:server` imports `backend.main` with only the `server` dependency
+  group, in a temporary environment of its own, so `.venv` is left as it is
 - TypeScript: ESLint, Prettier, tsc, and vitest with 80% coverage
 - Playwright end-to-end tests, on their own SQLite database, with stand-ins for the agent's service on port 8003, Supabase Auth on port 8004 and the judge on port 8005. Every spec signs in first
 
