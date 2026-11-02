@@ -109,6 +109,8 @@ Done:
 - `week1/week1day2.ipynb`, `week2/week2day1.ipynb`, `week2/week2day2.ipynb`: truststore.
 - `week2/week2day3.ipynb`, `week2/week2day4.ipynb`: truststore and local Postgres.
 - `week2/week2day5.ipynb`, `week2/week2day5free.ipynb`: truststore and local Supabase Auth (section 4).
+- `week3/week3day1.ipynb`, `week3/week3day2_lab1.ipynb`, `week3/week3day2_lab1free.ipynb`: truststore
+  (no database).
 
 Truststore only (no database):
 
@@ -117,8 +119,7 @@ Truststore only (no database):
   `week1/week1day5_lab2free.ipynb`
 - `week2/week2day1free.ipynb`, `week2/week2day2free.ipynb`, `week2/week2day4free.ipynb` (also the
   connection-limit note)
-- `week3/week3day1.ipynb`, `week3/week3day2_lab1.ipynb`, `week3/week3day2_lab1free.ipynb`,
-  `week3/week3day3free.ipynb`, `week3/week3day5_lab2.ipynb`
+- `week3/week3day3free.ipynb`, `week3/week3day5_lab2.ipynb`
 
 Truststore and local Postgres:
 
