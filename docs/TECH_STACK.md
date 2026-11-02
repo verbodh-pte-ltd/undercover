@@ -12,3 +12,11 @@
 - `data/`: the business data the backend starts from. The agent never sees `data/evals/`, which holds the answer key.
 
 Python 3.12 with uv, all in the root `pyproject.toml`. Node 26. The OpenRouter key is `OPENROUTER_API_KEY` in `.env`, beside the Langfuse keys, `DATABASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` and `HANDLER_PASSWORD`.
+
+## Deployment
+
+- `npm run build` builds the dashboard into `dashboard/dist` (git-ignored), with `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` built in, read from `.env` when there is one and otherwise from the shell. Only `npm run dev` and `npm run build` read `.env`; Vitest and the end-to-end dashboard don't.
+- When `dashboard/dist` exists, the backend serves it at `/` after every route: a file gets itself, any other path outside `/api/` gets `index.html`, and an unknown `/api/` path gets FastAPI's JSON 404. Without it, nothing is mounted.
+- The package holds `backend/` (without its tests), `data/`, `dashboard/dist/` and the `server` dependency group's packages from `pyproject.toml`, installed as Linux wheels for Python 3.12. The `server` group lists what the backend imports; `npm run check:server` imports `backend.main` with only that group, in a temporary environment that leaves `.venv` as it is. The backend imports nothing from `agent/`, reads files only from the package and writes none.
+- On AWS Lambda the handler is `backend.main.handler`, `Mangum(app, lifespan="off")`. On a web server the app is `backend.main:app`, as in `uv run -m uvicorn backend.main:app`.
+- The function's environment is `DATABASE_URL` (Supabase's transaction pooler, port 6543), `VITE_SUPABASE_URL` (for the handlers' sign-in) and `UNDERCOVER_API_KEY`. Lambda sets `AWS_LAMBDA_FUNCTION_NAME`, and with it the store opens a connection for each request and keeps none (`NullPool`), prepares no statements (`prepare_threshold=None`), and never makes the schema or tables or seeds; run `npm run seed` against the database first. Everything else the backend reads has a default, or is needed only for runs and evaluations, which need the agent's service and can't start on Lambda.

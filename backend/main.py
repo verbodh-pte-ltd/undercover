@@ -8,6 +8,7 @@ import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import httpx
@@ -16,6 +17,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
+from mangum import Mangum
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     Connection,
@@ -28,6 +31,9 @@ from sqlalchemy import (
     select,
     update,
 )
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from backend import agent_service, auth, judge, payout, rule, store
 from backend.store import (
@@ -1866,3 +1872,33 @@ def apply_verdict(round_id: int, db: Db) -> dict[str, Any]:
     )
     db.commit()
     return round_view(db, round_row(db, round_id))
+
+
+DASHBOARD = Path(__file__).parent.parent / "dashboard" / "dist"
+NOT_FOUND = 404
+
+
+class Dashboard(StaticFiles):
+    """The dashboard's build: its files, and index.html for any page outside /api/."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        """Serve the file at path, or index.html so a page loads on a refresh."""
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != NOT_FOUND or scope["path"].split("/")[1] == "api":
+                raise
+            return await super().get_response("index.html", scope)
+
+
+def mount_dashboard(target: FastAPI, folder: Path) -> bool:
+    """Serve the dashboard's build at / after every route, if it has been built."""
+    if not folder.is_dir():
+        return False
+    target.mount("/", Dashboard(directory=folder), name="dashboard")
+    return True
+
+
+mount_dashboard(app, DASHBOARD)
+# The function's entry point on AWS Lambda; no startup hook, so nothing seeds there.
+handler = Mangum(app, lifespan="off")

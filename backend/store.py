@@ -26,6 +26,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.pool import NullPool
 
 DATA = Path(__file__).parent.parent / "data"
 DEFAULT_DB = Path(__file__).parent / "undercover.db"
@@ -365,25 +366,39 @@ def postgres_url() -> str | None:
     return url and url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
+def on_lambda() -> bool:
+    """Whether the backend runs on AWS Lambda, which sets AWS_LAMBDA_FUNCTION_NAME."""
+    return bool(os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
+
+
 def postgres_engine(url: str) -> Engine:
-    """An engine for Postgres that works in the undercover schema, with a small pool."""
-    return create_engine(
-        url,
-        pool_size=POOL_SIZE,
-        max_overflow=0,
-        connect_args={"options": f"-c search_path={SCHEMA}"},
-    )
+    """An engine for Postgres that works in the undercover schema.
+
+    On Lambda each request opens its own connection and keeps none, with no prepared
+    statements, which a transaction pooler doesn't support; elsewhere a small pool.
+    """
+    options = {"options": f"-c search_path={SCHEMA}"}
+    if on_lambda():
+        return create_engine(
+            url,
+            poolclass=NullPool,
+            connect_args={**options, "prepare_threshold": None},
+        )
+    return create_engine(url, pool_size=POOL_SIZE, max_overflow=0, connect_args=options)
 
 
 def make_engine() -> Engine:
-    """An engine for Postgres, its schema made, or for the SQLite file."""
+    """An engine for Postgres, its schema made off Lambda, or for the SQLite file."""
     url = postgres_url()
     if url:
         engine = postgres_engine(url)
-        with engine.begin() as conn:
-            conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
+        if not on_lambda():
+            with engine.begin() as conn:
+                conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}"))
         return engine
-    engine = create_engine(f"sqlite:///{os.getenv('UNDERCOVER_DB', str(DEFAULT_DB))}")
+    path = os.getenv("UNDERCOVER_DB", str(DEFAULT_DB))
+    pool = {"poolclass": NullPool} if on_lambda() else {}
+    engine = create_engine(f"sqlite:///{path}", **pool)
 
     # Every SQLite transaction takes the write lock at its start, so two requests
     # can't both pass a check before either writes.
@@ -399,15 +414,19 @@ def make_engine() -> Engine:
 
 
 def engine() -> Engine:
-    """The engine for this database, created, made and seeded on first use."""
+    """The engine for this database, created, made and seeded on first use.
+
+    On Lambda nothing is made or seeded, so a request never writes to set up.
+    """
     key = postgres_url() or os.getenv("UNDERCOVER_DB", str(DEFAULT_DB))
     with engines_lock:
         if key not in engines:
             made = make_engine()
-            metadata.create_all(made)
-            with made.begin() as conn:
-                if conn.scalar(select(func.count()).select_from(claims)) == 0:
-                    seed(conn)
+            if not on_lambda():
+                metadata.create_all(made)
+                with made.begin() as conn:
+                    if conn.scalar(select(func.count()).select_from(claims)) == 0:
+                        seed(conn)
             engines[key] = made
         return engines[key]
 

@@ -10,9 +10,10 @@ the documents, with the designer's review of the screenshots and its fixes. We u
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 Of the security changes before AWS (`docs/PLAN_SECURE.md`, from `docs/SECURE.md`), phases 1 and 2 are
-built: an API key for the agent, and a check for instructions hidden in a claim, and phase 3: the
-agent's own API and the sign-off that pays. Phases 4 and 5 (the Lambda package and the live checks) are
-not built yet.
+built: an API key for the agent, and a check for instructions hidden in a claim, phase 3: the
+agent's own API and the sign-off that pays, and phase 4: ready for Lambda (`npm run build`, the
+backend serving the dashboard's build, a Lambda handler and connections for Lambda). Phase 5 (the live
+checks and the documents) is not built yet. Nothing is deployed.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
 
@@ -92,6 +93,11 @@ What changed for it, in the look only:
   Whitfield can), the handlers' decisions on both labelled sets in `answer_key`, with each
   handler's reason and reference from `data/evals/`, which no claim operation reads, and version 1 of the claim agent's configuration and of the improver's recipe. `npm run seed` rebuilds every table,
   empties the agent's saved threads and seeds again, so it empties the scoreboard too.
+  - On AWS Lambda (`AWS_LAMBDA_FUNCTION_NAME` set) the store opens a connection for each request and
+    keeps none (`NullPool`), prepares no statements, and never makes the tables or seeds.
+  - When `dashboard/dist` exists, the backend serves the dashboard's build at `/`: a file gets itself,
+    any other path outside `/api/` gets `index.html`, and an unknown `/api/` path gets a JSON 404.
+    `handler` at the end of `backend/main.py` is `Mangum(app, lifespan="off")`, the Lambda handler.
   - Read routes for claims, policies, claim history, the policy wording, the handlers, and the policy
     wording and the claims manual by numbered section (`/api/documents/{document}/sections`).
   - Write routes: start a claim in a run or none, record steps, record a decision, pay, sign off,
@@ -328,11 +334,26 @@ root for `npm run dev` only.
 The `undercover-postgres` container must be running. To reset the data, run `npm run seed`; the start
 cell in `labs/week2/week2day3.ipynb` makes the container again from `.env` if Docker has lost it.
 
+To serve the dashboard from the backend alone, as on a server or Lambda:
+
+```bash
+npm run build                                                # writes dashboard/dist
+uv run --env-file .env -m uvicorn backend.main:app          # dashboard and API on :8000
+```
+
+`npm run build` reads the Supabase address and publishable key from `.env`, or from the shell when
+there is no `.env`. `docs/TECH_STACK.md` says what goes in the Lambda package. While `dashboard/dist`
+exists, the backend that `npm run dev` starts also serves it on :8000; the dashboard on :5173 is
+unchanged.
+
 ## Check it
 
 ```bash
-npm run check    # Python checks, TypeScript checks, then the end-to-end tests
+npm run check    # Python checks, the server group check, TypeScript checks, then the end-to-end tests
 ```
+
+`npm run check:server` imports `backend.main` with only the `server` dependency group, in a temporary
+environment of its own, so `.venv` is left as it is.
 
 `npm run check` needs no `.env`: the tests run on SQLite, with no Postgres, Langfuse or OpenRouter.
 

@@ -238,26 +238,26 @@ over the limit, and a handler's sign-off pays the claim.
 One command builds the dashboard, the backend serves it, a Lambda handler wraps the app, and the
 database connections suit Lambda.
 
-- [ ] `npm run build` writes `dashboard/dist` with no warnings, with the Supabase address and key from
+- [x] `npm run build` writes `dashboard/dist` with no warnings, with the Supabase address and key from
       `.env`. With `.env` moved away and the two variables set in the shell, it builds them in from the
       environment. Vitest and the e2e dashboard still read no `.env` (`envDir` stays off outside
       development and the build).
-- [ ] With a stand-in build in a temporary folder, `/` and a dashboard page such as `/claims` get
+- [x] With a stand-in build in a temporary folder, `/` and a dashboard page such as `/claims` get
       `index.html`, a file gets itself, every `/api/` route works as before, and an unknown `/api/`
       path gets a JSON 404. Without the folder, nothing is mounted (tests).
-- [ ] `handler` at the end of `backend/main.py` is `Mangum(app, lifespan="off")`. A test calls it with a
+- [x] `handler` at the end of `backend/main.py` is `Mangum(app, lifespan="off")`. A test calls it with a
       Function URL event for `/api/health`, and with the stand-in build for `/` and a dashboard page.
-- [ ] With `AWS_LAMBDA_FUNCTION_NAME` set, the store uses `NullPool` with `prepare_threshold=None`, opens
+- [x] With `AWS_LAMBDA_FUNCTION_NAME` set, the store uses `NullPool` with `prepare_threshold=None`, opens
       a connection for each request (a test counts them over two requests), and doesn't create tables or
       seed. Without it, the pool of 4 is unchanged (tests).
-- [ ] The backend reads nothing from `agent/` and no file outside `backend/`, `data/` and
+- [x] The backend reads nothing from `agent/` and no file outside `backend/`, `data/` and
       `dashboard/dist`, and writes no file in Lambda mode (test reads its imports and file paths).
       Everything else it reads from the environment has a default, or is needed only by work that can't
       start on Lambda.
-- [ ] `npm run check` includes `check:server`:
+- [x] `npm run check` includes `check:server`:
       `uv run --isolated --only-group server python -c "import backend.main"`, which leaves `.venv` as it
       is. The `server` group lists what the backend imports. It passes, and `npm run check` is green.
-- [ ] `docs/TECH_STACK.md` has a Deployment section: `npm run build` and `dashboard/dist`, what goes in
+- [x] `docs/TECH_STACK.md` has a Deployment section: `npm run build` and `dashboard/dist`, what goes in
       the package, `backend.main.handler`, `backend.main:app` for a web server, and the three
       environment variables.
 
@@ -342,3 +342,31 @@ Phase 3:
 - A dispatch lists only claims in progress to carry on, and a signed-off claim is now decided, so a
   paused thread is finished only by the service's resume after the sign-off. If the service is down
   at that moment, the thread stays paused in the saver; the claim itself is paid and decided.
+
+Phase 4:
+
+- `vite build` runs in the `production` mode, so `envDir` is the repo root in `development` and
+  `production` only. Vite always adds `VITE_` variables from the shell, over `.env`, so a build with no
+  `.env` takes them from the environment; Vitest (`test`) and the e2e dashboard (`e2e`) still read no
+  `.env`. The build is 485 kB of JavaScript, just under Vite's 500 kB warning: a few more dependencies
+  would bring the chunk-size warning back.
+- `dist/` was already in `.gitignore`, so `dashboard/dist` is ignored, and ESLint already ignores
+  `**/dist`; Prettier skips it through `.gitignore`.
+- Starlette's `StaticFiles` hands `get_response` a path with the system's separators (backslashes on
+  Windows), so the `/api/` test reads the request's own path, not that argument.
+- With the mount at `/`, a GET to an `/api/` path that only has a POST route now gets a JSON 404
+  instead of a 405, because the mount matches it before the router's method check. Every route and
+  method that exists answers as before: the whole Python suite passes with `dashboard/dist` built.
+- In Lambda mode SQLite also uses `NullPool`, so the tests count one connection a request on SQLite;
+  the Postgres settings (`NullPool`, `prepare_threshold=None`, the `search_path` option) are checked
+  on the arguments given to `create_engine`, with no database. Off Lambda the two requests open no
+  new connection: they reuse the one the seeding opened.
+- Mangum 0.22 calls `asyncio.get_event_loop()`, which warns on Python 3.12 outside a running loop. It
+  is only a warning, in the tests.
+- The `server` group already listed what the backend imports (`pydantic` and `starlette` come with
+  `fastapi`); `check:server` installs 27 packages in a throwaway environment and takes about 30 seconds.
+- Not a Phase 4 box: the package built as Lab 2 builds it, in a scratch folder with Linux wheels for
+  Python 3.12, is 20.3 MB zipped. That build skipped `*.db`; Lab 2's `copytree` doesn't, so a local
+  `backend/undercover.db` would go into its package unless it is deleted first. `data/evals/` goes in
+  too, as Lab 2 copies all of `data/`; the backend reads it only when seeding, which never happens on
+  Lambda.

@@ -15,6 +15,7 @@ def fresh_db(tmp_path, monkeypatch):
     monkeypatch.setenv("UNDERCOVER_API_KEY", signing.API_KEY)
     for name in FROM_DOT_ENV:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("AWS_LAMBDA_FUNCTION_NAME", raising=False)
 
 
 @pytest.fixture(autouse=True)

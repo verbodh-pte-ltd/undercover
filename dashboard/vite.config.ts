@@ -1,10 +1,11 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-// Only `npm run dev` reads .env, from the repo root; the tests set their own values.
+// Only `npm run dev` and `npm run build` read .env, from the repo root; the build also
+// takes VITE_ variables from the shell. The tests set their own values.
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
-  envDir: mode === "development" ? ".." : false,
+  envDir: ["development", "production"].includes(mode) ? ".." : false,
   server: {
     proxy: { "/api": process.env.BACKEND_URL ?? "http://127.0.0.1:8000" },
   },
