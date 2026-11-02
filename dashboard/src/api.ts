@@ -51,6 +51,8 @@ export interface Claim extends ClaimSummary {
   sections_read: string[];
   run_id: number | null;
   copied_from: string | null;
+  // Set when the Gateway refused the agent's payment, so the claim waits for sign-off.
+  held_by_gateway: boolean;
   cost: number;
   seconds: number;
 }

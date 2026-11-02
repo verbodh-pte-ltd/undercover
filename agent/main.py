@@ -5,11 +5,13 @@ import json
 import os
 import threading
 import time
+from dataclasses import dataclass
 from functools import cache
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, Protocol, TypedDict, runtime_checkable
 
 import httpx
 import psycopg
+from langchain.tools import ToolRuntime
 from langchain_core.exceptions import ModelRateLimitError, ModelTimeoutError
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
@@ -31,10 +33,15 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
+from langgraph.runtime import Runtime
 from langgraph.types import Command, interrupt
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field, SecretStr
+
+from agent.direct import CONTEXT_URL, Direct
+from agent.gateway import Gateway
+from agent.mcp_client import Answer
 
 BACKEND_URL = "http://127.0.0.1:8000"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -68,6 +75,7 @@ BACKEND_FIELDS = {
     "thread_id",
     "run_id",
     "copied_from",
+    "held_by_gateway",
     "sections_read",
     "cost",
     "seconds",
@@ -135,7 +143,8 @@ def key_header() -> dict[str, str]:
 
 def backend() -> httpx.Client:
     """Return a client for the UnderCover backend that sends the agent's API key."""
-    return httpx.Client(base_url=BACKEND_URL, timeout=30, headers=key_header())
+    url = os.getenv("UNDERCOVER_API", BACKEND_URL)
+    return httpx.Client(base_url=url, timeout=30, headers=key_header())
 
 
 def call(method: str, path: str, body: Any = None) -> str:
@@ -147,73 +156,123 @@ def call(method: str, path: str, body: Any = None) -> str:
     return f"Refused ({response.status_code}): {response.text}"
 
 
-@tool
-def get_claim(claim_id: str) -> str:
-    """Get one claim in full: the story, the items, the documents and its decision."""
-    return call("GET", f"/api/claims/{claim_id}")
+@runtime_checkable
+class Route(Protocol):
+    """How the claim agent reaches its tools: straight to them, or by the Gateway."""
+
+    def name(self, tool: str) -> str:
+        """A tool's name on this route."""
+        ...
+
+    def use(self, tool: str, arguments: dict[str, Any]) -> Answer:
+        """Call one tool, with its refusal as text."""
+        ...
 
 
-@tool
-def get_policy(policy_id: str) -> str:
-    """Get a policy: the plan, the add-ons, the trip and the travelers."""
-    return call("GET", f"/api/policies/{policy_id}")
+def route() -> Route:
+    """The Gateway at UNDERCOVER_GATEWAY_URL if it is set, else the direct route."""
+    gateway = os.getenv("UNDERCOVER_GATEWAY_URL")
+    if gateway:
+        return Gateway(gateway)
+    return Direct(backend, os.getenv("UNDERCOVER_CONTEXT", CONTEXT_URL))
 
 
-@tool
-def get_claim_history(customer_id: str) -> str:
-    """Get the customer's earlier claims, with the outcome and amount paid."""
-    return call("GET", f"/api/customers/{customer_id}/claims")
+@dataclass
+class ClaimContext:
+    """What the agent knows about the claim it works, so the model needn't say."""
+
+    claim_id: str
+    policy_id: str
+    customer_id: str
+    run_id: int | None
+    version: int
+    # An evaluation's copy of a claim, which nobody signs off.
+    copy: bool
+    route: Route
 
 
-@tool
-def list_sections(document: Document) -> str:
+Context = ToolRuntime[ClaimContext]
+
+
+# A tool's answer for the model, and for its step who refused it, if anyone.
+Used = tuple[str, dict[str, Any]]
+
+
+def use(runtime: Context, tool_name: str, arguments: dict[str, Any]) -> Used:
+    """Call a tool on the claim's route."""
+    answer = runtime.context.route.use(tool_name, arguments)
+    return answer.text, {"refused_by": answer.refused_by}
+
+
+@tool(response_format="content_and_artifact")
+def get_claim(runtime: Context) -> Used:
+    """Get this claim in full: the story, the items, the documents and its decision."""
+    return use(runtime, "get_claim", {"claim_id": runtime.context.claim_id})
+
+
+@tool(response_format="content_and_artifact")
+def get_policy(runtime: Context) -> Used:
+    """Get this claim's policy: the plan, the add-ons, the trip and the travelers."""
+    return use(runtime, "get_policy", {"policy_id": runtime.context.policy_id})
+
+
+@tool(response_format="content_and_artifact")
+def get_claim_history(runtime: Context) -> Used:
+    """Get this customer's earlier claims, with the outcome and amount paid."""
+    customer = {"customer_id": runtime.context.customer_id}
+    return use(runtime, "get_claim_history", customer)
+
+
+@tool(response_format="content_and_artifact")
+def list_sections(document: Document, runtime: Context) -> Used:
     """List the numbered sections of policy_wording or claims_manual."""
-    return call("GET", f"/api/documents/{document}/sections")
+    return use(runtime, "list_sections", {"document": document})
 
 
-@tool
-def read_section(document: Document, number: str) -> str:
+@tool(response_format="content_and_artifact")
+def read_section(document: Document, number: str, runtime: Context) -> Used:
     """Read one numbered section of policy_wording or claims_manual."""
-    return call("GET", f"/api/documents/{document}/sections/{number}")
+    return use(runtime, "read_section", {"document": document, "number": number})
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def calculate_payout(
-    policy_id: str, benefit: Benefit, lines: list[Line], paid_by_others: float
-) -> str:
-    """Work out the payout on an approved claim with UnderCover's payout rules.
+    benefit: Benefit, lines: list[Line], paid_by_others: float, runtime: Context
+) -> Used:
+    """Work out the payout on this claim, to approve it, with UnderCover's payout rules.
 
     Give one line for each covered item or expense, with excluded ones left out, and
     anything a carrier, hotel or other party has paid or refunded in paid_by_others.
     """
     body = {
-        "policy_id": policy_id,
+        "claim_id": runtime.context.claim_id,
         "benefit": benefit,
         "lines": [line.model_dump() for line in lines],
         "paid_by_others": paid_by_others,
     }
-    return call("POST", "/api/payouts", body)
+    return use(runtime, "calculate_payout", body)
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def record_decision(
-    claim_id: str,
     decision: Literal["approve", "decline", "refer"],
     payout: float,
     reason: str,
     policy_section: str,
-) -> str:
-    """Approve, decline or refer a claim, with payout, reasons and policy section."""
+    runtime: Context,
+) -> Used:
+    """Approve, decline or refer this claim, with payout, reasons and policy section."""
     body = {
+        "claim_id": runtime.context.claim_id,
         "decision": decision,
         "payout": payout,
         "reason": reason,
         "policy_section": policy_section,
     }
-    return call("POST", f"/api/claims/{claim_id}/decision", body)
+    return use(runtime, "record_decision", body)
 
 
-CLAIM_TOOLS = [
+MODEL_TOOLS = [
     get_claim,
     get_policy,
     get_claim_history,
@@ -241,6 +300,9 @@ class ClaimState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     claim_id: str
     model_calls: int
+
+
+ClaimGraph = CompiledStateGraph[ClaimState, ClaimContext, ClaimState, ClaimState]
 
 
 def one_model() -> str | None:
@@ -402,9 +464,9 @@ def check(
 
 def claim_graph(
     llm: BaseChatModel, instructions: str, checkpointer: BaseCheckpointSaver
-) -> CompiledStateGraph:
+) -> ClaimGraph:
     """The claim agent: the check, the model and tools, then payment or sign-off."""
-    model_with_tools = llm.bind_tools(CLAIM_TOOLS)
+    model_with_tools = llm.bind_tools(MODEL_TOOLS)
     system = SystemMessage(instructions)
 
     def agent(state: ClaimState, config: RunnableConfig) -> dict[str, Any]:
@@ -421,36 +483,10 @@ def claim_graph(
         last = state["messages"][-1]
         return "tools" if isinstance(last, AIMessage) and last.tool_calls else "settle"
 
-    def settle(state: ClaimState) -> Command[Literal["sign_off", "pay", "__end__"]]:
-        """Follow the backend: wait for a sign-off, pay, or stop."""
-        claim = json.loads(call("GET", f"/api/claims/{state['claim_id']}"))
-        if claim["decision"] != "approve" or claim["paid_amount"] is not None:
-            return Command(goto="__end__")
-        if claim["status"] == "waiting_for_sign_off":
-            # Nobody signs off an evaluation's copy: held for sign-off, it's finished.
-            return Command(goto="__end__" if claim["run_id"] else "sign_off")
-        return Command(goto="pay")
-
-    def sign_off(state: ClaimState) -> dict[str, Any]:
-        """Wait for a handler to sign off the payout, which the sign-off pays."""
-        answer = interrupt({"claim_id": state["claim_id"]})
-        record_step(state["claim_id"], "reply", f"Signed off by {answer['handler_id']}")
-        return {}
-
-    def pay(state: ClaimState) -> dict[str, Any]:
-        """Pay the approved payout; the backend treats a repeat as done."""
-        claim_id = state["claim_id"]
-        payout = json.loads(call("GET", f"/api/claims/{claim_id}"))["payout"]
-        result = call("POST", f"/api/claims/{claim_id}/payment", {"amount": payout})
-        paid = f"Paid ${payout:,.2f}"
-        text = result[:RESULT_PREVIEW] if result.startswith("Refused") else paid
-        record_step(claim_id, "tool_result", f"pay_claim: {text}")
-        return {}
-
-    builder = StateGraph(ClaimState)
+    builder = StateGraph(ClaimState, context_schema=ClaimContext)
     builder.add_node("check", check)
     builder.add_node("agent", agent)
-    builder.add_node("tools", ToolNode(CLAIM_TOOLS))
+    builder.add_node("tools", ToolNode(MODEL_TOOLS))
     builder.add_node("settle", settle)
     builder.add_node("sign_off", sign_off)
     builder.add_node("pay", pay)
@@ -458,8 +494,44 @@ def claim_graph(
     builder.add_conditional_edges("agent", after_agent, ["tools", "settle"])
     builder.add_edge("tools", "agent")
     builder.add_edge("sign_off", END)
-    builder.add_edge("pay", END)
     return builder.compile(checkpointer=checkpointer)
+
+
+def settle(state: ClaimState) -> Command[Literal["sign_off", "pay", "__end__"]]:
+    """Follow the backend: wait for a sign-off, pay, or stop."""
+    claim = json.loads(call("GET", f"/api/claims/{state['claim_id']}"))
+    if claim["decision"] != "approve" or claim["paid_amount"] is not None:
+        return Command(goto="__end__")
+    if claim["status"] == "waiting_for_sign_off":
+        # Nobody signs off an evaluation's copy: held for sign-off, it's finished.
+        return Command(goto="__end__" if claim["run_id"] else "sign_off")
+    return Command(goto="pay")
+
+
+def sign_off(state: ClaimState) -> dict[str, Any]:
+    """Wait for a handler to sign off the payout, which the sign-off pays."""
+    answer = interrupt({"claim_id": state["claim_id"]})
+    record_step(state["claim_id"], "reply", f"Signed off by {answer['handler_id']}")
+    return {}
+
+
+def pay(
+    state: ClaimState, runtime: Runtime[ClaimContext]
+) -> Command[Literal["sign_off", "__end__"]]:
+    """Pay the approved payout on the claim's route, or hold it for sign-off.
+
+    The backend treats a repeat as done. A payment the Gateway refuses waits for a
+    handler's sign-off, as a payout over the approval limit does.
+    """
+    claim_id, claim = state["claim_id"], runtime.context
+    payout = json.loads(call("GET", f"/api/claims/{claim_id}"))["payout"]
+    answer = claim.route.use("pay_claim", {"claim_id": claim_id, "amount": payout})
+    text = answer.text[:RESULT_PREVIEW] if answer.refused_by else f"Paid ${payout:,.2f}"
+    record_step(claim_id, "tool_result", f"{claim.route.name('pay_claim')}: {text}")
+    if answer.refused_by != "gateway":
+        return Command(goto="__end__")
+    call("POST", f"/api/claims/{claim_id}/hold")
+    return Command(goto="__end__" if claim.copy else "sign_off")
 
 
 def traced(
@@ -480,15 +552,17 @@ def traced(
     return config
 
 
-def steps(message: BaseMessage) -> list[dict[str, str]]:
-    """Describe one message from the agent as steps for the dashboard."""
+def steps(message: BaseMessage, route: Route) -> list[dict[str, str]]:
+    """Describe one message from the agent as steps for the dashboard, each tool
+    named as the claim's route names it."""
     if isinstance(message, ToolMessage):
-        text = f"{message.name}: {message.text[:RESULT_PREVIEW]}"
+        text = f"{route.name(message.name or '')}: {message.text[:RESULT_PREVIEW]}"
         return [{"kind": "tool_result", "text": text}]
     found = []
     if isinstance(message, AIMessage):
         for tool_call in message.tool_calls:
-            text = f"{tool_call['name']}({json.dumps(tool_call['args'])})"
+            name = route.name(tool_call["name"])
+            text = f"{name}({json.dumps(tool_call['args'])})"
             found.append({"kind": "tool_call", "text": text})
     if message.text:
         found.append({"kind": "reply", "text": message.text})
@@ -511,6 +585,15 @@ def run(
         claim = client.get(f"/api/claims/{claim_id}").json()
     checkpointer = saver()
     graph = claim_graph(llm or model(version), version["instructions"], checkpointer)
+    context = ClaimContext(
+        claim_id=claim_id,
+        policy_id=claim["policy_id"],
+        customer_id=claim["customer_id"],
+        run_id=run_id,
+        version=version["version"],
+        copy=claim["run_id"] is not None,
+        route=route(),
+    )
     config = traced(thread_id, run_id, version.get("round_id"))
     config["recursion_limit"] = RECURSION_LIMIT
     saved = graph.get_state(config)
@@ -531,7 +614,7 @@ def run(
     try:
         # A fresh context, so a claim worked inside another run (a dispatcher's
         # worker) starts its own trace in the claim's Langfuse session.
-        reply = contextvars.Context().run(stream_claim, graph, inputs, config, claim_id)
+        reply = contextvars.Context().run(stream_claim, graph, inputs, config, context)
     finally:
         # The time spent working, which a wait for a sign-off falls outside of.
         seconds = clock() - started
@@ -544,12 +627,19 @@ def run(
 
 
 def stream_claim(
-    graph: CompiledStateGraph, inputs: Any, config: RunnableConfig, claim_id: str
+    graph: ClaimGraph,
+    inputs: Any,
+    config: RunnableConfig,
+    context: ClaimContext,
 ) -> str:
     """Stream the claim graph, posting each step to the claim."""
-    reply = ""
+    claim_id, reply = context.claim_id, ""
     for update in graph.stream(
-        inputs, config=config, stream_mode="updates", durability="sync"
+        inputs,
+        config=config,
+        context=context,
+        stream_mode="updates",
+        durability="sync",
     ):
         if "__interrupt__" in update:
             reply = f"{claim_id} is waiting for a handler's sign-off."
@@ -557,7 +647,7 @@ def stream_claim(
             continue
         for node in update.values():
             for message in (node or {}).get("messages", []):
-                for step in steps(message):
+                for step in steps(message, context.route):
                     record_step(claim_id, step["kind"], step["text"])
                 reply = message.text or reply
     return reply

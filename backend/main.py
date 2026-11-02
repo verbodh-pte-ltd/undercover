@@ -132,7 +132,6 @@ class Release(BaseModel):
 
 
 class PayoutQuestion(BaseModel):
-    policy_id: str
     benefit: payout.Benefit
     lines: list[payout.Line]
     paid_by_others: float = Field(ge=0)
@@ -309,7 +308,7 @@ def claim_view(db: Connection, row: RowMapping) -> dict[str, Any]:
     claim.pop("status")
     fields = ["status", "decision", "payout", "reason", "policy_section"]
     fields += ["paid_amount", "paid_at", "signed_off_by", "signed_off_at"]
-    fields += ["attempts", "thread_id", "run_id", "copied_from"]
+    fields += ["attempts", "thread_id", "run_id", "copied_from", "held_by_gateway"]
     return {
         **claim,
         "customer_name": customer_name(db, claim["customer_id"]),
@@ -785,10 +784,13 @@ def read_section(document: str, number: str) -> dict[str, str]:
     raise HTTPException(404, f"Section {number} of {document} not found")
 
 
-@app.post("/api/payouts", operation_id="calculate_payout", dependencies=AGENT)
-def calculate_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
+@app.post(
+    "/api/claims/{claim_id}/payout", operation_id="calculate_payout", dependencies=AGENT
+)
+def calculate_payout(claim_id: str, question: PayoutQuestion, db: Db) -> payout.Payout:
     """Work out the payout on an approved claim with UnderCover's payout rules."""
-    policy = record(db, "policies", question.policy_id)
+    claim = json.loads(claim_row(db, claim_id)["data"])
+    policy = record(db, "policies", claim["policy_id"])
     return payout.work_out_payout(
         policy,
         question.benefit,
@@ -1164,6 +1166,28 @@ def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
         )
     set_claim(
         db, claim_id, status="decided", paid_amount=row["payout"], paid_at=store.now()
+    )
+    db.commit()
+    return get_claim(claim_id, db)
+
+
+@app.post(
+    "/api/claims/{claim_id}/hold", operation_id="hold_for_sign_off", dependencies=AGENT
+)
+def hold_for_sign_off(claim_id: str, db: Db) -> dict[str, Any]:
+    """Hold an approved claim for sign-off when the Gateway refused its payment."""
+    row = claim_row(db, claim_id, lock=True)
+    payable = row["decision"] == "approve" and row["status"] == "decided"
+    if not payable or row["paid_amount"] is not None or row["needs_sign_off"]:
+        raise HTTPException(
+            409, f"Claim {claim_id} is not an approved claim waiting for its payment"
+        )
+    set_claim(
+        db,
+        claim_id,
+        status="waiting_for_sign_off",
+        needs_sign_off=True,
+        held_by_gateway=True,
     )
     db.commit()
     return get_claim(claim_id, db)

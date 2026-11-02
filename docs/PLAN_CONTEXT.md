@@ -243,40 +243,40 @@ Review these too. The documents in `docs/` don't make these decisions.
 The claim agent's tools and the graph's payment go through either route. The model's tools take no id
 it could get wrong, and a payment the Gateway refuses waits for a handler.
 
-- [ ] With `UNDERCOVER_GATEWAY_URL` unset, the model's tools are `get_claim`, `get_policy`,
+- [x] With `UNDERCOVER_GATEWAY_URL` unset, the model's tools are `get_claim`, `get_policy`,
       `get_claim_history`, `list_sections`, `read_section`, `calculate_payout` and `record_decision`.
       `get_claim`, `get_policy`, `get_claim_history` and `calculate_payout` take no claim, policy or
       customer id, and `record_decision` takes no claim id (test on the tools' input schemas).
-- [ ] With it set to the stand-in Gateway, the model gets the same tools with the same names and inputs
+- [x] With it set to the stand-in Gateway, the model gets the same tools with the same names and inputs
       (test compares the two schemas). Each model tool call and the graph's payment reach the stand-in
       as `undercover-app___<operation>`, each request signed with `AWS4-HMAC-SHA256` for
       `bedrock-agentcore` in the configured region (test reads the stand-in's headers).
-- [ ] On the Gateway route, the bookkeeping never reaches the stand-in: starting the claim, its steps,
+- [x] On the Gateway route, the bookkeeping never reaches the stand-in: starting the claim, its steps,
       model calls, work times, the security check's read and referral, and the run's calls go to the app
       with the key (test lists the stand-in's calls).
-- [ ] `get_claim` gives the model the same text on both routes, and it is the text the check reads (test).
-- [ ] A stub model decides a claim on each route with the same decision and payout (tests).
-- [ ] An app refusal (a second `record_decision` on a decided claim) reaches the model as a refusal with
+- [x] `get_claim` gives the model the same text on both routes, and it is the text the check reads (test).
+- [x] A stub model decides a claim on each route with the same decision and payout (tests).
+- [x] An app refusal (a second `record_decision` on a decided claim) reaches the model as a refusal with
       the app's reason on each route, never as a success (tests).
-- [ ] A Gateway refusal of a tool is recorded on the claim as the Gateway's, the model gets it as a
+- [x] A Gateway refusal of a tool is recorded on the claim as the Gateway's, the model gets it as a
       refusal, and the claim goes on to a decision (test).
-- [ ] With the approval limit raised to $2,000 and an approval of $1,500: the stand-in refuses the
+- [x] With the approval limit raised to $2,000 and an approval of $1,500: the stand-in refuses the
       payment, the refusal is recorded, and the claim waits for sign-off with `held_by_gateway` set. Dana's
       sign-off pays it once, and the resume finishes with no call to the payment (test).
-- [ ] `hold_for_sign_off` answers 401 without the key and with only a handler's sign-in. It is in the key
+- [x] `hold_for_sign_off` answers 401 without the key and with only a handler's sign-in. It is in the key
       group of the access test, and not in the agent's API document. It refuses a declined claim, a paid
       claim, and a claim already waiting (tests).
-- [ ] The sign-off panel says the Gateway refused the payment when `held_by_gateway` is set, and that
+- [x] The sign-off panel says the Gateway refused the payment when `held_by_gateway` is set, and that
       the payout is over the approval limit otherwise (vitest).
-- [ ] `UNDERCOVER_GATEWAY_URL` and `UNDERCOVER_API` are read when a graph or a client is built: a test
+- [x] `UNDERCOVER_GATEWAY_URL` and `UNDERCOVER_API` are read when a graph or a client is built: a test
       sets them after the agent is imported and finds them used.
-- [ ] After a call through the Gateway route on the main thread, the app's Lambda handler still answers
+- [x] After a call through the Gateway route on the main thread, the app's Lambda handler still answers
       `/api/health` in the same process (test). `conftest.py` notes why.
-- [ ] No test reads `~/.aws` or reaches AWS: `conftest.py` sets fake keys, a region and missing config
+- [x] No test reads `~/.aws` or reaches AWS: `conftest.py` sets fake keys, a region and missing config
       files, and clears `UNDERCOVER_GATEWAY_URL`, `UNDERCOVER_CONTEXT` and `UNDERCOVER_MEMORY_ID`.
-- [ ] `calculate_payout` is `POST /api/claims/{claim_id}/payout` and takes the policy from the claim.
+- [x] `calculate_payout` is `POST /api/claims/{claim_id}/payout` and takes the policy from the claim.
       The payout tests pass on it, and an unknown claim gets a 404 (tests).
-- [ ] The claim agent's instructions say the tools already know the claim, its policy and its customer.
+- [x] The claim agent's instructions say the tools already know the claim, its policy and its customer.
       The commit's pre-commit hook passes.
 
 ## Phase 2: The context layer
@@ -497,3 +497,22 @@ runs the cells, or asks for them to be run; each box below is ticked from the ce
       `uv run monitor.py` shows the spend, which is reported.
 
 ## Notes from the build
+
+Phase 1:
+
+- The model's tools are module functions that read the claim from LangGraph's run context
+  (`ClaimContext` through `ToolRuntime`), not closures, so `claim_graph` keeps its signature and the
+  graph is invoked with `context=`. `Route` had to be `runtime_checkable`: Pydantic builds a validator
+  for the context's fields, and a plain `Protocol` can't be checked with `isinstance`.
+- The MCP client's `ClientSession.call_tool` lists the tools first, to check the result against the
+  tool's output schema, so the stand-in Gateway also answers `tools/list`. The real Gateway does too.
+- A Gateway refusal raised inside the client's task group comes out wrapped in an `ExceptionGroup`.
+  `call_async` catches the `McpError` inside the session and raises it again after the session has
+  closed, so the route sees a plain `McpError`.
+- The stand-in Gateway is a small Starlette app served by uvicorn in a thread on a free port
+  (`agent/tests/standin.py`), and the app behind it runs in process through `TestClient`. A tool call
+  costs about 0.1 seconds there.
+- The tools one model reply asks for run at once, so the test of the Gateway's calls compares them in
+  any order.
+- `DATABASE_URL` is set in this machine's shell, not only in `.env`. The tests clear it; a script run
+  outside pytest must too, or it reaches the local Postgres.

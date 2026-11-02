@@ -19,14 +19,10 @@ def line(description, amount, kind="item", quantity=1, **extra):
     }
 
 
-def ask(lines, benefit="baggage", paid_by_others=0, policy_id="POL-2011"):
-    body = {
-        "policy_id": policy_id,
-        "benefit": benefit,
-        "lines": lines,
-        "paid_by_others": paid_by_others,
-    }
-    return client.post("/api/payouts", json=body)
+# CLM-1011 is on POL-2011, a Premium policy with a $3,400 trip.
+def ask(lines, benefit="baggage", paid_by_others=0, claim_id="CLM-1011"):
+    body = {"benefit": benefit, "lines": lines, "paid_by_others": paid_by_others}
+    return client.post(f"/api/claims/{claim_id}/payout", json=body)
 
 
 def test_payout_with_limits_others_and_deductible():
@@ -80,13 +76,20 @@ def test_needs_sign_off_follows_the_approval_limit_setting():
     assert ask(lines, "emergency_medical").json()["needs_sign_off"] is False
 
 
-def test_unknown_policy_is_404():
-    assert ask([line("Suitcase", 100)], policy_id="POL-9999").status_code == 404
+def test_unknown_claim_is_404():
+    assert ask([line("Suitcase", 100)], claim_id="CLM-0000").status_code == 404
+
+
+def test_the_policy_comes_from_the_claim():
+    # CLM-1006 is on a First policy, which has no deductible.
+    lines = [line("Medical bill", 400, kind="expense")]
+    assert ask(lines, "emergency_medical", claim_id="CLM-1006").json()["payout"] == 400
+    assert ask(lines, "emergency_medical").json()["payout"] == 350
 
 
 def test_payout_operation_has_no_optional_inputs():
     schema = client.get("/openapi.json").json()
-    operation = schema["paths"]["/api/payouts"]["post"]
+    operation = schema["paths"]["/api/claims/{claim_id}/payout"]["post"]
     assert operation["operationId"] == "calculate_payout"
     assert operation["summary"] or operation["description"]
     components = schema["components"]["schemas"]

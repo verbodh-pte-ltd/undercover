@@ -56,6 +56,7 @@ KEY = {
     "calculate_payout",
     "record_decision",
     "pay_claim",
+    "hold_for_sign_off",
     "start_claim",
     "release_claim",
     "add_step",

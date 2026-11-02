@@ -56,6 +56,8 @@ claims = Table(
     Column("signed_off_at", String),
     # Set with the decision, from the approval limit at that moment.
     Column("needs_sign_off", Boolean, nullable=False, default=False),
+    # Set when the Gateway refused the agent's payment and the claim waits for sign-off.
+    Column("held_by_gateway", Boolean, nullable=False, default=False),
     Column("attempts", Integer, nullable=False, default=0),
     Column("thread_id", String),
     # Set only on an evaluation's copy of a claim: its run and the claim it copies.

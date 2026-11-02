@@ -199,3 +199,32 @@ def test_a_released_claim_gets_a_new_thread():
     client.post("/api/claims/CLM-1001/release", json={"error": "boom"})
     assert client.get("/api/claims/CLM-1001").json()["thread_id"] is None
     assert start("CLM-1001").json()["thread_id"] == "CLM-1001-2"
+
+
+def hold(claim_id, sent=AGENT):
+    return TestClient(app).post(f"/api/claims/{claim_id}/hold", headers=sent)
+
+
+def test_hold_moves_an_approved_unpaid_claim_to_waiting_for_sign_off():
+    decide("CLM-1001", SMALL)
+    held = hold("CLM-1001").json()
+    assert (held["status"], held["held_by_gateway"]) == ("waiting_for_sign_off", True)
+    assert pay("CLM-1001", 420.0).status_code == 403
+    signed = sign_off("CLM-1001").json()
+    assert (signed["status"], signed["paid_amount"]) == ("decided", 420.0)
+
+
+def test_hold_needs_the_agents_key():
+    decide("CLM-1001", SMALL)
+    assert hold("CLM-1001", {}).status_code == 401
+    assert hold("CLM-1001", headers()).status_code == 401
+
+
+def test_hold_refuses_a_declined_a_paid_or_a_waiting_claim():
+    decide("CLM-1001", {**SMALL, "decision": "decline", "payout": 0})
+    decide("CLM-1002", SMALL)
+    pay("CLM-1002", 420.0)
+    decide("CLM-1003", LARGE)
+    for claim_id in ["CLM-1001", "CLM-1002", "CLM-1003", "CLM-1004"]:
+        assert hold(claim_id).status_code == 409, claim_id
+    assert client.get("/api/claims/CLM-1003").json()["held_by_gateway"] is False

@@ -163,3 +163,22 @@ it("shows why a sign-off was refused", async () => {
     "Your sign-in has expired or isn't valid. Sign in again",
   );
 });
+
+it("says the Gateway refused the payment when it did, and the limit otherwise", async () => {
+  fakeBackend(claimRoutes({ ...held, held_by_gateway: true }));
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  expect(
+    screen.getByText(/^The Gateway refused the agent's payment/),
+  ).toBeDefined();
+  expect(screen.queryByText(/over the approval limit, so it waits/)).toBeNull();
+  cleanup();
+
+  fakeBackend(claimRoutes(held));
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  expect(
+    screen.getByText(/^This payout is over the approval limit/),
+  ).toBeDefined();
+  expect(screen.queryByText(/The Gateway refused/)).toBeNull();
+});

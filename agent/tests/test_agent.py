@@ -125,8 +125,8 @@ def calls(*tool_calls):
 
 
 def decision(claim_id, payout, verdict="approve"):
+    """A record_decision call's arguments; the tool knows the claim itself."""
     return {
-        "claim_id": claim_id,
         "decision": verdict,
         "payout": payout,
         "reason": "The flight was canceled for a crew problem. The costs are covered.",
@@ -164,32 +164,39 @@ def start(claim_id, run_id):
     return client.post(f"/api/claims/{claim_id}/start", json=body).json()
 
 
+def use(tool, arguments):
+    """Call one tool on the direct route, as the claim agent's tools do."""
+    return main.route().use(tool, arguments)
+
+
 def test_get_claim():
-    assert json.loads(main.get_claim.invoke({"claim_id": "CLM-1001"}))["policy_id"] == (
-        "POL-2001"
-    )
+    answer = use("get_claim", {"claim_id": "CLM-1001"})
+    assert json.loads(answer.text)["policy_id"] == "POL-2001"
+    assert answer.refused_by is None
 
 
 def test_get_policy():
-    policy = json.loads(main.get_policy.invoke({"policy_id": "POL-2001"}))
+    policy = json.loads(use("get_policy", {"policy_id": "POL-2001"}).text)
     assert policy["plan"] == "premium"
 
 
 def test_get_claim_history():
-    history = json.loads(main.get_claim_history.invoke({"customer_id": "CUS-3001"}))
+    history = json.loads(use("get_claim_history", {"customer_id": "CUS-3001"}).text)
     assert history[0]["claim_id"] == "CLM-0412"
 
 
 def test_sections_tools():
-    sections = json.loads(main.list_sections.invoke({"document": "claims_manual"}))
+    sections = json.loads(use("list_sections", {"document": "claims_manual"}).text)
     assert sections[9]["title"] == "Meals without receipts"
     args = {"document": "policy_wording", "number": "3"}
-    assert json.loads(main.read_section.invoke(args))["title"] == "Trip Delay"
+    assert json.loads(use("read_section", args).text)["title"] == "Trip Delay"
 
 
 def test_refusal_comes_back_as_text():
-    args = decision("CLM-1001", 50.0, "decline")
-    assert main.record_decision.invoke(args).startswith("Refused (422)")
+    args = {"claim_id": "CLM-1001", **decision("CLM-1001", 50.0, "decline")}
+    answer = use("record_decision", args)
+    assert answer.text.startswith("Refused (422)")
+    assert answer.refused_by == "app"
 
 
 def steps_of(claim_id):
@@ -202,9 +209,9 @@ def steps_of(claim_id):
 def test_claim_agent_reads_sections_approves_and_pays():
     replies = [
         calls(
-            ("get_claim", {"claim_id": "CLM-1001"}),
-            ("get_policy", {"policy_id": "POL-2001"}),
-            ("get_claim_history", {"customer_id": "CUS-3001"}),
+            ("get_claim", {}),
+            ("get_policy", {}),
+            ("get_claim_history", {}),
         ),
         calls(("list_sections", {"document": "claims_manual"})),
         calls(
@@ -223,14 +230,13 @@ def test_claim_agent_reads_sections_approves_and_pays():
     assert texts[0] == (
         "security_check: No instructions found. The claim only describes what happened."
     )
-    assert texts[1] == 'get_claim({"claim_id": "CLM-1001"})'
+    assert texts[1] == "get_claim({})"
     assert texts[-2:] == ["Approved, $420.00.", "pay_claim: Paid $420.00"]
 
 
 def test_claim_agent_works_out_the_payout_with_the_tool():
     line = {"description": "Hotel", "amount": 300, "quantity": 1, "kind": "expense"}
     payout_args = {
-        "policy_id": "POL-2001",
         "benefit": "trip_delay",
         "lines": [{**line, "nights": 0, "hours": 0}],
         "paid_by_others": 0,
@@ -258,7 +264,7 @@ def hold(claim_id="CLM-1001", payout=1250.0, run_id=None):
 
 
 def test_claim_agent_has_no_pay_tool():
-    assert "pay_claim" not in [t.name for t in main.CLAIM_TOOLS]
+    assert "pay_claim" not in [t.name for t in main.MODEL_TOOLS]
     current = client.get("/api/configuration/current").json()
     assert "pay_claim" not in current["instructions"]
 
@@ -318,7 +324,7 @@ def test_a_held_claim_without_a_sign_off_keeps_waiting():
 
 
 def test_a_stopped_claim_carries_on_from_its_last_step(check):
-    first = [calls(("get_claim", {"claim_id": "CLM-1001"})), KeyboardInterrupt()]
+    first = [calls(("get_claim", {})), KeyboardInterrupt()]
     with pytest.raises(KeyboardInterrupt):
         main.run("CLM-1001", start("CLM-1001", None)["thread_id"], stub(*first))
     rest = [
@@ -337,7 +343,7 @@ def test_a_stopped_claim_carries_on_from_its_last_step(check):
 
 def test_a_failed_claim_is_tried_once_more_afresh(check):
     replies = [
-        calls(("get_claim", {"claim_id": "CLM-1001"})),
+        calls(("get_claim", {})),
         TimeoutError("no reply"),
         *decide("CLM-1001"),
     ]
@@ -361,7 +367,7 @@ def test_a_claim_that_fails_twice_is_left_for_a_handler():
 
 def test_a_31st_model_call_is_refused(monkeypatch):
     monkeypatch.setattr(main, "MAX_MODEL_CALLS", 3)
-    looping = [calls(("get_claim", {"claim_id": "CLM-1001"})) for _ in range(8)]
+    looping = [calls(("get_claim", {})) for _ in range(8)]
     reply = main.work("CLM-1001", None, stub(*looping))
     assert reply.startswith("failed twice: RuntimeError: the claim agent reached 3")
 
@@ -379,7 +385,7 @@ def test_work_on_an_unknown_or_decided_claim():
 
 def test_a_rate_limit_is_let_through_and_the_claim_stays_in_progress():
     replies = [
-        calls(("get_claim", {"claim_id": "CLM-1001"})),
+        calls(("get_claim", {})),
         ModelRateLimitError("429"),
     ]
     with pytest.raises(ModelRateLimitError):
@@ -425,7 +431,7 @@ def test_a_failed_attempts_cost_and_time_count_toward_its_run():
     run_id = new_run()
     costly = AIMessage(
         content="",
-        tool_calls=calls(("get_claim", {"claim_id": "CLM-1001"})).tool_calls,
+        tool_calls=calls(("get_claim", {})).tool_calls,
         response_metadata={"token_usage": {"cost": 0.01}},
     )
     main.work("CLM-1001", run_id, stub(costly, TimeoutError("one"), TimeoutError("2")))
@@ -557,7 +563,7 @@ def test_a_rate_limit_carries_on_as_the_same_attempt_with_one_decision():
     for other in others:
         dispatcher.take(other)
     replies = [
-        calls(("get_claim", {"claim_id": "CLM-1001"})),
+        calls(("get_claim", {})),
         ModelRateLimitError("429"),
         calls(("record_decision", decision("CLM-1001", 0, "decline"))),
         AIMessage(content="Declined."),
@@ -826,7 +832,6 @@ def test_a_runs_claim_agents_work_to_its_version(monkeypatch):
 
 
 PAYOUT_ARGS = {
-    "policy_id": "POL-2001",
     "benefit": "trip_delay",
     "lines": [
         {
@@ -896,9 +901,9 @@ def test_the_claim_agents_client_never_reaches_the_scores_or_the_handlers_decisi
     )
     every_tool = [
         calls(
-            ("get_claim", {"claim_id": "CLM-1001"}),
-            ("get_policy", {"policy_id": "POL-2001"}),
-            ("get_claim_history", {"customer_id": "CUS-3001"}),
+            ("get_claim", {}),
+            ("get_policy", {}),
+            ("get_claim_history", {}),
             ("list_sections", {"document": "claims_manual"}),
             ("read_section", {"document": "claims_manual", "number": "6"}),
         ),

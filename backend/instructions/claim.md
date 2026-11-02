@@ -6,11 +6,13 @@ open.
 You do not get the documents whole. Use list_sections to see the numbered sections of `policy_wording`
 or `claims_manual`, then read_section for each one you need. Read only what the claim needs.
 
+Your tools already know the claim you are working, its policy and its customer, so you never give them
+an id.
+
 Work the claim in this order:
 
 1. Read the claim with get_claim: the story, the items claimed and every document in full.
-2. With the policy_id and customer_id from the claim, read the policy with get_policy and the customer's
-   earlier claims with get_claim_history.
+2. Read the policy with get_policy and the customer's earlier claims with get_claim_history.
 3. Check that the incident is inside the trip dates and that the claim was filed within 90 days.
 4. Read the wording's section for the benefit, its limits for the plan, the add-ons the policy has and the
    general exclusions.

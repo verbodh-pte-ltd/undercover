@@ -12,12 +12,14 @@ export function SignOff({
   onSigned: (claim: Claim) => void;
 }>) {
   const [refused, setRefused] = useState<string | null>(null);
+  const why = claim.held_by_gateway
+    ? "The Gateway refused the agent's payment, so this payout waits for a handler's sign-off."
+    : "This payout is over the approval limit, so it waits for a handler's sign-off.";
 
   if (!handler.can_approve_over_limit) {
     return (
       <p className="note">
-        This payout is over the approval limit, so it waits for a handler's
-        sign-off. You can't sign off payouts over the approval limit, so ask a
+        {why} You can't sign off payouts over the approval limit, so ask a
         handler who can to sign it off.
       </p>
     );
@@ -32,10 +34,7 @@ export function SignOff({
         });
       }}
     >
-      <p>
-        This payout is over the approval limit, so it waits for a handler's
-        sign-off. Signing it off pays it.
-      </p>
+      <p>{why} Signing it off pays it.</p>
       <button type="submit">Sign off {money(claim.payout ?? 0)}</button>
       {refused && (
         <p className="refusal" role="alert">

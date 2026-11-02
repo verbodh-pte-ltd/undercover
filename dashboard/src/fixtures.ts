@@ -85,6 +85,7 @@ export const claim: Claim = {
   paid_at: null,
   run_id: null,
   copied_from: null,
+  held_by_gateway: false,
   cost: 0,
   seconds: 0,
   attempts: 0,
