@@ -82,9 +82,12 @@ def test_claim_history_has_no_personal_details():
         assert field not in response.text
 
 
-def test_policy_wording():
-    text = client.get("/api/policy-wording").json()["text"]
-    assert text == Path("data/policy_wording.md").read_text(encoding="utf-8")
+def test_policy_wording_comes_from_context_without_its_front_matter():
+    wording = client.get("/api/policy-wording").json()
+    assert wording["version"] == "2026.1"
+    source = Path("context/policy_wording.md").read_text(encoding="utf-8")
+    assert source.endswith(wording["text"])
+    assert wording["text"].lstrip().startswith("# UnderCover Travel Insurance")
 
 
 def test_handlers():
@@ -129,26 +132,20 @@ def test_instructions():
     assert "claims_manual" in instructions
 
 
-def test_list_sections():
-    manual = client.get("/api/documents/claims_manual/sections").json()
-    assert len(manual) == 14
-    assert manual[8] == {"number": "9", "title": "Repeat claims"}
-    wording = client.get("/api/documents/policy_wording/sections").json()
-    assert len(wording) == 12
-    assert wording[2] == {"number": "3", "title": "Trip Delay"}
+def test_seeding_loads_the_plans_and_the_documents_from_context():
+    with store.connect() as conn:
+        found = {r.document: r.version for r in conn.execute(select(store.documents))}
+        rows = {r.plan: json.loads(r.data) for r in conn.execute(select(store.plans))}
+    assert found == {"policy_wording": "2026.1", "claims_manual": "2026.2"}
+    assert sorted(rows) == ["economy", "first", "premium"]
+    assert rows["premium"]["deductible"] == 50
+    assert rows["first"]["deductible_applies_to"] == ["baggage", "emergency_medical"]
+    assert rows["economy"]["add_ons"][2]["electronics_per_item_limit"] == 1200
 
 
-def test_read_section():
-    section = client.get("/api/documents/claims_manual/sections/9").json()
-    assert section["title"] == "Repeat claims"
-    assert section["text"].startswith("## 9. Repeat claims")
-    assert "third claim" in section["text"]
-    assert "Meals without receipts" not in section["text"]
-
-
-def test_unknown_document_or_section_is_404():
-    assert client.get("/api/documents/evals/sections").status_code == 404
-    assert client.get("/api/documents/claims_manual/sections/99").status_code == 404
+def test_the_document_routes_have_moved_to_the_context_layer():
+    assert client.get("/api/documents/claims_manual/sections").status_code == 404
+    assert client.get("/api/documents/claims_manual/sections/9").status_code == 404
 
 
 def test_connection_works_across_threads():

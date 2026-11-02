@@ -41,10 +41,12 @@ from backend.store import (
     claims,
     config_versions,
     customers,
+    documents,
     grades,
     handlers,
     held_out_claims,
     model_calls,
+    plans,
     policies,
     recipes,
     round_events,
@@ -59,15 +61,12 @@ from backend.store import (
 
 app = FastAPI(title="UnderCover")
 
-DOCUMENTS = {"policy_wording": "policy_wording.md", "claims_manual": "claims_manual.md"}
 WRONGFUL_DECLINE = 1500
 # The claim agent's operations, which its own API document gives the Gateway.
 AGENT_OPERATIONS = [
     "get_claim",
     "get_policy",
     "get_claim_history",
-    "list_sections",
-    "read_section",
     "calculate_payout",
     "record_decision",
     "pay_claim",
@@ -743,45 +742,18 @@ def get_claim_history(customer_id: str, db: Db) -> list[dict[str, Any]]:
 
 
 @app.get("/api/policy-wording", operation_id="get_policy_wording", dependencies=AGENT)
-def get_policy_wording() -> dict[str, str]:
+def get_policy_wording(db: Db) -> dict[str, str]:
     """Get the policy wording, the contract that decisions follow."""
-    return {"text": (store.DATA / "policy_wording.md").read_text(encoding="utf-8")}
+    query = select(documents).where(documents.c.document == "policy_wording")
+    row = db.execute(query).mappings().one()
+    return {"version": row["version"], "text": row["text"]}
 
 
-def sections(document: str) -> list[dict[str, str]]:
-    """Split the policy wording or the claims manual into its numbered sections."""
-    if document not in DOCUMENTS:
-        raise HTTPException(404, f"Document {document} not found")
-    text = (store.DATA / DOCUMENTS[document]).read_text(encoding="utf-8")
-    found = []
-    for part in text.split("\n## ")[1:]:
-        heading = part.partition("\n")[0]
-        number, _, title = heading.partition(". ")
-        found.append({"number": number, "title": title, "text": f"## {part.strip()}"})
-    return found
-
-
-@app.get(
-    "/api/documents/{document}/sections",
-    operation_id="list_sections",
-    dependencies=AGENT,
-)
-def list_sections(document: str) -> list[dict[str, str]]:
-    """List the numbered sections of policy_wording or claims_manual."""
-    return [{"number": s["number"], "title": s["title"]} for s in sections(document)]
-
-
-@app.get(
-    "/api/documents/{document}/sections/{number}",
-    operation_id="read_section",
-    dependencies=AGENT,
-)
-def read_section(document: str, number: str) -> dict[str, str]:
-    """Read one numbered section of policy_wording or claims_manual."""
-    for section in sections(document):
-        if section["number"] == number:
-            return {"document": document, **section}
-    raise HTTPException(404, f"Section {number} of {document} not found")
+def plan_rules(db: Connection, plan: str) -> dict[str, Any]:
+    """A plan's limits, with the deductible's benefits and the add-ons."""
+    return json.loads(
+        db.scalars(select(plans.c.data).where(plans.c.plan == plan)).one()
+    )
 
 
 @app.post(
@@ -791,13 +763,15 @@ def calculate_payout(claim_id: str, question: PayoutQuestion, db: Db) -> payout.
     """Work out the payout on an approved claim with UnderCover's payout rules."""
     claim = json.loads(claim_row(db, claim_id)["data"])
     policy = record(db, "policies", claim["policy_id"])
-    return payout.work_out_payout(
+    found = payout.work_out_payout(
         policy,
+        plan_rules(db, policy["plan"]),
         question.benefit,
         question.lines,
         question.paid_by_others,
-        setting(db, "approval_limit"),
     )
+    limit = setting(db, "approval_limit")
+    return {**found, "needs_sign_off": found["payout"] > limit}
 
 
 @app.get(

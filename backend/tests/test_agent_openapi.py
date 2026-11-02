@@ -5,12 +5,10 @@ from backend.main import app
 from backend.tests.signing import AGENT, headers
 
 PATH = "/api/agent/openapi.json"
-EIGHT = {
+SIX = {
     "get_claim",
     "get_policy",
     "get_claim_history",
-    "list_sections",
-    "read_section",
     "calculate_payout",
     "record_decision",
     "pay_claim",
@@ -31,10 +29,10 @@ def operations(found):
     }
 
 
-def test_the_document_has_exactly_the_claim_agents_eight_operations_and_no_servers():
+def test_the_document_has_exactly_the_claim_agents_six_operations_and_no_servers():
     found = document()
-    assert set(operations(found)) == EIGHT
-    assert len(operations(found)) == len(EIGHT)
+    assert set(operations(found)) == SIX
+    assert len(operations(found)) == len(SIX)
     assert "servers" not in found
 
 

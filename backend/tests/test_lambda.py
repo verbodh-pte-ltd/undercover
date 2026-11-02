@@ -229,7 +229,29 @@ def test_the_backend_imports_nothing_from_the_agent():
         "pydantic",
         "sqlalchemy",
         "starlette",
+        "yaml",
     }
+
+
+def functions_naming(name: str) -> set[str]:
+    """The backend's functions whose code names a module-level name."""
+    found = set()
+    for path in source_files():
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.FunctionDef) and any(
+                isinstance(n, ast.Name | ast.Attribute)
+                and (getattr(n, "id", None) == name or getattr(n, "attr", None) == name)
+                for n in ast.walk(node)
+            ):
+                found.add(node.name)
+    return found
+
+
+def test_the_backend_reads_context_only_while_seeding():
+    assert store.CONTEXT == ROOT / "context"
+    assert functions_naming("CONTEXT") == {"seed_plans", "seed_documents"}
+    assert functions_naming("seed_plans") == {"seed"}
+    assert functions_naming("seed_documents") == {"seed"}
 
 
 def test_the_backend_reads_files_only_from_backend_data_and_the_build():

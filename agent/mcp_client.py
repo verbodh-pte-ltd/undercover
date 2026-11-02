@@ -17,11 +17,20 @@ APP_TOOLS = {
     "get_claim",
     "get_policy",
     "get_claim_history",
-    "list_sections",
-    "read_section",
     "calculate_payout",
     "record_decision",
     "pay_claim",
+}
+# The context layer's tools, all read-only.
+CONTEXT_TOOLS = {
+    "lookup_term",
+    "describe_fields",
+    "get_plan",
+    "get_claim_rules",
+    "search_reference_data",
+    "search_documents",
+    "list_sections",
+    "read_section",
 }
 
 

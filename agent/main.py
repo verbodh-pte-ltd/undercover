@@ -224,6 +224,44 @@ def get_claim_history(runtime: Context) -> Used:
 
 
 @tool(response_format="content_and_artifact")
+def lookup_term(term: str, runtime: Context) -> Used:
+    """Look up a term the policy wording defines, with the sections it comes from."""
+    return use(runtime, "lookup_term", {"term": term})
+
+
+@tool(response_format="content_and_artifact")
+def describe_fields(
+    record: Literal["claim", "policy", "previous_claim"], runtime: Context
+) -> Used:
+    """Describe what each field of a claim, a policy or a previous claim means."""
+    return use(runtime, "describe_fields", {"record": record})
+
+
+@tool(response_format="content_and_artifact")
+def get_plan(plan: Literal["economy", "premium", "first"], runtime: Context) -> Used:
+    """Get one plan's limits, waiting periods and deductible, and the add-ons."""
+    return use(runtime, "get_plan", {"plan": plan})
+
+
+@tool(response_format="content_and_artifact")
+def get_claim_rules(runtime: Context) -> Used:
+    """Get the claim rules: filing window, pre-existing look-back, repeats, meals."""
+    return use(runtime, "get_claim_rules", {})
+
+
+@tool(response_format="content_and_artifact")
+def search_reference_data(query: str, runtime: Context) -> Used:
+    """Find outside facts on events, places and products holding every query word."""
+    return use(runtime, "search_reference_data", {"query": query})
+
+
+@tool(response_format="content_and_artifact")
+def search_documents(query: str, runtime: Context) -> Used:
+    """Find the sections of the wording and the manual that hold every query word."""
+    return use(runtime, "search_documents", {"query": query})
+
+
+@tool(response_format="content_and_artifact")
 def list_sections(document: Document, runtime: Context) -> Used:
     """List the numbered sections of policy_wording or claims_manual."""
     return use(runtime, "list_sections", {"document": document})
@@ -276,6 +314,12 @@ MODEL_TOOLS = [
     get_claim,
     get_policy,
     get_claim_history,
+    lookup_term,
+    describe_fields,
+    get_plan,
+    get_claim_rules,
+    search_reference_data,
+    search_documents,
     list_sections,
     read_section,
     calculate_payout,

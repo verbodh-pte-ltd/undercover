@@ -284,14 +284,14 @@ it could get wrong, and a payment the Gateway refuses waits for a handler.
 Data governance's seven files are served as an MCP server, and the app seeds its plans and documents
 from them.
 
-- [ ] `context/server.py` reads the seven files once, when it is imported, and splits each document at
+- [x] `context/server.py` reads the seven files once, when it is imported, and splits each document at
       `^## (\d+)\. (.+)$` into sections tagged with their document, number and title. The front matter is
       the source and version, never part of a section (test on the sections).
-- [ ] Its tools each have a one-line docstring and no optional inputs, and are marked read-only:
+- [x] Its tools each have a one-line docstring and no optional inputs, and are marked read-only:
       `lookup_term`, `describe_fields`, `get_plan`, `get_claim_rules`, `search_reference_data`,
       `search_documents`, `read_section`, and `list_sections` if decision A is option 1 (test lists them
       with their annotations).
-- [ ] Tests call each tool against the real files:
+- [x] Tests call each tool against the real files:
   - a term in any case;
   - an unknown term, which gets the glossary's terms;
   - each record's fields;
@@ -300,27 +300,27 @@ from them.
   - a reference search that needs every word ("lisbon STRIKE"), with its topic;
   - a document search naming each section's file;
   - a section that exists, and one that doesn't.
-- [ ] Every answer names its file with that file's system, owner and review date (test across the tools).
-- [ ] `context.server.handler`, called with Function URL events with a Function URL's host, lists the
+- [x] Every answer names its file with that file's system, owner and review date (test across the tools).
+- [x] `context.server.handler`, called with Function URL events with a Function URL's host, lists the
       tools and then calls one, twice in one process, and both succeed (test).
-- [ ] `uv run -m context` serves it at `http://127.0.0.1:8006/mcp`, and `npm run dev` starts it beside
+- [x] `uv run -m context` serves it at `http://127.0.0.1:8006/mcp`, and `npm run dev` starts it beside
       the backend, the agent's service and the dashboard.
-- [ ] `npm run check:context` runs
+- [x] `npm run check:context` runs
       `uv run --isolated --only-group context python -c "import context.server"` and passes, inside
       `npm run check`. Ruff, pyright, pytest and coverage include `context/`.
-- [ ] Seeding loads the plans from `context/plans.yaml` into a `plans` table, which the payout rules read,
+- [x] Seeding loads the plans from `context/plans.yaml` into a `plans` table, which the payout rules read,
       and the two documents into a `documents` table with their versions (2026.1 and 2026.2) from their
       front matter (tests). The payout tests' results are unchanged.
-- [ ] The app reads no plan or document from `data/`, and reads `context/` only while seeding. The Phase
+- [x] The app reads no plan or document from `data/`, and reads `context/` only while seeding. The Phase
       4 test of the backend's file paths from `docs/PLAN_SECURE.md` allows `context/` in seeding only
       (test). `data/plans.json` and the two documents in `data/` are unchanged.
-- [ ] The app's `list_sections` and `read_section` routes are gone. The agent's API document has exactly
+- [x] The app's `list_sections` and `read_section` routes are gone. The agent's API document has exactly
       `get_claim`, `get_policy`, `get_claim_history`, `calculate_payout`, `record_decision` and
       `pay_claim` (test).
-- [ ] The claim agent's context tools work on both routes: on the direct route to a context server the
+- [x] The claim agent's context tools work on both routes: on the direct route to a context server the
       tests start, and on the Gateway route as `undercover-context___<tool>` through the stand-in (tests).
       A refusal from the context layer reaches the model as a refusal (test).
-- [ ] The commit's pre-commit hook passes.
+- [x] The commit's pre-commit hook passes.
 
 ## Phase 3: A complete decision record
 
@@ -516,3 +516,22 @@ Phase 1:
   any order.
 - `DATABASE_URL` is set in this machine's shell, not only in `.env`. The tests clear it; a script run
   outside pytest must too, or it reaches the local Postgres.
+
+Phase 2:
+
+- The plans table has one row per plan, each with the deductible's benefits and the add-ons beside
+  its limits, so the payout rules need only the policy's row. `work_out_payout` takes the plan and no
+  longer the approval limit (ruff's limit of five arguments); the route adds `needs_sign_off`.
+- Our app had no `search_documents`, so the context layer's searches each section's text for every
+  word of the query and gives the document, number, title and file of each section it finds, not
+  the text. `list_sections` and `read_section` now answer with the document's version and source,
+  so `list_sections` returns an object with `sections`, not a bare list.
+- A missing section is a `ToolError`, which FastMCP returns as an error result (`isError`), so it
+  reaches the model as a refusal on both routes.
+- The agent's tests serve the context layer for the whole session on a free port
+  (`agent/tests/conftest.py`), and point `UNDERCOVER_CONTEXT` at it; the stand-in Gateway passes
+  `undercover-context___*` calls to it.
+- `uv run -m context` was started and listed its eight tools at `http://127.0.0.1:8006/mcp`, then
+  stopped. `npm run dev` wasn't run in this phase.
+- `check:context` installs 32 packages in a throwaway environment and passes; `check:server` still
+  passes with `pyyaml` in the `server` group.

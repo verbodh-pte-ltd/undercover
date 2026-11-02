@@ -14,8 +14,6 @@ OPERATIONS = {
     "get_claim": ("GET", "/api/claims/{claim_id}"),
     "get_policy": ("GET", "/api/policies/{policy_id}"),
     "get_claim_history": ("GET", "/api/customers/{customer_id}/claims"),
-    "list_sections": ("GET", "/api/documents/{document}/sections"),
-    "read_section": ("GET", "/api/documents/{document}/sections/{number}"),
     "calculate_payout": ("POST", "/api/claims/{claim_id}/payout"),
     "record_decision": ("POST", "/api/claims/{claim_id}/decision"),
     "pay_claim": ("POST", "/api/claims/{claim_id}/payment"),

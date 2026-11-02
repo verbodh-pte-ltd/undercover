@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from agent import direct
-from agent.mcp_client import APP_TOOLS
+from agent.mcp_client import APP_TOOLS, CONTEXT_TOOLS, target
 from backend.main import app
 from backend.tests.signing import AGENT
 
@@ -89,7 +89,7 @@ class StandIn:
             }
         elif message["method"] == "tools/list":
             # The MCP client lists the tools to check a call's result against them.
-            names = sorted(f"undercover-app___{t}" for t in APP_TOOLS)
+            names = sorted(f"{target(t)}___{t}" for t in APP_TOOLS | CONTEXT_TOOLS)
             schema = {"type": "object"}
             reply["result"] = {
                 "tools": [{"name": n, "inputSchema": schema} for n in names]

@@ -1,12 +1,15 @@
-"""The UnderCover store: SQLite, or Postgres in DATABASE_URL, seeded from data/."""
+"""The UnderCover store: SQLite, or Postgres in DATABASE_URL, seeded from data/ and
+the plans and the two documents from context/."""
 
 import json
 import os
+import re
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
 from sqlalchemy import (
     Boolean,
     Column,
@@ -29,6 +32,10 @@ from sqlalchemy import (
 from sqlalchemy.pool import NullPool
 
 DATA = Path(__file__).parent.parent / "data"
+# Data governance's files; read only while seeding, never for a request.
+CONTEXT = Path(__file__).parent.parent / "context"
+DOCUMENTS = {"policy_wording": "policy_wording.md", "claims_manual": "claims_manual.md"}
+FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.DOTALL)
 DEFAULT_DB = Path(__file__).parent / "undercover.db"
 INSTRUCTIONS = Path(__file__).parent / "instructions"
 FIRST_MODEL = "openai/gpt-6-luna"
@@ -75,6 +82,23 @@ customers = Table(
     metadata,
     Column("customer_id", String, primary_key=True),
     Column("data", Text, nullable=False),
+)
+# Each plan's limits, with the benefits the deductible applies to and the add-ons,
+# from context/plans.yaml; the payout rules read them.
+plans = Table(
+    "plans",
+    metadata,
+    Column("plan", String, primary_key=True),
+    Column("data", Text, nullable=False),
+)
+# The policy wording and the claims manual, without their front matter, and the
+# version each front matter gives.
+documents = Table(
+    "documents",
+    metadata,
+    Column("document", String, primary_key=True),
+    Column("version", String, nullable=False),
+    Column("text", Text, nullable=False),
 )
 steps = Table(
     "steps",
@@ -304,18 +328,49 @@ def seed_versions(conn: Connection) -> None:
     )
 
 
+def seed_plans(conn: Connection) -> None:
+    """Copy the plans, the deductible's benefits and the add-ons from plans.yaml."""
+    rules = yaml.safe_load((CONTEXT / "plans.yaml").read_text(encoding="utf-8"))
+    shared = {k: rules[k] for k in ["deductible_applies_to", "add_ons"]}
+    conn.execute(
+        insert(plans),
+        [
+            {"plan": p["plan"], "data": json.dumps({**p, **shared})}
+            for p in rules["plans"]
+        ],
+    )
+
+
+def seed_documents(conn: Connection) -> None:
+    """Copy the two documents, each with the version from its front matter."""
+    for document, name in DOCUMENTS.items():
+        text = (CONTEXT / name).read_text(encoding="utf-8").replace("\r\n", "\n")
+        found = FRONT_MATTER.match(text)
+        if found is None:
+            raise ValueError(f"{name} has no front matter")
+        version = str(yaml.safe_load(found.group(1))["version"])
+        conn.execute(
+            insert(documents).values(
+                document=document, version=version, text=found.group(2)
+            )
+        )
+
+
 def load_with_security(name: str) -> list[Any]:
     """One of the queue's files, with the security team's claim from security/ last."""
     return load(name) + load(f"security/{name}")
 
 
 def seed(conn: Connection) -> None:
-    """Copy the queue, the records, the handlers and the settings; make the versions.
+    """Copy the queue, the records, the handlers, the plans, the documents and the
+    settings; make the versions.
 
     The security team's claim joins the end of the queue without its decision, so it
     is in neither evaluation set.
     """
     conn.execute(insert(handlers), load("handlers.json"))
+    seed_plans(conn)
+    seed_documents(conn)
     seed_settings(conn)
     seed_versions(conn)
     queue = [

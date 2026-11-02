@@ -38,10 +38,11 @@ def standin_server():
 
 
 @pytest.fixture
-def standin(standin_server, monkeypatch):
+def standin(standin_server, direct_context, monkeypatch):
     """The stand-in Gateway, with the agent pointed at it."""
     found, url = standin_server
     found.reset()
+    found.context_url = direct_context
     monkeypatch.setenv("UNDERCOVER_GATEWAY_URL", url)
     return found
 
@@ -56,6 +57,12 @@ def test_the_models_tools_take_no_ids_the_agent_already_knows():
         "get_claim",
         "get_policy",
         "get_claim_history",
+        "lookup_term",
+        "describe_fields",
+        "get_plan",
+        "get_claim_rules",
+        "search_reference_data",
+        "search_documents",
         "list_sections",
         "read_section",
         "calculate_payout",
@@ -136,8 +143,8 @@ def test_the_models_tools_and_the_payment_go_through_the_gateway_signed(
             "undercover-app___get_claim",
             "undercover-app___get_policy",
             "undercover-app___get_claim_history",
-            "undercover-app___list_sections",
-            "undercover-app___read_section",
+            "undercover-context___list_sections",
+            "undercover-context___read_section",
             "undercover-app___calculate_payout",
             "undercover-app___record_decision",
             "undercover-app___pay_claim",
@@ -282,3 +289,50 @@ def test_the_lambda_handler_still_answers_after_a_gateway_call(standin):
     response = backend_main.handler(function_url_event("/api/health"), Context())
     assert response["statusCode"] == 200
     assert json.loads(response["body"]) == {"status": "ok"}
+
+
+CONTEXT_CALLS = [
+    ("lookup_term", {"term": "unattended"}, "Out of your sight"),
+    ("describe_fields", {"record": "policy"}, "purchased_on"),
+    ("get_plan", {"plan": "first"}, "UnderCover First"),
+    ("get_claim_rules", {}, "filing_window"),
+    ("search_reference_data", {"query": "lisbon strike"}, "air traffic controllers"),
+    ("search_documents", {"query": "wild animals"}, "Interpretation notes"),
+    ("list_sections", {"document": "claims_manual"}, "Repeat claims"),
+    ("read_section", {"document": "claims_manual", "number": "9"}, "third claim"),
+]
+
+
+@pytest.mark.parametrize("on_the_gateway", [False, True])
+def test_the_context_layers_tools_answer_on_each_route(
+    on_the_gateway, standin, monkeypatch
+):
+    if not on_the_gateway:
+        monkeypatch.delenv("UNDERCOVER_GATEWAY_URL")
+    route = main.route()
+    for tool, arguments, expected in CONTEXT_CALLS:
+        answer = route.use(tool, arguments)
+        assert answer.refused_by is None, tool
+        assert expected in answer.text, tool
+        assert '"file":' in answer.text, tool
+    names = [n for n, _ in standin.calls]
+    expected_calls = [f"undercover-context___{t}" for t, _, _ in CONTEXT_CALLS]
+    assert names == (expected_calls if on_the_gateway else [])
+
+
+@pytest.mark.parametrize("on_the_gateway", [False, True])
+def test_a_context_refusal_reaches_the_model_as_a_refusal(
+    on_the_gateway, standin, monkeypatch
+):
+    if not on_the_gateway:
+        monkeypatch.delenv("UNDERCOVER_GATEWAY_URL")
+    replies = [
+        calls(("read_section", {"document": "claims_manual", "number": "99"})),
+        calls(("record_decision", decision("CLM-1001", 0, "refer"))),
+        AIMessage(content="Referred."),
+    ]
+    main.work("CLM-1001", None, stub(*replies))
+    name = main.route().name("read_section")
+    refused = [t for t in steps_of("CLM-1001") if t.startswith(f"{name}: Refused")]
+    assert len(refused) == 1
+    assert "Section 99 of claims_manual not found" in refused[0]

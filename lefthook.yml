@@ -5,7 +5,7 @@ pre-commit:
   parallel: true
   jobs:
     - name: python
-      glob: "{backend,agent}/**/*.py"
+      glob: "{backend,agent,context}/**/*.py"
       group:
         piped: true
         jobs:

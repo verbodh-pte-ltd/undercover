@@ -51,8 +51,6 @@ HANDLER = {
     "reject_proposal",
 }
 KEY = {
-    "list_sections",
-    "read_section",
     "calculate_payout",
     "record_decision",
     "pay_claim",
@@ -139,7 +137,7 @@ def test_the_key_is_compared_in_constant_time(monkeypatch):
         return real(a, b)
 
     monkeypatch.setattr(backend_main.secrets, "compare_digest", compare_digest)
-    client.get("/api/documents/policy_wording/sections", headers=AGENT)
+    client.get("/api/policy-wording", headers=AGENT)
     assert compared == [(AGENT["X-API-Key"].encode(), AGENT["X-API-Key"].encode())]
 
 

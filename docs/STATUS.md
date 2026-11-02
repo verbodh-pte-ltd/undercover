@@ -15,7 +15,11 @@ pays, ready for Lambda (`npm run build`, the backend serving the dashboard's bui
 connections for Lambda), and the live checks. Nothing is deployed.
 
 The context layer, memory and the Gateway (`docs/PLAN_CONTEXT.md`, from `docs/CONTEXT.md`) are being
-built. Done so far: phase 1, the claim agent's tools on two routes. With `UNDERCOVER_GATEWAY_URL` set,
+built. Done so far: phase 1, the claim agent's tools on two routes, and phase 2, the context layer: data
+governance's seven files in `context/` served as MCP tools by `context/server.py` (`uv run -m context`
+on :8006, started by `npm run dev`; `context.server.handler` on Lambda), with the plans and the two
+documents seeded from `context/` into the `plans` and `documents` tables. The app's section routes are
+gone, and the agent's API document has six operations. With `UNDERCOVER_GATEWAY_URL` set,
 the model's tools and the graph's payment go through the AgentCore Gateway as MCP tools named
 `undercover-app___<operation>`, signed with SigV4 (`agent/gateway.py`); without it they go straight to
 the app with the key (`agent/direct.py`). The model's tools take no ids: they know the claim, its

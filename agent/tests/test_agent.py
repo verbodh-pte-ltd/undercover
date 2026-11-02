@@ -187,7 +187,7 @@ def test_get_claim_history():
 
 def test_sections_tools():
     sections = json.loads(use("list_sections", {"document": "claims_manual"}).text)
-    assert sections[9]["title"] == "Meals without receipts"
+    assert sections["sections"][9]["title"] == "Meals without receipts"
     args = {"document": "policy_wording", "number": "3"}
     assert json.loads(use("read_section", args).text)["title"] == "Trip Delay"
 
@@ -851,8 +851,6 @@ CLAIM_AGENT_OPERATIONS = {
     "get_claim",
     "get_policy",
     "get_claim_history",
-    "list_sections",
-    "read_section",
     "calculate_payout",
     "record_decision",
     "pay_claim",
