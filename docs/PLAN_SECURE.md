@@ -216,22 +216,22 @@ whoever handles it.
 The backend serves the claim agent's operations as their own document, the payment refuses any amount
 over the limit, and a handler's sign-off pays the claim.
 
-- [ ] `GET /api/agent/openapi.json` (`get_agent_openapi`) answers with exactly `get_claim`, `get_policy`,
+- [x] `GET /api/agent/openapi.json` (`get_agent_openapi`) answers with exactly `get_claim`, `get_policy`,
       `get_claim_history`, `list_sections`, `read_section`, `calculate_payout`, `record_decision` and
       `pay_claim` (or the names you choose in choice 1), and no `servers` entry (test).
-- [ ] In that document each operation keeps its `operation_id` and its one-line docstring, the payment's
+- [x] In that document each operation keeps its `operation_id` and its one-line docstring, the payment's
       input is still `amount`, and no operation has a key or token parameter (test).
-- [ ] The document answers with the key or a handler's sign-in, and 401 with neither (test).
-- [ ] `pay_claim` refuses an amount over the approval limit with a 403 that names the limit, before it
+- [x] The document answers with the key or a handler's sign-in, and 401 with neither (test).
+- [x] `pay_claim` refuses an amount over the approval limit with a 403 that names the limit, before it
       reads the claim: the same answer on a claim that was never approved and on one that doesn't exist
       (tests).
-- [ ] A sign-off pays the claim once and leaves it decided, with the handler, the time and the payment,
+- [x] A sign-off pays the claim once and leaves it decided, with the handler, the time and the payment,
       with no agent's service running. A second sign-off is refused (tests).
-- [ ] A claim paused at the sign-off and resumed after it finishes with no call to `pay_claim`. A claim
+- [x] A claim paused at the sign-off and resumed after it finishes with no call to `pay_claim`. A claim
       approved within the limit is still paid by the graph (tests that record the agent's requests).
-- [ ] The claim page shows a signed-off claim as paid and decided straight away (vitest). The e2e claim
+- [x] The claim page shows a signed-off claim as paid and decided straight away (vitest). The e2e claim
       spec signs off and sees "Paid $1,250.00" with no payment from the test.
-- [ ] `npm run check` is green.
+- [x] `npm run check` is green.
 
 ## Phase 4: Ready for Lambda
 
@@ -327,3 +327,18 @@ Phase 2:
   sets stay at 25 and 5.
 - `npm run seed` wasn't run against the real database in this phase; the seed criteria are checked
   by tests on SQLite. The live dispatch is Phase 5.
+
+Phase 3:
+
+- The payout operation is now `calculate_payout` in the backend too (the route function and the
+  operation), so the access test, the payout test and the agent's test of the operations it reaches
+  use that name. `backend/payout.py` keeps its own `work_out_payout`, which isn't an operation.
+- The limit check put first in `pay_claim` changed an older test: a claim approved for $420 under
+  the $1,000 limit, then the limit lowered to $100, was paid before and is now refused (choice 11).
+  The test now expects that, and `docs/SPEC.md` says so.
+- The sign-off sets `paid_at` to the same moment as `signed_off_at`. The service's resume now takes a
+  claim that is signed off (decided) as well as one in progress; the graph's `sign_off` node goes to
+  the end, so the resume records "Signed off by" and makes no request to the payment.
+- A dispatch lists only claims in progress to carry on, and a signed-off claim is now decided, so a
+  paused thread is finished only by the service's resume after the sign-off. If the service is down
+  at that moment, the thread stays paused in the saver; the claim itself is paid and decided.

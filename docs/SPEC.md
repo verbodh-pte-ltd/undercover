@@ -70,7 +70,8 @@ The platform's settings are on the dashboard: the approval limit, the business o
 and the tolerance, the spending limit for each round and how many claim agents work at once in the
 improver's evaluations. Every handler can see them, and only a handler who can sign off over the
 limit can change them. Each change records who made it and when. A new approval limit applies to the
-decisions recorded after it. The models the claim agent may use are set in `data/models.json` and
+decisions recorded after it. A payment always reads today's limit, so if the limit is lowered between an
+approval and its payment, the payment is refused and the claim stays unpaid. The models the claim agent may use are set in `data/models.json` and
 can't be changed on the page.
 
 If the agent is stopped partway through a claim, it carries on with that claim from where it got to the

@@ -87,7 +87,7 @@ def test_unknown_policy_is_404():
 def test_payout_operation_has_no_optional_inputs():
     schema = client.get("/openapi.json").json()
     operation = schema["paths"]["/api/payouts"]["post"]
-    assert operation["operationId"] == "work_out_payout"
+    assert operation["operationId"] == "calculate_payout"
     assert operation["summary"] or operation["description"]
     components = schema["components"]["schemas"]
     for name in ["PayoutQuestion", "Line"]:

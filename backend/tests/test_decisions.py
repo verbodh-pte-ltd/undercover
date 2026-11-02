@@ -104,6 +104,16 @@ def test_large_payout_is_blocked_before_sign_off(amount):
     assert client.get("/api/claims/CLM-1001").json()["paid_amount"] is None
 
 
+@pytest.mark.parametrize("claim_id", ["CLM-1001", "CLM-0000"])
+def test_a_payment_over_the_limit_is_refused_before_the_claim_is_read(claim_id):
+    response = pay(claim_id, 1000.01)
+    assert response.status_code == 403
+    assert response.json() == {
+        "detail": "A payment over the approval limit of $1,000.00 is made by a"
+        " handler's sign-off"
+    }
+
+
 def test_wrong_amount_is_422():
     decide("CLM-1001", SMALL)
     assert pay("CLM-1001", 400.0).status_code == 422
@@ -128,22 +138,22 @@ def test_paying_undecided_is_409():
     assert pay("CLM-1001", 420.0).status_code == 409
 
 
-def test_sign_off_records_who_and_when_and_pays_nothing():
+def test_sign_off_pays_the_claim_and_decides_it():
     decide("CLM-1001", LARGE)
     claim = sign_off("CLM-1001").json()
-    assert claim["status"] == "in_progress"
+    assert (claim["status"], claim["paid_amount"]) == ("decided", 1250.0)
     assert claim["signed_off_by"] == "HND-01"
     assert claim["signed_off_at"]
-    assert claim["paid_amount"] is None
+    assert claim["paid_at"] == claim["signed_off_at"]
+    assert client.get("/api/claims/CLM-1001").json() == claim
 
 
-def test_payment_after_sign_off_pays_and_decides():
+def test_a_second_sign_off_is_refused_and_pays_nothing_more():
     decide("CLM-1001", LARGE)
-    sign_off("CLM-1001")
-    claim = pay("CLM-1001", 1250.0).json()
-    assert (claim["status"], claim["paid_amount"]) == ("decided", 1250.0)
-    assert claim["paid_at"]
-    assert claim["signed_off_by"] == "HND-01"
+    first = sign_off("CLM-1001").json()
+    assert sign_off("CLM-1001").status_code == 409
+    assert pay("CLM-1001", 1250.0).status_code == 403
+    assert client.get("/api/claims/CLM-1001").json() == first
 
 
 def test_a_signed_off_claim_cannot_be_released():

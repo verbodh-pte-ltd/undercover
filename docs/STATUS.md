@@ -10,8 +10,9 @@ the documents, with the designer's review of the screenshots and its fixes. We u
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
 Of the security changes before AWS (`docs/PLAN_SECURE.md`, from `docs/SECURE.md`), phases 1 and 2 are
-built: an API key for the agent, and a check for instructions hidden in a claim. Phases 3 to 5 (the
-agent's own API and the sign-off that pays, the Lambda package, and the live checks) are not built yet.
+built: an API key for the agent, and a check for instructions hidden in a claim, and phase 3: the
+agent's own API and the sign-off that pays. Phases 4 and 5 (the Lambda package and the live checks) are
+not built yet.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
 
@@ -108,7 +109,8 @@ What changed for it, in the look only:
   - Who may call what (`docs/PLAN_SECURE.md`, choice 3; a test fails if a route is in no group or
     two). Only `GET /api/health` is open. The agent's side sends `UNDERCOVER_API_KEY` in an
     `X-API-Key` header, compared with `secrets.compare_digest`. The reads both use (`get_claim`,
-    `get_policy`, `get_claim_history`, `list_recipes`) take the key or a signed-in handler. Every
+    `get_policy`, `get_claim_history`, `list_recipes`, `get_agent_openapi`) take the key or a
+    signed-in handler. Every
     other route the dashboard calls, its reads and its actions, needs a signed-in handler, and the
     key never stands in for one. Every route only the agent's side calls needs the key. Anything
     refused answers 401. The checks read the request's headers themselves, so no operation has a
@@ -173,12 +175,20 @@ What changed for it, in the look only:
     not yet judged, so the current version stays as it was.
   - A claim that fails before its decision goes back to `waiting`; after two failures it is
     `needs_handler`. A claim stopped `in_progress` stays there for the next dispatch.
-  - `POST /api/payouts` (`work_out_payout`) applies the payout rules in `backend/payout.py`.
-  - A payout over the approval limit is refused until a handler signs off. Whether a claim needs a
+  - `GET /api/agent/openapi.json` (`get_agent_openapi`) is an OpenAPI document of the claim agent's
+    eight operations only (`get_claim`, `get_policy`, `get_claim_history`, `list_sections`,
+    `read_section`, `calculate_payout`, `record_decision`, `pay_claim`), generated from the app's own
+    routes, with no `servers` entry and no key or token input, for the AgentCore Gateway later.
+  - `POST /api/payouts` (`calculate_payout`) applies the payout rules in `backend/payout.py`.
+  - `pay_claim` refuses any amount over today's approval limit with a 403 that names the limit,
+    before it reads the claim, so the answer is the same on any claim. Whether a claim needs a
     sign-off is kept with its decision (`needs_sign_off`), from the limit at that moment, so a new
-    limit applies only to the decisions recorded after it. A sign-off records the signed-in handler and when (403 for a handler who can't sign
-    off over the limit), puts the claim back `in_progress`, and asks the agent's
-    service to carry on and pay it.
+    limit holds only the decisions recorded after it; the payment's limit is always today's.
+  - A sign-off records the signed-in handler and when (403 for a handler who can't sign off over the
+    limit) and pays the claim in the same transaction, so it is decided and paid at once with no
+    agent's service running. A second sign-off is refused (409). The backend then asks the agent's
+    service, best effort, to finish the claim's paused thread, which records "Signed off by" and
+    ends without paying.
   - The same decision or payment sent again counts as done; a different decision is still refused.
   - The claim agent's configuration (its instructions, model and reasoning effort) is kept in
     versions in `config_versions`, each with its reason, who proposed and approved it and when, and
@@ -199,7 +209,8 @@ What changed for it, in the look only:
     `X-API-Key` with `UNDERCOVER_API_KEY` read as each client is made, so the command line's key from
     `.env` reaches it. The service refuses to start without the key and says it's missing.
   - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`) with seven tools and no pay
-    or sign-off tool. It works to its run's configuration version (the current one for a claim in no
+    or sign-off tool. The graph pays a claim approved within the limit itself; one over it waits at
+    the `sign_off` node, and a resume after the sign-off goes straight to the end. It works to its run's configuration version (the current one for a claim in no
     run): its instructions, model and reasoning effort, or `MODEL_NAME` at the model's default effort. At
     most 30 model calls a claim. Each model call's tokens and cost are recorded with its run.
   - The claim graph's first node, `check`, reads the claim as its customer filed it (without the
@@ -225,7 +236,7 @@ What changed for it, in the look only:
     the service is already working.
   - The agent's service (`agent/service.py`, port 8002) starts dispatches and evaluations on the
     current version, recording its model and effort (`default` with `MODEL_NAME`), refusing a
-    second while one runs, resumes signed-off claims, and marks any run still running as stopped when
+    second while one runs, finishes signed-off claims' paused threads, and marks any run still running as stopped when
     it starts.
   - The improver (`agent/improver.py`) is a LangChain `create_agent` on `openai/gpt-6-luna` at medium
     effort (or `MODEL_NAME`), with the lab's four tools (`read_results`, `propose_change`,
@@ -260,7 +271,7 @@ What changed for it, in the look only:
     checks as yes or no, the judge's cost, and each claim linked to its page.
   - Each claim (`#/claims/CLM-1001`) shows its decision, reasons, the agent's steps, the sections it
     read, the policy and earlier claims. A claim waiting for sign-off has a "Sign off" button, except on
-    an evaluation's copy; a handler who can't sign off over the limit sees a note saying so instead.
+    an evaluation's copy, and once signed off shows as decided and paid straight away; a handler who can't sign off over the limit sees a note saying so instead.
   - The Configuration page (`#/configuration`; `#/instructions` goes there too) shows the current
     version with its instructions, and every version with its status, reason, who proposed and
     approved it, and its held-out scores. Each version after the first opens what it changed from

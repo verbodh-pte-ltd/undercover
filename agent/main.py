@@ -403,7 +403,7 @@ def check(
 def claim_graph(
     llm: BaseChatModel, instructions: str, checkpointer: BaseCheckpointSaver
 ) -> CompiledStateGraph:
-    """The claim agent: the check, the model and tools, then sign-off and payment."""
+    """The claim agent: the check, the model and tools, then payment or sign-off."""
     model_with_tools = llm.bind_tools(CLAIM_TOOLS)
     system = SystemMessage(instructions)
 
@@ -432,7 +432,7 @@ def claim_graph(
         return Command(goto="pay")
 
     def sign_off(state: ClaimState) -> dict[str, Any]:
-        """Wait for a handler to sign off the payout."""
+        """Wait for a handler to sign off the payout, which the sign-off pays."""
         answer = interrupt({"claim_id": state["claim_id"]})
         record_step(state["claim_id"], "reply", f"Signed off by {answer['handler_id']}")
         return {}
@@ -457,7 +457,7 @@ def claim_graph(
     builder.add_edge(START, "check")
     builder.add_conditional_edges("agent", after_agent, ["tools", "settle"])
     builder.add_edge("tools", "agent")
-    builder.add_edge("sign_off", "pay")
+    builder.add_edge("sign_off", END)
     builder.add_edge("pay", END)
     return builder.compile(checkpointer=checkpointer)
 

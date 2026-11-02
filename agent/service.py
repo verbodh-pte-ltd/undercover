@@ -58,13 +58,14 @@ app = FastAPI(title="UnderCover Agent", lifespan=lifespan)
 
 
 def carry_on_claim(claim_id: str) -> None:
-    """Carry on a claim in progress, unless this process is already working it."""
+    """Carry on a claim in progress or signed off, unless this process has it."""
     if not dispatcher.take(claim_id):
         return
     try:
         with main.backend() as client:
             claim = client.get(f"/api/claims/{claim_id}").json()
-        if claim["status"] == "in_progress":
+        # A sign-off pays and decides the claim; its paused thread still finishes.
+        if claim["status"] == "in_progress" or claim["signed_off_by"]:
             print(f"{claim_id}: {main.carry_on(claim_id, claim['thread_id'])}")
     finally:
         dispatcher.let_go(claim_id)

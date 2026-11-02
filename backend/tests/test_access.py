@@ -23,7 +23,13 @@ DECISION = {
 LARGE = {**DECISION, "decision": "approve", "payout": 1250.0}
 
 # Who may call each route, by who calls it today (docs/PLAN_SECURE.md, choice 3).
-SHARED = {"get_claim", "get_policy", "get_claim_history", "list_recipes"}
+SHARED = {
+    "get_claim",
+    "get_policy",
+    "get_claim_history",
+    "list_recipes",
+    "get_agent_openapi",
+}
 HANDLER = {
     "list_claims",
     "list_steps",
@@ -47,7 +53,7 @@ HANDLER = {
 KEY = {
     "list_sections",
     "read_section",
-    "work_out_payout",
+    "calculate_payout",
     "record_decision",
     "pay_claim",
     "start_claim",

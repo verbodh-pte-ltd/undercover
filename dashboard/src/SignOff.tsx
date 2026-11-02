@@ -34,7 +34,7 @@ export function SignOff({
     >
       <p>
         This payout is over the approval limit, so it waits for a handler's
-        sign-off. The agent pays it once you sign off.
+        sign-off. Signing it off pays it.
       </p>
       <button type="submit">Sign off {money(claim.payout ?? 0)}</button>
       {refused && (

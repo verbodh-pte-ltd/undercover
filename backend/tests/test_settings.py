@@ -125,13 +125,18 @@ def test_a_new_approval_limit_applies_to_the_next_decision():
     assert paid["paid_amount"] == 1250.0
 
 
-def test_a_lower_limit_holds_the_next_decision_only():
+def test_a_lower_limit_holds_the_next_decision_and_limits_every_payment():
     small = {**LARGE, "payout": 420.0}
     client.post("/api/claims/CLM-1001/decision", json=small)
     change(approval_limit=100.0)
     client.post("/api/claims/CLM-1002/decision", json=small)
+    assert client.get("/api/claims/CLM-1001").json()["status"] == "decided"
+    assert client.get("/api/claims/CLM-1002").json()["status"] == (
+        "waiting_for_sign_off"
+    )
+    # The payment reads today's limit (docs/PLAN_SECURE.md, choice 11).
     pay = {"amount": 420.0}
-    assert client.post("/api/claims/CLM-1001/payment", json=pay).status_code == 200
+    assert client.post("/api/claims/CLM-1001/payment", json=pay).status_code == 403
     assert client.post("/api/claims/CLM-1002/payment", json=pay).status_code == 403
 
 

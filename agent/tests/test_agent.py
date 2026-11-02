@@ -271,19 +271,43 @@ def test_claim_agent_pauses_before_a_payout_over_the_limit():
     assert saved is not None
 
 
-def test_sign_off_resumes_the_claim_and_pays_it_once(check):
+def recording(monkeypatch):
+    """Record each request the agent sends to the backend, as 'METHOD path'."""
+    sent = []
+
+    class Recording(TestClient):
+        def request(self, method, url, *args, **kwargs):
+            sent.append(f"{method.upper()} {url}")
+            return super().request(method, url, *args, **kwargs)
+
+    monkeypatch.setattr(
+        main, "backend", lambda: Recording(app, headers=main.key_header())
+    )
+    return sent
+
+
+def test_a_claim_resumed_after_its_sign_off_finishes_without_paying(check, monkeypatch):
     hold()
-    client.post("/api/claims/CLM-1001/sign-off", headers=headers())
+    signed = client.post("/api/claims/CLM-1001/sign-off", headers=headers()).json()
+    sent = recording(monkeypatch)
     assert main.run("CLM-1001", "CLM-1001-1", stub()) == ""
-    result = claim("CLM-1001")
-    assert (result["status"], result["paid_amount"]) == ("decided", 1250.0)
-    assert result["signed_off_by"] == "HND-01"
-    assert result["paid_at"] >= result["signed_off_at"]
-    main.run("CLM-1001", "CLM-1001-1", stub())
+    assert not [r for r in sent if r.endswith("/payment")]
+    assert claim("CLM-1001")["paid_amount"] == 1250.0
+    assert claim("CLM-1001")["paid_at"] == signed["paid_at"]
+    # The thread is finished, so running it again does nothing.
+    again = main.run("CLM-1001", "CLM-1001-1", stub())
+    assert again == "CLM-1001 is decided: approve"
     texts = steps_of("CLM-1001")
-    assert "Signed off by HND-01" in texts
-    assert len([t for t in texts if t.startswith("pay_claim:")]) == 1
+    assert texts.count("Signed off by HND-01") == 1
+    assert not [t for t in texts if t.startswith("pay_claim:")]
     assert check.runs == 1
+
+
+def test_a_claim_approved_within_the_limit_is_still_paid_by_the_graph(monkeypatch):
+    sent = recording(monkeypatch)
+    hold(payout=420.0)
+    assert sent.count("POST /api/claims/CLM-1001/payment") == 1
+    assert claim("CLM-1001")["paid_amount"] == 420.0
 
 
 def test_a_held_claim_without_a_sign_off_keeps_waiting():
@@ -626,12 +650,15 @@ def test_the_service_wont_start_without_the_key(monkeypatch):
 # The agent's service
 
 
-def test_the_service_resumes_a_signed_off_claim_and_pays_it(monkeypatch):
+def test_the_service_finishes_a_signed_off_claim_without_paying(monkeypatch):
     monkeypatch.setattr(main, "model", lambda version: stub())
     hold()
     client.post("/api/claims/CLM-1001/sign-off", headers=headers())
+    sent = recording(monkeypatch)
     response = TestClient(service.app).post("/claims/CLM-1001/resume")
     assert response.status_code == 202
+    assert "Signed off by HND-01" in steps_of("CLM-1001")
+    assert not [r for r in sent if r.endswith("/payment")]
     result = claim("CLM-1001")
     assert (result["status"], result["paid_amount"]) == ("decided", 1250.0)
     assert TestClient(service.app).get("/health").json() == {"status": "ok"}
@@ -821,7 +848,7 @@ CLAIM_AGENT_OPERATIONS = {
     "get_claim_history",
     "list_sections",
     "read_section",
-    "work_out_payout",
+    "calculate_payout",
     "record_decision",
     "pay_claim",
     "start_claim",

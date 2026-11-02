@@ -13,6 +13,8 @@ from typing import Annotated, Any, Literal
 import httpx
 import jwt
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.openapi.utils import get_openapi
+from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy import (
@@ -53,6 +55,17 @@ app = FastAPI(title="UnderCover")
 
 DOCUMENTS = {"policy_wording": "policy_wording.md", "claims_manual": "claims_manual.md"}
 WRONGFUL_DECLINE = 1500
+# The claim agent's operations, which its own API document gives the Gateway.
+AGENT_OPERATIONS = [
+    "get_claim",
+    "get_policy",
+    "get_claim_history",
+    "list_sections",
+    "read_section",
+    "calculate_payout",
+    "record_decision",
+    "pay_claim",
+]
 NEEDLESS_REFERRAL = 50
 
 
@@ -695,6 +708,19 @@ def get_claim(claim_id: str, db: Db) -> dict[str, Any]:
     return claim_view(db, claim_row(db, claim_id))
 
 
+@app.get(
+    "/api/agent/openapi.json", operation_id="get_agent_openapi", dependencies=SHARED
+)
+def get_agent_openapi() -> dict[str, Any]:
+    """Get the API document of the claim agent's own operations, for its Gateway."""
+    chosen = [
+        r
+        for r in app.routes
+        if isinstance(r, APIRoute) and r.operation_id in AGENT_OPERATIONS
+    ]
+    return get_openapi(title="UnderCover Agent", version=app.version, routes=chosen)
+
+
 @app.get("/api/policies/{policy_id}", operation_id="get_policy", dependencies=SHARED)
 def get_policy(policy_id: str, db: Db) -> dict[str, Any]:
     """Get a policy: the plan, the add-ons, the trip and the travelers."""
@@ -753,8 +779,8 @@ def read_section(document: str, number: str) -> dict[str, str]:
     raise HTTPException(404, f"Section {number} of {document} not found")
 
 
-@app.post("/api/payouts", operation_id="work_out_payout", dependencies=AGENT)
-def work_out_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
+@app.post("/api/payouts", operation_id="calculate_payout", dependencies=AGENT)
+def calculate_payout(question: PayoutQuestion, db: Db) -> payout.Payout:
     """Work out the payout on an approved claim with UnderCover's payout rules."""
     policy = record(db, "policies", question.policy_id)
     return payout.work_out_payout(
@@ -1105,7 +1131,15 @@ def record_decision(claim_id: str, decision: Decision, db: Db) -> dict[str, Any]
     "/api/claims/{claim_id}/payment", operation_id="pay_claim", dependencies=AGENT
 )
 def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
-    """Pay an approved claim its payout. One over the approval limit needs sign-off."""
+    """Pay an approved claim its payout, up to the approval limit."""
+    # The limit comes first, so an amount over it gets the same answer on any claim.
+    limit = setting(db, "approval_limit")
+    if payment.amount > limit:
+        raise HTTPException(
+            403,
+            f"A payment over the approval limit of ${limit:,.2f} is made by a"
+            " handler's sign-off",
+        )
     row = claim_row(db, claim_id, lock=True)
     if row["decision"] != "approve":
         raise HTTPException(409, f"Claim {claim_id} is not approved")
@@ -1133,7 +1167,7 @@ def pay_claim(claim_id: str, payment: Payment, db: Db) -> dict[str, Any]:
 def sign_off(
     claim_id: str, handler: Handler, db: Db, tasks: BackgroundTasks
 ) -> dict[str, Any]:
-    """Sign off a payout over the approval limit as the signed-in handler."""
+    """Sign off and pay a payout over the approval limit as the signed-in handler."""
     if not handler["can_approve_over_limit"]:
         raise HTTPException(
             403, f"{handler['name']} can't sign off payouts over the approval limit"
@@ -1143,14 +1177,18 @@ def sign_off(
         raise HTTPException(409, f"Claim {claim_id} is an evaluation's copy")
     if row["status"] != "waiting_for_sign_off":
         raise HTTPException(409, f"Claim {claim_id} is not waiting for sign-off")
+    signed = store.now()
     set_claim(
         db,
         claim_id,
-        status="in_progress",
+        status="decided",
         signed_off_by=handler["handler_id"],
-        signed_off_at=store.now(),
+        signed_off_at=signed,
+        paid_amount=row["payout"],
+        paid_at=signed,
     )
     db.commit()
+    # The agent finishes its paused thread without paying; it may not be running.
     tasks.add_task(agent_service.resume_claim, claim_id)
     return get_claim(claim_id, db)
 
