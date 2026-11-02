@@ -17,6 +17,7 @@ from agent.tests.test_agent import (
 )
 from backend import agent_service, judge, store
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, headers
 from backend.tests.test_rounds import GRADED, answer_key
 
@@ -85,7 +86,7 @@ def contexts(monkeypatch):
             expected = key[copy_id.split("-", 1)[1]]
             decision = {"decision": expected.decision, "payout": expected.payout}
             decision |= {"reason": "The handler's reason", "policy_section": "9"}
-            client.post(f"/api/claims/{copy_id}/decision", json=decision)
+            record_decision(client, f"/api/claims/{copy_id}/decision", decision)
             cost = 0.002 if version == 1 else 0.001
             used = {"run_id": run_id, "input_tokens": 1, "output_tokens": 1}
             client.post(

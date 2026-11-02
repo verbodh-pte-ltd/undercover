@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { AGENT } from "./agent";
+import { recordDecision } from "./agent";
 import { DANA, MARCUS, signIn } from "./sign-in";
 
 test("a handler signs in, sees their name and signs out", async ({ page }) => {
@@ -35,14 +35,11 @@ test("a handler who can't sign off over the limit is told why", async ({
   page,
   request,
 }) => {
-  await request.post("/api/claims/CLM-1005/decision", {
-    headers: AGENT,
-    data: {
-      decision: "approve",
-      payout: 1500,
-      reason: "Covered.",
-      policy_section: "7. Emergency Medical",
-    },
+  await recordDecision(request, "CLM-1005", {
+    decision: "approve",
+    payout: 1500,
+    reason: "Covered.",
+    policy_section: "7. Emergency Medical",
   });
   await signIn(page, MARCUS);
   await page.goto("/#/claims/CLM-1005");

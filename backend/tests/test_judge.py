@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from backend import judge, main, store
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, headers
 
 # The real grade, before the tests' stub takes its place.
@@ -125,7 +126,7 @@ def decide(copy_id, run_id):
         "reason": "Needs a handler.",
         "policy_section": "claims_manual 2",
     }
-    client.post(f"/api/claims/{copy_id}/decision", json=decision)
+    record_decision(client, f"/api/claims/{copy_id}/decision", decision)
 
 
 def test_finishing_grades_in_parallel_and_an_undecided_claim_is_an_f(monkeypatch):

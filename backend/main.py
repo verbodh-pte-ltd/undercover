@@ -79,6 +79,10 @@ class Decision(BaseModel):
     payout: float = Field(ge=0)
     reason: str
     policy_section: str
+    decided_by: str
+
+
+SECTION_14 = "Claims manual section 14: "
 
 
 class Payment(BaseModel):
@@ -308,8 +312,10 @@ def claim_view(db: Connection, row: RowMapping) -> dict[str, Any]:
     fields = ["status", "decision", "payout", "reason", "policy_section"]
     fields += ["paid_amount", "paid_at", "signed_off_by", "signed_off_at"]
     fields += ["attempts", "thread_id", "run_id", "copied_from", "held_by_gateway"]
+    fields += ["decided_by", "decided_at", "manual_version"]
     return {
         **claim,
+        "calculation": loaded(row["calculation"]),
         "customer_name": customer_name(db, claim["customer_id"]),
         **{f: row[f] for f in fields},
         "sections_read": sections_read(db, claim["claim_id"]),
@@ -660,6 +666,7 @@ def release(db: Connection, claim_id: str) -> None:
         claim_id,
         attempts=claims.c.attempts + 1,
         thread_id=None,
+        latest_calculation=None,
         status=case(
             (claims.c.attempts + 1 >= MAX_ATTEMPTS, "needs_handler"), else_="waiting"
         ),
@@ -770,6 +777,10 @@ def calculate_payout(claim_id: str, question: PayoutQuestion, db: Db) -> payout.
         question.lines,
         question.paid_by_others,
     )
+    # Kept for the claim's current attempt; an approval must match it.
+    kept = {"lines": found["calculation"], "payout": found["payout"]}
+    set_claim(db, claim_id, latest_calculation=json.dumps(kept))
+    db.commit()
     limit = setting(db, "approval_limit")
     return {**found, "needs_sign_off": found["payout"] > limit}
 
@@ -1013,7 +1024,11 @@ def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
             )
     # A new try gets a new thread; a claim already in progress keeps its own.
     thread_id = row["thread_id"] or f"{claim_id}-{row['attempts'] + 1}"
-    set_claim(db, claim_id, status="in_progress", thread_id=thread_id)
+    values: dict[str, Any] = {"status": "in_progress", "thread_id": thread_id}
+    if row["thread_id"] is None:
+        # A new attempt starts with no calculation on file.
+        values["latest_calculation"] = None
+    set_claim(db, claim_id, **values)
     if row["attempts"] == 0 and row["thread_id"] is None:
         db.execute(delete(steps).where(steps.c.claim_id == claim_id))
     db.commit()
@@ -1082,6 +1097,44 @@ def list_steps(claim_id: str, db: Db) -> list[dict[str, Any]]:
     return [dict(r) for r in db.execute(query).mappings()]
 
 
+def check_record(decision: Decision) -> None:
+    """Refuse a record that falls short of claims manual section 14, on any claim."""
+    needed = {
+        "a reason in plain language": decision.reason,
+        "the section relied on": decision.policy_section,
+        "who or what made the decision": decision.decided_by,
+    }
+    for what, value in needed.items():
+        if not value.strip():
+            raise HTTPException(422, f"{SECTION_14}a decision record needs {what}")
+    if decision.decision == "approve" and decision.payout <= 0:
+        raise HTTPException(422, f"{SECTION_14}an approval pays more than zero")
+    if decision.decision != "approve" and decision.payout > 0:
+        raise HTTPException(
+            422, f"{SECTION_14}only an approved claim has a payout above zero"
+        )
+
+
+def calculation_for(row: RowMapping, decision: Decision) -> dict[str, Any] | None:
+    """An approval's calculation, which must be on file and come to its payout."""
+    if decision.decision != "approve":
+        return None
+    found = loaded(row["latest_calculation"])
+    if found is None:
+        raise HTTPException(
+            422,
+            f"{SECTION_14}an approval needs its calculation. Work out the payout"
+            " with calculate_payout first",
+        )
+    if round(found["payout"], 2) != round(decision.payout, 2):
+        raise HTTPException(
+            422,
+            f"{SECTION_14}the payout must be the calculation's,"
+            f" ${found['payout']:,.2f}",
+        )
+    return found
+
+
 @app.post(
     "/api/claims/{claim_id}/decision",
     operation_id="record_decision",
@@ -1089,6 +1142,7 @@ def list_steps(claim_id: str, db: Db) -> list[dict[str, Any]]:
 )
 def record_decision(claim_id: str, decision: Decision, db: Db) -> dict[str, Any]:
     """Approve, decline or refer a claim, with payout, reasons and policy section."""
+    check_record(decision)
     row = claim_row(db, claim_id, lock=True)
     if row["decision"] is not None:
         # A step run again after a restart repeats its decision, which is done.
@@ -1098,12 +1152,19 @@ def record_decision(claim_id: str, decision: Decision, db: Db) -> dict[str, Any]
         raise HTTPException(409, f"Claim {claim_id} has already been decided")
     if row["status"] not in {"waiting", "in_progress"}:
         raise HTTPException(409, f"Claim {claim_id} is not waiting or in progress")
-    if decision.decision != "approve" and decision.payout > 0:
-        raise HTTPException(422, "Only an approved claim has a payout above zero")
+    calculation = calculation_for(row, decision)
     over_limit = decision.payout > setting(db, "approval_limit")
     status = "waiting_for_sign_off" if over_limit else "decided"
+    version = select(documents.c.version).where(documents.c.document == "claims_manual")
     set_claim(
-        db, claim_id, status=status, needs_sign_off=over_limit, **decision.model_dump()
+        db,
+        claim_id,
+        status=status,
+        needs_sign_off=over_limit,
+        **decision.model_dump(),
+        calculation=calculation and json.dumps(calculation),
+        decided_at=store.now(),
+        manual_version=db.scalar(version),
     )
     db.commit()
     return get_claim(claim_id, db)

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { AGENT } from "./agent";
+import { AGENT, recordDecision } from "./agent";
 import { signIn } from "./sign-in";
 
 test.beforeEach(async ({ page }) => {
@@ -36,14 +36,11 @@ test("the scoreboard shows an evaluation played out through the API", async ({
       headers: AGENT,
       data: { run_id },
     });
-    await request.post(`/api/claims/${copy}/decision`, {
-      headers: AGENT,
-      data: {
-        decision: "refer",
-        payout: 0,
-        reason: "Needs a handler.",
-        policy_section: "Manual 2",
-      },
+    await recordDecision(request, copy, {
+      decision: "refer",
+      payout: 0,
+      reason: "Needs a handler.",
+      policy_section: "Manual 2",
     });
   }
   await request.post(`/api/runs/${run}/finish`, { headers: AGENT });

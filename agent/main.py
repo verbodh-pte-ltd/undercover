@@ -59,6 +59,7 @@ CHECK_MODEL = "openai/gpt-6-luna"
 CHECK_EFFORT = "none"
 CHECK_ATTEMPTS = 3
 CHECK_SECTION = "Security check"
+CHECK_MAKER = "Security check"
 # What the backend adds to a claim as filed; the check reads only the rest.
 BACKEND_FIELDS = {
     "customer_name",
@@ -77,6 +78,10 @@ BACKEND_FIELDS = {
     "copied_from",
     "held_by_gateway",
     "sections_read",
+    "calculation",
+    "decided_by",
+    "decided_at",
+    "manual_version",
     "cost",
     "seconds",
 }
@@ -306,6 +311,7 @@ def record_decision(
         "payout": payout,
         "reason": reason,
         "policy_section": policy_section,
+        "decided_by": f"UnderCover Agent, version {runtime.context.version}",
     }
     return use(runtime, "record_decision", body)
 
@@ -501,6 +507,7 @@ def check(
         "payout": 0,
         "reason": found.reason,
         "policy_section": CHECK_SECTION,
+        "decided_by": CHECK_MAKER,
     }
     call("POST", f"/api/claims/{claim_id}/decision", referral)
     return Command(goto="__end__")

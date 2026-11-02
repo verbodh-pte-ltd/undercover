@@ -70,6 +70,14 @@ claims = Table(
     # Set only on an evaluation's copy of a claim: its run and the claim it copies.
     Column("run_id", Integer),
     Column("copied_from", String),
+    # The latest calculate_payout on the claim's current attempt, as JSON, and the
+    # record claims manual section 14 asks for: the calculation (lines and payout),
+    # who or what decided, when, and the manual's version in force (section 13).
+    Column("latest_calculation", Text),
+    Column("calculation", Text),
+    Column("decided_by", String),
+    Column("decided_at", String),
+    Column("manual_version", String),
 )
 policies = Table(
     "policies",

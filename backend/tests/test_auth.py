@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, DANA, MARCUS, headers, token
 
 client = TestClient(app, headers=AGENT)
@@ -54,7 +55,7 @@ def test_the_signed_in_handler_is_found_by_the_tokens_email():
 @pytest.mark.parametrize("sent", BAD_SIGN_INS.values(), ids=list(BAD_SIGN_INS))
 @pytest.mark.parametrize(("path", "body"), ACTIONS)
 def test_every_handler_action_needs_a_valid_sign_in(path, body, sent):
-    client.post("/api/claims/CLM-1001/decision", json=LARGE)
+    record_decision(client, "/api/claims/CLM-1001/decision", LARGE)
     response = client.post(path, json=body, headers=sent)
     assert response.status_code == 401
     assert client.get("/api/claims/CLM-1001").json()["signed_off_by"] is None
@@ -66,13 +67,13 @@ def test_a_signed_in_handler_can_start_a_run(path, body):
 
 
 def test_a_sign_off_records_the_signed_in_handler():
-    client.post("/api/claims/CLM-1001/decision", json=LARGE)
+    record_decision(client, "/api/claims/CLM-1001/decision", LARGE)
     claim = client.post("/api/claims/CLM-1001/sign-off", headers=headers()).json()
     assert claim["signed_off_by"] == "HND-01"
 
 
 def test_marcus_cant_sign_off_over_the_limit():
-    client.post("/api/claims/CLM-1001/decision", json=LARGE)
+    record_decision(client, "/api/claims/CLM-1001/decision", LARGE)
     response = client.post("/api/claims/CLM-1001/sign-off", headers=headers(MARCUS))
     assert response.status_code == 403
     assert response.json()["detail"] == (

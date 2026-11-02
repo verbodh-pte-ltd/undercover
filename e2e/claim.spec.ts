@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { AGENT } from "./agent";
+import { AGENT, recordDecision } from "./agent";
 import { signIn } from "./sign-in";
 
 test.beforeEach(async ({ page }) => {
@@ -35,14 +35,11 @@ test("a handler's sign-off pays the claim and tells the agent", async ({
   page,
   request,
 }) => {
-  await request.post("/api/claims/CLM-1003/decision", {
-    headers: AGENT,
-    data: {
-      decision: "approve",
-      payout: 1250,
-      reason: "The treatment is covered.",
-      policy_section: "7. Emergency Medical",
-    },
+  await recordDecision(request, "CLM-1003", {
+    decision: "approve",
+    payout: 1250,
+    reason: "The treatment is covered.",
+    policy_section: "7. Emergency Medical",
   });
   const blocked = await request.post("/api/claims/CLM-1003/payment", {
     headers: AGENT,

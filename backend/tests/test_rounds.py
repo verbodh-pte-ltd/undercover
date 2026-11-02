@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from backend import agent_service, judge, rule, store
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, MARCUS, headers
 from backend.tests.test_settings import LAB
 
@@ -80,7 +81,7 @@ def evaluate(round_id, eval_set, version, right, cost=0.001):
             wrong = "decline" if expected.decision == "refer" else "refer"
             decision = {"decision": wrong, "payout": 0}
         decision |= {"reason": f"Agent's reason {i}", "policy_section": "9"}
-        client.post(f"/api/claims/{copy_id}/decision", json=decision)
+        record_decision(client, f"/api/claims/{copy_id}/decision", decision)
         used = {"run_id": run_id, "input_tokens": 1, "output_tokens": 1, "cost": cost}
         client.post(f"/api/claims/{copy_id}/model-calls", json=used)
     client.post(f"/api/runs/{run_id}/finish")
@@ -602,7 +603,7 @@ def test_finishing_twice_grades_once(service, monkeypatch):
     copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
     client.post(f"/api/claims/{copy_id}/start", json={"run_id": run_id})
     decision = {"decision": "refer", "payout": 0, "reason": "?", "policy_section": "9"}
-    client.post(f"/api/claims/{copy_id}/decision", json=decision)
+    record_decision(client, f"/api/claims/{copy_id}/decision", decision)
     first = client.post(f"/api/runs/{run_id}/finish").json()
     second = client.post(f"/api/runs/{run_id}/finish").json()
     assert len(asked) == 1

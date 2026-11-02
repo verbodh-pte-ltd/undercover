@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from backend import agent_service
 from backend import main as backend_main
 from backend.main import app
+from backend.tests.records import calculated
 from backend.tests.signing import AGENT, MARCUS, headers
 from backend.tests.test_settings import LAB as LAB_SETTINGS
 
@@ -19,6 +20,7 @@ DECISION = {
     "payout": 0,
     "reason": "Needs a handler.",
     "policy_section": "Manual 2",
+    "decided_by": "UnderCover Agent, version 1",
 }
 LARGE = {**DECISION, "decision": "approve", "payout": 1250.0}
 
@@ -157,6 +159,7 @@ def test_a_dashboard_read_needs_a_handler_not_the_key():
 
 @pytest.mark.parametrize(("method", "path", "body"), ACTIONS)
 def test_the_key_never_stands_in_for_a_handler(method, path, body):
+    calculated("CLM-1001", LARGE["payout"])
     client.post("/api/claims/CLM-1001/decision", json=LARGE, headers=AGENT)
     response = client.request(method, path, json=body, headers=AGENT)
     assert response.status_code == 401

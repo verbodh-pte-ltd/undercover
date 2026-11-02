@@ -142,6 +142,31 @@ def decide(claim_id, verdict="decline"):
     ]
 
 
+def medical(amount):
+    """calculate_payout's arguments for one medical bill of the amount."""
+    line = {
+        "description": "Medical bill",
+        "amount": amount,
+        "quantity": 1,
+        "kind": "expense",
+        "nights": 0,
+        "hours": 0,
+    }
+    return {"benefit": "emergency_medical", "lines": [line], "paid_by_others": 0}
+
+
+def approve(claim_id, payout):
+    """The claim agent's calls for an approval: a calculation that comes to the
+    payout, then the record. A first calculation of the payout alone shows the plan's
+    deductible, which the bill then adds."""
+    alone = client.post(f"/api/claims/{claim_id}/payout", json=medical(payout))
+    bill = 2 * payout - alone.json()["payout"]
+    return [
+        calls(("calculate_payout", medical(bill))),
+        calls(("record_decision", decision(claim_id, payout))),
+    ]
+
+
 def new_run(kind="dispatch", eval_set=None, tiny=False, n=3, version=1):
     body = {
         "kind": kind,
@@ -218,7 +243,7 @@ def test_claim_agent_reads_sections_approves_and_pays():
             ("read_section", {"document": "claims_manual", "number": "6"}),
             ("read_section", {"document": "policy_wording", "number": "3"}),
         ),
-        calls(("record_decision", decision("CLM-1001", 420.0))),
+        *approve("CLM-1001", 420.0),
         AIMessage(content="Approved, $420.00."),
     ]
     reply = main.work("CLM-1001", None, stub(*replies))
@@ -257,7 +282,7 @@ def test_claim_agent_works_out_the_payout_with_the_tool():
 def hold(claim_id="CLM-1001", payout=1250.0, run_id=None):
     """Work a claim to an approval over the limit, which waits for sign-off."""
     replies = [
-        calls(("record_decision", decision(claim_id, payout))),
+        *approve(claim_id, payout),
         AIMessage(content=f"Approved, ${payout:,.2f}."),
     ]
     return main.work(claim_id, run_id, stub(*replies))
@@ -328,7 +353,7 @@ def test_a_stopped_claim_carries_on_from_its_last_step(check):
     with pytest.raises(KeyboardInterrupt):
         main.run("CLM-1001", start("CLM-1001", None)["thread_id"], stub(*first))
     rest = [
-        calls(("record_decision", decision("CLM-1001", 420.0))),
+        *approve("CLM-1001", 420.0),
         AIMessage(content="Approved, $420.00."),
     ]
     assert main.work("CLM-1001", None, stub(*rest)) == "Approved, $420.00."
@@ -1051,3 +1076,47 @@ def test_the_check_is_outside_the_configuration_and_the_improvers_reach(check):
     main.work("CLM-1001", None, stub(*decide("CLM-1001")))
     assert check.runs == 1
     assert steps_of("CLM-1001")[0].startswith("security_check:")
+
+
+# A complete decision record
+
+
+def test_the_agent_records_who_decided_with_its_version():
+    main.work("CLM-1001", new_run(), stub(*decide("CLM-1001")))
+    assert claim("CLM-1001")["decided_by"] == "UnderCover Agent, version 1"
+    client.post("/api/runs/stop-running")
+    add_version(2, kept=None, instructions="Version 2, under test.")
+    run_id = new_run("evaluation", "evaluation", tiny=True, n=1, version=2)
+    copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
+    main.work(copy_id, run_id, stub(*decide(copy_id)))
+    assert claim(copy_id)["decided_by"] == "UnderCover Agent, version 2"
+
+
+def test_the_model_never_sees_who_decided():
+    inputs = main.record_decision.args
+    assert "decided_by" not in inputs
+    assert "claim_id" not in inputs
+
+
+def test_the_checks_referral_is_made_by_the_security_check(check):
+    check.script(screening(True, INSTRUCTION))
+    main.work("CLM-1901", None, stub())
+    result = claim("CLM-1901")
+    assert (result["decided_by"], result["calculation"]) == ("Security check", None)
+    assert result["manual_version"] == "2026.2"
+
+
+def test_a_section_14_refusal_reaches_the_model_and_its_next_attempt_succeeds():
+    replies = [
+        calls(("record_decision", decision("CLM-1001", 420.0))),
+        *approve("CLM-1001", 420.0),
+        AIMessage(content="Approved, $420.00."),
+    ]
+    main.work("CLM-1001", None, stub(*replies))
+    texts = steps_of("CLM-1001")
+    assert any(
+        t.startswith("record_decision: Refused (422)") and "section 14" in t
+        for t in texts
+    )
+    result = claim("CLM-1001")
+    assert (result["paid_amount"], result["calculation"]["payout"]) == (420.0, 420.0)

@@ -10,6 +10,7 @@ from agent.tests.standin import StandIn, serve
 from agent.tests.test_agent import (  # noqa: F401 (check and in_process_backend are fixtures)
     REAL_BACKEND,
     StubModel,
+    approve,
     calls,
     check,
     claim,
@@ -242,7 +243,7 @@ def test_a_payment_the_gateway_refuses_waits_for_a_sign_off_that_pays_it(
 ):
     raise_the_limit()
     replies = [
-        calls(("record_decision", decision("CLM-1001", 1500.0))),
+        *approve("CLM-1001", 1500.0),
         AIMessage(content="Approved, $1,500.00."),
     ]
     reply = main.work("CLM-1001", None, stub(*replies))

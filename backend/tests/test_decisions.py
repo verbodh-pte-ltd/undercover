@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service
 from backend.main import app
+from backend.tests.records import calculated, record_decision
 from backend.tests.signing import AGENT, headers
 
 client = TestClient(app, headers=AGENT)
@@ -17,7 +18,7 @@ LARGE = {**SMALL, "payout": 1250.0}
 
 
 def decide(claim_id, body):
-    return client.post(f"/api/claims/{claim_id}/decision", json=body)
+    return record_decision(client, f"/api/claims/{claim_id}/decision", body)
 
 
 def pay(claim_id, amount):
@@ -228,3 +229,89 @@ def test_hold_refuses_a_declined_a_paid_or_a_waiting_claim():
     for claim_id in ["CLM-1001", "CLM-1002", "CLM-1003", "CLM-1004"]:
         assert hold(claim_id).status_code == 409, claim_id
     assert client.get("/api/claims/CLM-1003").json()["held_by_gateway"] is False
+
+
+# Claims manual section 14
+
+
+def raw(claim_id, body):
+    """Post a decision as it is, with no calculation put on file first."""
+    return client.post(f"/api/claims/{claim_id}/decision", json=body)
+
+
+MADE = {**SMALL, "decided_by": "UnderCover Agent, version 1"}
+SHORT = [
+    ({**MADE, "reason": " "}, "a decision record needs a reason in plain language"),
+    ({**MADE, "policy_section": ""}, "a decision record needs the section relied on"),
+    ({**MADE, "decided_by": ""}, "a decision record needs who or what made the"),
+    ({**MADE, "payout": 0}, "an approval pays more than zero"),
+    ({**MADE, "decision": "decline"}, "only an approved claim has a payout above"),
+    ({**MADE, "decision": "refer"}, "only an approved claim has a payout above"),
+]
+
+
+@pytest.mark.parametrize(("body", "missing"), SHORT)
+@pytest.mark.parametrize("claim_id", ["CLM-1001", "CLM-0000"])
+def test_a_record_short_of_section_14_is_refused_on_any_claim(body, missing, claim_id):
+    response = raw(claim_id, body)
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith(f"Claims manual section 14: {missing}")
+
+
+def test_an_approval_needs_a_calculation_on_file_for_this_attempt():
+    detail = raw("CLM-1001", MADE).json()["detail"]
+    assert detail.startswith("Claims manual section 14: an approval needs its")
+    line = {
+        "description": "Medical bill",
+        "amount": 470,
+        "quantity": 1,
+        "kind": "expense",
+        "nights": 0,
+        "hours": 0,
+    }
+    body = {"benefit": "emergency_medical", "lines": [line], "paid_by_others": 0}
+    assert client.post("/api/claims/CLM-1001/payout", json=body).json()["payout"] == 420
+    wrong = raw("CLM-1001", {**MADE, "payout": 470.0})
+    assert wrong.status_code == 422
+    assert wrong.json()["detail"] == (
+        "Claims manual section 14: the payout must be the calculation's, $420.00"
+    )
+    approved = raw("CLM-1001", MADE).json()
+    assert approved["calculation"]["payout"] == 420
+    assert approved["calculation"]["lines"] == [
+        {"step": "Medical bill", "amount": 470.0},
+        {"step": "Less the deductible", "amount": -50.0},
+    ]
+
+
+def test_a_new_attempt_or_a_release_clears_the_calculation():
+    calculated("CLM-1001", 420.0)
+    start("CLM-1001")
+    assert raw("CLM-1001", MADE).status_code == 422
+    calculated("CLM-1001", 420.0)
+    client.post("/api/claims/CLM-1001/release", json={"error": "boom"})
+    start("CLM-1001")
+    assert raw("CLM-1001", MADE).status_code == 422
+    calculated("CLM-1001", 420.0)
+    # The same attempt carried on keeps it.
+    start("CLM-1001")
+    assert raw("CLM-1001", MADE).status_code == 200
+
+
+def test_the_record_holds_the_maker_the_time_and_the_manuals_version():
+    approved = decide("CLM-1001", SMALL).json()
+    assert approved["decided_by"] == "UnderCover Agent, version 1"
+    assert approved["decided_at"]
+    assert approved["manual_version"] == "2026.2"
+    assert approved["calculation"]["payout"] == 420.0
+    declined = decide("CLM-1002", {**SMALL, "decision": "decline", "payout": 0})
+    assert declined.json()["calculation"] is None
+    referred = {
+        **SMALL,
+        "decision": "refer",
+        "payout": 0,
+        "decided_by": "Security check",
+    }
+    found = decide("CLM-1003", referred).json()
+    assert (found["decided_by"], found["calculation"]) == ("Security check", None)
+    assert found["manual_version"] == "2026.2"

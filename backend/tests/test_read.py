@@ -9,6 +9,7 @@ from sqlalchemy import QueuePool, func, select
 
 from backend import store
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, headers
 
 client = TestClient(app, headers=AGENT)
@@ -164,7 +165,7 @@ def test_concurrent_first_requests_seed_once():
 
 
 def test_reseed_puts_the_queue_back():
-    client.post("/api/claims/CLM-1001/decision", json={**DECLINE})
+    record_decision(client, "/api/claims/CLM-1001/decision", {**DECLINE})
     store.reseed()
     assert client.get("/api/claims/CLM-1001").json()["status"] == "waiting"
     with store.connect() as conn:

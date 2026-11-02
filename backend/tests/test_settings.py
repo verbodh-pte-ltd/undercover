@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, MARCUS, headers
 
 client = TestClient(app, headers=AGENT)
@@ -113,9 +114,9 @@ def test_marcus_cant_change_a_setting():
 
 
 def test_a_new_approval_limit_applies_to_the_next_decision():
-    client.post("/api/claims/CLM-1001/decision", json=LARGE)
+    record_decision(client, "/api/claims/CLM-1001/decision", LARGE)
     change(approval_limit=2000.0)
-    client.post("/api/claims/CLM-1002/decision", json=LARGE)
+    record_decision(client, "/api/claims/CLM-1002/decision", LARGE)
     held = client.get("/api/claims/CLM-1001").json()
     assert held["status"] == "waiting_for_sign_off"
     pay = {"amount": 1250.0}
@@ -127,9 +128,9 @@ def test_a_new_approval_limit_applies_to_the_next_decision():
 
 def test_a_lower_limit_holds_the_next_decision_and_limits_every_payment():
     small = {**LARGE, "payout": 420.0}
-    client.post("/api/claims/CLM-1001/decision", json=small)
+    record_decision(client, "/api/claims/CLM-1001/decision", small)
     change(approval_limit=100.0)
-    client.post("/api/claims/CLM-1002/decision", json=small)
+    record_decision(client, "/api/claims/CLM-1002/decision", small)
     assert client.get("/api/claims/CLM-1001").json()["status"] == "decided"
     assert client.get("/api/claims/CLM-1002").json()["status"] == (
         "waiting_for_sign_off"

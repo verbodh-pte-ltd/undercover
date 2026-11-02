@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend import agent_service, store
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, headers
 
 client = TestClient(app, headers=AGENT)
@@ -40,7 +41,7 @@ def release(claim_id):
 
 
 def decide(claim_id, body):
-    return client.post(f"/api/claims/{claim_id}/decision", json=body)
+    return record_decision(client, f"/api/claims/{claim_id}/decision", body)
 
 
 def status(claim_id):
@@ -282,8 +283,10 @@ def test_a_copy_holds_nothing_from_the_handlers_decisions():
     run = new_run("evaluation", "evaluation").json()
     copy = client.get(f"/api/claims/E{run['run_id']}-CLM-1001").json()
     key = json.loads(json.dumps(store.load("evals/decisions.json")[0]))
-    for field in ["handler_id", "calculation", "reference", "tests", "tiny"]:
+    for field in ["handler_id", "reference", "tests", "tiny"]:
         assert field not in copy
+    # Its own record's calculation, empty until the agent decides it.
+    assert copy["calculation"] is None
     assert key["reason"] not in json.dumps(copy)
 
 

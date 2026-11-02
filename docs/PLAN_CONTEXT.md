@@ -326,29 +326,29 @@ from them.
 
 Every decision holds what claims manual section 14 asks for, and the app refuses one that doesn't.
 
-- [ ] The app keeps the latest calculation from `calculate_payout` for the claim's current attempt. A
+- [x] The app keeps the latest calculation from `calculate_payout` for the claim's current attempt. A
       new attempt or a release clears it (tests).
-- [ ] `record_decision` takes `decided_by` besides the decision, the payout, the section and the reason.
+- [x] `record_decision` takes `decided_by` besides the decision, the payout, the section and the reason.
       The agent fills it in and the model never sees it (test on the tool's schema).
-- [ ] Each refusal is a 422 naming section 14, with the same answer on any claim, even one that doesn't
+- [x] Each refusal is a 422 naming section 14, with the same answer on any claim, even one that doesn't
       exist (one parametrized test):
   - a blank reason, section or maker;
   - an approval that pays nothing;
   - a decline or a referral that pays something.
-- [ ] An approval with no calculation on file for this attempt, or a payout that isn't the calculation's,
+- [x] An approval with no calculation on file for this attempt, or a payout that isn't the calculation's,
       is refused with a 422 naming section 14 (tests).
-- [ ] A complete approval holds its calculation's lines and payout. A decline and a referral hold no
+- [x] A complete approval holds its calculation's lines and payout. A decline and a referral hold no
       calculation. Each holds `decided_by`, `decided_at` and `manual_version` 2026.2, and the claim view
       shows them (tests).
-- [ ] A referral by the security check is recorded with `decided_by` "Security check" (test).
-- [ ] The agent's records name the version: "UnderCover Agent, version 1" in a dispatch, and the run's
+- [x] A referral by the security check is recorded with `decided_by` "Security check" (test).
+- [x] The agent's records name the version: "UnderCover Agent, version 1" in a dispatch, and the run's
       version in an evaluation (tests).
-- [ ] One shared helper in each suite records a matching calculation first and sends the maker:
+- [x] One shared helper in each suite records a matching calculation first and sends the maker:
       `backend/tests` (it may write the calculation directly), `agent/tests` and `e2e/agent.ts`. The
       e2e helper uses the brief's recipe: one `expense` line under `emergency_medical` for the payout plus
       the plan's deductible, found by a first calculation of the payout alone. No test's expected payout
       changes.
-- [ ] The commit's pre-commit hook passes.
+- [x] The commit's pre-commit hook passes.
 
 ## Phase 4: Memory of each customer
 
@@ -535,3 +535,19 @@ Phase 2:
   stopped. `npm run dev` wasn't run in this phase.
 - `check:context` installs 32 packages in a throwaway environment and passes; `check:server` still
   passes with `pyyaml` in the `server` group.
+
+Phase 3:
+
+- The approval rule "an approval pays more than zero" was not checked in our build before; it is now
+  one of the section 14 refusals, with the request's other checks, before the claim is read.
+- The calculation on file is `latest_calculation` on the claim, written by every `calculate_payout`,
+  cleared when an attempt starts on a new thread or the claim is released. An approval copies it
+  into `calculation` as `{"lines": [...], "payout": ...}`; the lines are `calculate_payout`'s steps.
+- The backend's shared helper is `backend/tests/records.py`: `record_decision` writes a matching
+  calculation straight into the store for an approval and sends the maker, and each test's
+  `client.post(".../decision", json=...)` became `record_decision(client, ".../decision", ...)`.
+  The improver's tests' stand-in dispatcher uses it too. The agent's tests use `approve()` in
+  `agent/tests/test_agent.py`, which scripts a real `calculate_payout` call by the brief's recipe, and
+  the e2e specs use `recordDecision` in `e2e/agent.ts`. No expected payout changed.
+- The claim view now has a `calculation` field of its own (empty until a decision), so the test that a
+  copy holds nothing from the handlers' decisions checks that field is empty instead of absent.

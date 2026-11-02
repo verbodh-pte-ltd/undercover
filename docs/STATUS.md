@@ -19,7 +19,10 @@ built. Done so far: phase 1, the claim agent's tools on two routes, and phase 2,
 governance's seven files in `context/` served as MCP tools by `context/server.py` (`uv run -m context`
 on :8006, started by `npm run dev`; `context.server.handler` on Lambda), with the plans and the two
 documents seeded from `context/` into the `plans` and `documents` tables. The app's section routes are
-gone, and the agent's API document has six operations. With `UNDERCOVER_GATEWAY_URL` set,
+gone, and the agent's API document has six operations. Phase 3: every decision record meets claims manual
+section 14: `record_decision` takes `decided_by`, refuses a short record with a 422 naming section 14,
+and an approval needs the latest `calculate_payout` of the attempt and its payout; the record holds
+the calculation, who decided, when, and the manual's version (2026.2). With `UNDERCOVER_GATEWAY_URL` set,
 the model's tools and the graph's payment go through the AgentCore Gateway as MCP tools named
 `undercover-app___<operation>`, signed with SigV4 (`agent/gateway.py`); without it they go straight to
 the app with the key (`agent/direct.py`). The model's tools take no ids: they know the claim, its

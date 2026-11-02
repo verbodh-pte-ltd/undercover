@@ -13,6 +13,7 @@ from starlette.routing import Mount
 
 from backend import main, store
 from backend.main import app
+from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, headers
 
 INDEX = "<!doctype html><title>UnderCover</title>"
@@ -57,7 +58,7 @@ def test_api_routes_work_as_before_with_the_dashboard_served(built):
     assert built.get("/api/health").json() == {"status": "ok"}
     assert built.get("/api/claims/CLM-1001").json()["claim_id"] == "CLM-1001"
     assert built.get("/api/claims", headers=headers()).status_code == 200
-    decided = built.post("/api/claims/CLM-1001/decision", json=DECLINE)
+    decided = record_decision(built, "/api/claims/CLM-1001/decision", DECLINE)
     assert decided.status_code == 200
     assert TestClient(app).get("/api/claims/CLM-1001").status_code == 401
 
