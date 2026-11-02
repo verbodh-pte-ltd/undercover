@@ -7,12 +7,14 @@ import {
   listSteps,
   type Claim,
   type Handler,
+  type Calculation,
   type PastClaim,
   type Policy,
+  type Source,
   type Step,
   type Teammate,
 } from "./api";
-import { day, label, money, sectionLabel, when } from "./format";
+import { day, label, money, when } from "./format";
 import { LoadFailed, PageHeader } from "./Page";
 import { StatusChip } from "./Queue";
 import { SignOff } from "./SignOff";
@@ -40,6 +42,27 @@ function Payment({
   );
 }
 
+function CalculationTable({
+  calculation,
+}: Readonly<{ calculation: Calculation }>) {
+  return (
+    <table>
+      <tbody>
+        {calculation.lines.map((line, index) => (
+          <tr key={`${String(index)}: ${line.step}`}>
+            <td>{line.step}</td>
+            <td className="num mono">{money(line.amount)}</td>
+          </tr>
+        ))}
+        <tr className="total">
+          <td>Payout</td>
+          <td className="num mono">{money(calculation.payout)}</td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
+
 function Decision({
   claim,
   handlers,
@@ -57,12 +80,33 @@ function Decision({
       </p>
       <p>{claim.reason}</p>
       <p className="muted">Policy section: {claim.policy_section}</p>
+      {claim.calculation && (
+        <CalculationTable calculation={claim.calculation} />
+      )}
+      {claim.decided_by && claim.decided_at && (
+        <p className="muted">
+          Decided by {claim.decided_by} on {when(claim.decided_at)}
+        </p>
+      )}
+      {claim.manual_version && (
+        <p className="muted">Claims manual version {claim.manual_version}</p>
+      )}
       {claim.decision === "approve" && (
         <Payment claim={claim} handlers={handlers} />
       )}
     </div>
   );
 }
+
+const stepLabel = (step: Step) => {
+  if (step.kind === "refusal") {
+    return step.detail?.by === "gateway" ? "Refused by the Gateway" : "Refused";
+  }
+  return step.kind === "memory_save" ? "Memory saved" : label(step.kind);
+};
+
+// Long answers fold to one line until they are opened.
+const folded = new Set(["tool_result", "memory_search"]);
 
 function Steps({ steps }: Readonly<{ steps: Step[] }>) {
   if (steps.length === 0) {
@@ -72,8 +116,8 @@ function Steps({ steps }: Readonly<{ steps: Step[] }>) {
     <ol className="steps">
       {steps.map((step) => (
         <li key={step.id} className={step.kind}>
-          <span className="step-kind">{label(step.kind)}</span>
-          {step.kind === "tool_result" ? (
+          <span className="step-kind">{stepLabel(step)}</span>
+          {folded.has(step.kind) ? (
             // A tool's result can be long JSON: one line until it is opened.
             <details>
               <summary className="step-text">{step.text}</summary>
@@ -84,6 +128,52 @@ function Steps({ steps }: Readonly<{ steps: Step[] }>) {
         </li>
       ))}
     </ol>
+  );
+}
+
+interface Used {
+  source: Source;
+  lookups: string[];
+}
+
+// Everything looked up in the context layer, once each, grouped by file.
+function contextUsed(steps: Step[]): Used[] {
+  const byFile = new Map<string, Used>();
+  for (const step of steps) {
+    if (step.kind !== "lookup") continue;
+    for (const source of step.detail?.files ?? []) {
+      const used = byFile.get(source.file) ?? { source, lookups: [] };
+      const what = step.detail?.looked_up ?? step.text;
+      if (!used.lookups.includes(what)) used.lookups.push(what);
+      byFile.set(source.file, used);
+    }
+  }
+  return [...byFile.values()];
+}
+
+function ContextUsed({ steps }: Readonly<{ steps: Step[] }>) {
+  const used = contextUsed(steps);
+  if (used.length === 0) return <p className="muted">Nothing yet.</p>;
+  return (
+    <ul className="stack plain">
+      {used.map(({ source, lookups }) => (
+        <li key={source.file} className="stack-sm">
+          <p>
+            <span className="mono">{source.file}</span>
+            <br />
+            <span className="muted">
+              {source.system}, owned by {source.owner}, reviewed{" "}
+              {day(source.reviewed)}
+            </span>
+          </p>
+          <ul>
+            {lookups.map((what) => (
+              <li key={what}>{what}</li>
+            ))}
+          </ul>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -256,16 +346,8 @@ export function ClaimView({
             <Steps steps={steps} />
           </div>
           <div className="panel stack-sm">
-            <h2>Sections the agent read</h2>
-            {claim.sections_read.length === 0 ? (
-              <p className="muted">None yet.</p>
-            ) : (
-              <ul className="stack-sm plain">
-                {claim.sections_read.map((section) => (
-                  <li key={section}>{sectionLabel(section)}</li>
-                ))}
-              </ul>
-            )}
+            <h2>Context used</h2>
+            <ContextUsed steps={steps} />
           </div>
           <div className="panel stack-sm">
             <h2>Policy</h2>

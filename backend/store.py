@@ -115,6 +115,9 @@ steps = Table(
     Column("claim_id", String, nullable=False),
     Column("kind", String, nullable=False),
     Column("text", Text, nullable=False),
+    # What the dashboard needs beyond the text, as JSON: a lookup's files with their
+    # sources, a memory search's finds, a save, or who refused.
+    Column("detail", Text),
 )
 runs = Table(
     "runs",

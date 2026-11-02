@@ -90,8 +90,18 @@ class Payment(BaseModel):
 
 
 class Step(BaseModel):
-    kind: Literal["tool_call", "tool_result", "reply", "error"]
+    kind: Literal[
+        "tool_call",
+        "tool_result",
+        "reply",
+        "error",
+        "lookup",
+        "memory_search",
+        "memory_save",
+        "refusal",
+    ]
     text: str
+    detail: dict[str, Any] | None
 
 
 class ClaimStart(BaseModel):
@@ -318,7 +328,6 @@ def claim_view(db: Connection, row: RowMapping) -> dict[str, Any]:
         "calculation": loaded(row["calculation"]),
         "customer_name": customer_name(db, claim["customer_id"]),
         **{f: row[f] for f in fields},
-        "sections_read": sections_read(db, claim["claim_id"]),
         **claim_totals(db, row["claim_id"], None),
     }
 
@@ -333,30 +342,6 @@ def claim_totals(db: Connection, claim_id: str, run_id: int | None) -> dict[str,
         cost = cost.where(model_calls.c.run_id == run_id)
         seconds = seconds.where(work_times.c.run_id == run_id)
     return {"cost": db.scalar(cost) or 0.0, "seconds": db.scalar(seconds) or 0.0}
-
-
-def sections_read(db: Connection, claim_id: str) -> list[str]:
-    """The sections read on a claim, such as "claims_manual 9", taken from its steps."""
-    texts = db.scalars(
-        select(steps.c.text)
-        .where(
-            steps.c.claim_id == claim_id,
-            steps.c.kind == "tool_call",
-            steps.c.text.like("read_section(%"),
-        )
-        .order_by(steps.c.id)
-    )
-    found = []
-    for step_text in texts:
-        # The step holds the model's own arguments, which can be malformed.
-        try:
-            args = json.loads(step_text.removeprefix("read_section(")[:-1])
-            section = f"{args['document']} {args['number']}"
-        except (json.JSONDecodeError, KeyError, TypeError):
-            continue
-        if section not in found:
-            found.append(section)
-    return found
 
 
 def run_row(db: Connection, run_id: int, lock: bool = False) -> RowMapping:
@@ -654,9 +639,22 @@ def set_claim(db: Connection, claim_id: str, **values: Any) -> None:
     db.execute(update(claims).where(claims.c.claim_id == claim_id).values(**values))
 
 
-def add_step_row(db: Connection, claim_id: str, kind: str, step_text: str) -> None:
-    """Record one step on a claim."""
-    db.execute(insert(steps).values(claim_id=claim_id, kind=kind, text=step_text))
+def add_step_row(
+    db: Connection,
+    claim_id: str,
+    kind: str,
+    step_text: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """Record one step on a claim, with its detail as JSON."""
+    db.execute(
+        insert(steps).values(
+            claim_id=claim_id,
+            kind=kind,
+            text=step_text,
+            detail=None if detail is None else json.dumps(detail),
+        )
+    )
 
 
 def release(db: Connection, claim_id: str) -> None:
@@ -1055,7 +1053,7 @@ def release_claim(claim_id: str, failure: Release, db: Db) -> dict[str, Any]:
 def add_step(claim_id: str, step: Step, db: Db) -> dict[str, str]:
     """Record one step the agent took on a claim."""
     claim_row(db, claim_id)
-    add_step_row(db, claim_id, step.kind, step.text)
+    add_step_row(db, claim_id, step.kind, step.text, step.detail)
     db.commit()
     return {"status": "recorded"}
 
@@ -1092,9 +1090,9 @@ def record_work_time(claim_id: str, spent: WorkTime, db: Db) -> dict[str, str]:
 def list_steps(claim_id: str, db: Db) -> list[dict[str, Any]]:
     """List the steps the agent took on a claim, in order."""
     claim_row(db, claim_id)
-    query = select(steps.c.id, steps.c.kind, steps.c.text)
+    query = select(steps.c.id, steps.c.kind, steps.c.text, steps.c.detail)
     query = query.where(steps.c.claim_id == claim_id).order_by(steps.c.id)
-    return [dict(r) for r in db.execute(query).mappings()]
+    return [{**r, "detail": loaded(r["detail"])} for r in db.execute(query).mappings()]
 
 
 def check_record(decision: Decision) -> None:

@@ -25,7 +25,9 @@ and an approval needs the latest `calculate_payout` of the attempt and its payou
 the calculation, who decided, when, and the manual's version (2026.2). Phase 4: with `UNDERCOVER_MEMORY_ID` set, the
 claim graph saves each decided claim to AgentCore Memory (`agent/memory.py`) as two events, the
 claim and the decision, and the model gets `search_memory`, kept to the claim's customer; never for
-an evaluation's copy or a claim the check referred. With `UNDERCOVER_GATEWAY_URL` set,
+an evaluation's copy or a claim the check referred. Phase 5: every step on the claim page, with step kinds
+`lookup`, `memory_search`, `memory_save` and `refusal` (the Gateway's labelled as its), a Context used
+panel grouped by file with each file's source, and the whole decision record with its calculation. With `UNDERCOVER_GATEWAY_URL` set,
 the model's tools and the graph's payment go through the AgentCore Gateway as MCP tools named
 `undercover-app___<operation>`, signed with SigV4 (`agent/gateway.py`); without it they go straight to
 the app with the key (`agent/direct.py`). The model's tools take no ids: they know the claim, its

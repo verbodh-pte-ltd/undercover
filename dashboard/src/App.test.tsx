@@ -166,11 +166,27 @@ it("shows the decision, its reasons and the steps", async () => {
     paid_amount: 420,
     reason: "The delay is covered.",
     policy_section: "3. Trip Delay",
-    sections_read: ["claims_manual 6", "policy_wording 3"],
   };
   const steps = [
     { id: 1, kind: "tool_call", text: 'get_claim({"claim_id": "CLM-1001"})' },
-    { id: 2, kind: "reply", text: "Approved, $420.00." },
+    {
+      id: 2,
+      kind: "lookup",
+      text: "read_section: claims_manual section 6, from claims_manual.md",
+      detail: {
+        tool: "read_section",
+        looked_up: "claims_manual section 6",
+        files: [
+          {
+            file: "claims_manual.md",
+            system: "Claims operations",
+            owner: "Head of claims operations",
+            reviewed: "2026-09-01",
+          },
+        ],
+      },
+    },
+    { id: 3, kind: "reply", text: "Approved, $420.00." },
   ];
   fakeBackend(claimRoutes(decided, steps));
   window.location.hash = "#/claims/CLM-1001";
@@ -179,8 +195,8 @@ it("shows the decision, its reasons and the steps", async () => {
   expect(screen.getByText("Policy section: 3. Trip Delay")).toBeDefined();
   expect(screen.getByText("Paid $420.00")).toBeDefined();
   expect(await screen.findByText("Approved, $420.00.")).toBeDefined();
-  expect(screen.getByText("Claims manual, section 6")).toBeDefined();
-  expect(screen.getByText("Policy wording, section 3")).toBeDefined();
+  expect(screen.getByText("claims_manual.md")).toBeDefined();
+  expect(screen.getByText("claims_manual section 6")).toBeDefined();
 });
 
 it("follows the hash from the queue to a claim", async () => {

@@ -22,7 +22,7 @@ from agent.tests.test_agent import (  # noqa: F401 (check and in_process_backend
     stub,
 )
 from backend.main import app
-from backend.tests.signing import AGENT
+from backend.tests.signing import AGENT, headers
 
 client = TestClient(app, headers=AGENT)
 NOW = datetime.now(UTC)
@@ -201,3 +201,25 @@ def test_when_agentcore_cant_be_reached_the_decision_stands(monkeypatch, caplog)
         t.startswith("search_memory: Refused: memory can't be reached") for t in texts
     )
     assert "remember: memory can't be reached, nothing saved" in texts
+
+
+def test_a_memory_search_and_a_save_are_steps_with_what_they_found_and_saved(
+    monkeypatch,
+):
+    found = [item(("customers", "CUS-3001", "facts"), "Flies Premium to Rome.")]
+    memory_on(monkeypatch, FakeStore(found))
+    replies = [
+        calls(("search_memory", {"query": "earlier claims"})),
+        *decide("CLM-1001"),
+    ]
+    main.work("CLM-1001", None, stub(*replies))
+    found_steps = client.get("/api/claims/CLM-1001/steps", headers=headers()).json()
+    kinds = {s["kind"]: s for s in found_steps}
+    assert kinds["memory_search"]["detail"] == {
+        "tool": "search_memory",
+        "query": "earlier claims",
+        "found": ["Flies Premium to Rome."],
+    }
+    saved = kinds["memory_save"]["detail"]["saved"]
+    assert saved[0].startswith("Claim CLM-1001")
+    assert saved[1].startswith("Decision on CLM-1001: decline")

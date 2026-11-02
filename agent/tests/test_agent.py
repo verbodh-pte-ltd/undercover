@@ -224,6 +224,10 @@ def test_refusal_comes_back_as_text():
     assert answer.refused_by == "app"
 
 
+def step_rows(claim_id):
+    return client.get(f"/api/claims/{claim_id}/steps", headers=headers()).json()
+
+
 def steps_of(claim_id):
     return [
         s["text"]
@@ -250,7 +254,23 @@ def test_claim_agent_reads_sections_approves_and_pays():
     assert reply == "Approved, $420.00."
     result = claim("CLM-1001")
     assert (result["status"], result["paid_amount"]) == ("decided", 420.0)
-    assert result["sections_read"] == ["claims_manual 6", "policy_wording 3"]
+    lookups = [s for s in step_rows("CLM-1001") if s["kind"] == "lookup"]
+    assert [s["detail"]["looked_up"] for s in lookups] == [
+        "the sections of claims_manual",
+        "claims_manual section 6",
+        "policy_wording section 3",
+    ]
+    assert lookups[1]["text"] == (
+        "read_section: claims_manual section 6, from claims_manual.md"
+    )
+    assert lookups[1]["detail"]["files"] == [
+        {
+            "file": "claims_manual.md",
+            "system": "Claims operations",
+            "owner": "Head of claims operations",
+            "reviewed": "2026-09-01",
+        }
+    ]
     texts = steps_of("CLM-1001")
     assert texts[0] == (
         "security_check: No instructions found. The claim only describes what happened."

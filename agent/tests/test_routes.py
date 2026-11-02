@@ -337,3 +337,62 @@ def test_a_context_refusal_reaches_the_model_as_a_refusal(
     refused = [t for t in steps_of("CLM-1001") if t.startswith(f"{name}: Refused")]
     assert len(refused) == 1
     assert "Section 99 of claims_manual not found" in refused[0]
+
+
+def rows(claim_id):
+    return client.get(f"/api/claims/{claim_id}/steps", headers=headers()).json()
+
+
+@pytest.mark.parametrize("on_the_gateway", [False, True])
+def test_steps_name_each_tool_as_the_route_does_and_say_where_lookups_came_from(
+    on_the_gateway, standin, monkeypatch
+):
+    if not on_the_gateway:
+        monkeypatch.delenv("UNDERCOVER_GATEWAY_URL")
+    replies = [
+        calls(*[(tool, arguments) for tool, arguments, _ in CONTEXT_CALLS]),
+        calls(("record_decision", decision("CLM-1001", 0, "refer"))),
+        AIMessage(content="Referred."),
+    ]
+    main.work("CLM-1001", None, stub(*replies))
+    prefix = "undercover-context___" if on_the_gateway else ""
+    found = rows("CLM-1001")
+    assert f'{prefix}lookup_term({{"term": "unattended"}})' in [
+        s["text"] for s in found
+    ]
+    lookups = {s["detail"]["tool"]: s for s in found if s["kind"] == "lookup"}
+    assert set(lookups) == {f"{prefix}{t}" for t, _, _ in CONTEXT_CALLS}
+    expected = {
+        "lookup_term": ("the term unattended", ["glossary.yaml"]),
+        "describe_fields": ("the fields of a policy", ["data_dictionary.yaml"]),
+        "get_plan": ("the first plan", ["plans.yaml"]),
+        "get_claim_rules": ("the claim rules", ["claim_rules.yaml"]),
+        "search_reference_data": (
+            'reference data for "lisbon strike"',
+            ["reference_data.yaml"],
+        ),
+        "search_documents": ('the documents for "wild animals"', ["claims_manual.md"]),
+        "list_sections": ("the sections of claims_manual", ["claims_manual.md"]),
+        "read_section": ("claims_manual section 9", ["claims_manual.md"]),
+    }
+    for tool, (looked_up, files) in expected.items():
+        detail = lookups[f"{prefix}{tool}"]["detail"]
+        assert detail["looked_up"] == looked_up
+        assert [f["file"] for f in detail["files"]] == files
+        assert all({"system", "owner", "reviewed"} <= set(f) for f in detail["files"])
+
+
+def test_the_gateways_refusals_are_steps_of_their_own_labelled_as_its(standin):
+    standin.refuse.add("undercover-app___get_policy")
+    replies = [
+        calls(("get_policy", {})),
+        calls(("record_decision", decision("CLM-1001", 0, "decline"))),
+        calls(("record_decision", decision("CLM-1001", 0, "refer"))),
+        AIMessage(content="Declined."),
+    ]
+    main.work("CLM-1001", None, stub(*replies))
+    refusals = [s for s in rows("CLM-1001") if s["kind"] == "refusal"]
+    assert [s["detail"] for s in refusals] == [
+        {"tool": "undercover-app___get_policy", "by": "gateway"},
+        {"tool": "undercover-app___record_decision", "by": "app"},
+    ]

@@ -34,7 +34,10 @@ def start(claim_id):
 
 
 def test_start_claim_clears_old_steps():
-    client.post("/api/claims/CLM-1001/steps", json={"kind": "reply", "text": "old"})
+    client.post(
+        "/api/claims/CLM-1001/steps",
+        json={"kind": "reply", "text": "old", "detail": None},
+    )
     assert start("CLM-1001").json()["status"] == "in_progress"
     assert client.get("/api/claims/CLM-1001/steps", headers=headers()).json() == []
 
@@ -47,7 +50,8 @@ def test_start_decided_claim_is_409():
 def test_steps_in_order():
     for text in ["one", "two", "three"]:
         client.post(
-            "/api/claims/CLM-1002/steps", json={"kind": "tool_call", "text": text}
+            "/api/claims/CLM-1002/steps",
+            json={"kind": "tool_call", "text": text, "detail": None},
         )
     steps = client.get("/api/claims/CLM-1002/steps", headers=headers()).json()
     assert [s["text"] for s in steps] == ["one", "two", "three"]
@@ -57,7 +61,7 @@ def test_steps_on_unknown_claim_is_404():
     assert (
         client.get("/api/claims/CLM-0000/steps", headers=headers()).status_code == 404
     )
-    step = {"kind": "reply", "text": "x"}
+    step = {"kind": "reply", "text": "x", "detail": None}
     assert client.post("/api/claims/CLM-0000/steps", json=step).status_code == 404
 
 

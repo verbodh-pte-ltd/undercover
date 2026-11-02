@@ -89,7 +89,10 @@ export const claim: Claim = {
   cost: 0,
   seconds: 0,
   attempts: 0,
-  sections_read: [],
+  calculation: null,
+  decided_by: null,
+  decided_at: null,
+  manual_version: null,
 };
 
 export const policy = {

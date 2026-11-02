@@ -178,17 +178,38 @@ def test_finished_run_has_its_time():
     assert run["run_seconds"] >= 0
 
 
-def test_sections_read_skips_malformed_steps():
-    for text in [
-        'read_section({"document": "claims_manual", "number": "9"})',
-        'read_section({"document": "claims_manual"})',
-        "read_section(not json)",
-    ]:
-        step = {"kind": "tool_call", "text": text}
-        client.post("/api/claims/CLM-1001/steps", json=step)
-    assert client.get("/api/claims/CLM-1001").json()["sections_read"] == [
-        "claims_manual 9"
-    ]
+SOURCE = {
+    "file": "claims_manual.md",
+    "system": "Claims operations",
+    "owner": "Head of claims operations",
+    "reviewed": "2026-09-01",
+}
+KINDS = [
+    ("tool_call", None),
+    ("tool_result", None),
+    ("reply", None),
+    ("error", None),
+    ("lookup", {"looked_up": "claims_manual section 9", "files": [SOURCE]}),
+    ("memory_search", {"query": "earlier claims", "found": ["A giraffe"]}),
+    ("memory_save", {"saved": ["Claim CLM-1001"]}),
+    ("refusal", {"tool": "undercover-app___pay_claim", "by": "gateway"}),
+]
+
+
+def test_each_kind_of_step_keeps_its_detail():
+    for kind, detail in KINDS:
+        step = {"kind": kind, "text": f"A {kind}", "detail": detail}
+        assert client.post("/api/claims/CLM-1001/steps", json=step).status_code == 200
+    found = client.get("/api/claims/CLM-1001/steps", headers=headers()).json()
+    assert [(s["kind"], s["detail"]) for s in found] == KINDS
+    assert "sections_read" not in client.get("/api/claims/CLM-1001").json()
+
+
+def test_a_step_of_another_kind_or_without_its_detail_is_refused():
+    other = {"kind": "reading", "text": "x", "detail": None}
+    assert client.post("/api/claims/CLM-1001/steps", json=other).status_code == 422
+    bare = {"kind": "reply", "text": "x"}
+    assert client.post("/api/claims/CLM-1001/steps", json=bare).status_code == 422
 
 
 class FakeResponse:

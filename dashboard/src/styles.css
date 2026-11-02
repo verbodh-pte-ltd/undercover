@@ -380,6 +380,15 @@ td > a {
   overflow-wrap: anywhere;
 }
 
+/* A refusal stands out from the other steps. */
+.steps .refusal .step-kind {
+  justify-self: start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--raspberry);
+  color: #ffffff;
+}
+
 .steps .reply .step-text {
   font-family: var(--sans);
   font-size: 0.95rem;

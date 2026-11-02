@@ -182,3 +182,151 @@ it("says the Gateway refused the payment when it did, and the limit otherwise", 
   ).toBeDefined();
   expect(screen.queryByText(/The Gateway refused/)).toBeNull();
 });
+
+const manual = {
+  file: "claims_manual.md",
+  system: "Claims operations",
+  owner: "Head of claims operations",
+  reviewed: "2026-09-01",
+};
+const glossary = {
+  file: "glossary.yaml",
+  system: "The policy wording, version 2026.1",
+  owner: "Legal",
+  reviewed: "2026-09-01",
+};
+const lookup = (id: number, lookedUp: string, files: object[]) => ({
+  id,
+  kind: "lookup",
+  text: `${lookedUp}, from ${files.length.toString()} file`,
+  detail: { tool: "read_section", looked_up: lookedUp, files },
+});
+
+it("labels each kind of step, with refusals standing out", async () => {
+  fakeBackend(
+    claimRoutes(claim, [
+      { id: 1, kind: "tool_call", text: "get_claim({})", detail: null },
+      lookup(2, "the term Unattended", [glossary]),
+      {
+        id: 3,
+        kind: "memory_search",
+        text: "search_memory: A giraffe ate his passport.",
+        detail: {
+          query: "earlier claims",
+          found: ["A giraffe ate his passport."],
+        },
+      },
+      {
+        id: 4,
+        kind: "refusal",
+        text: "undercover-app___pay_claim: Refused by the Gateway: Tool Execution Denied",
+        detail: { tool: "undercover-app___pay_claim", by: "gateway" },
+      },
+      {
+        id: 5,
+        kind: "refusal",
+        text: "record_decision: Refused (422): Claims manual section 14",
+        detail: { tool: "record_decision", by: "app" },
+      },
+      {
+        id: 6,
+        kind: "memory_save",
+        text: "remember: Claim CLM-1001 saved",
+        detail: { saved: ["Claim CLM-1001"] },
+      },
+    ]),
+  );
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  for (const kind of [
+    "Tool call",
+    "Lookup",
+    "Memory search",
+    "Refused by the Gateway",
+    "Refused",
+    "Memory saved",
+  ]) {
+    expect(screen.getByText(kind, { exact: true })).toBeDefined();
+  }
+  const gateway = screen.getByText("Refused by the Gateway");
+  expect(gateway.closest("li")?.className).toBe("refusal");
+  const found = screen.getByText("search_memory: A giraffe ate his passport.");
+  expect(found.tagName).toBe("SUMMARY");
+});
+
+it("lists everything looked up once, grouped by file with its source", async () => {
+  fakeBackend(
+    claimRoutes(claim, [
+      lookup(1, "claims_manual section 9", [manual]),
+      lookup(2, "claims_manual section 9", [manual]),
+      lookup(3, "the term Unattended", [glossary]),
+      lookup(4, "claims_manual section 2", [manual]),
+    ]),
+  );
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  expect(screen.getByText("Context used")).toBeDefined();
+  expect(screen.getAllByText("claims_manual section 9")).toHaveLength(1);
+  const file = screen.getByText("claims_manual.md");
+  const group = file.closest("li");
+  expect(group?.textContent).toContain(
+    "Claims operations, owned by Head of claims operations, reviewed Sep 1, 2026",
+  );
+  expect(group?.textContent).toContain("claims_manual section 2");
+  expect(screen.getByText("glossary.yaml")).toBeDefined();
+});
+
+it("says nothing was looked up yet", async () => {
+  fakeBackend(claimRoutes(claim));
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  expect(screen.getByText("Nothing yet.")).toBeDefined();
+});
+
+it("shows the whole decision record with its calculation line by line", async () => {
+  const decided: Claim = {
+    ...claim,
+    status: "waiting_for_sign_off",
+    decision: "approve",
+    payout: 1250,
+    reason: "The treatment is covered.",
+    policy_section: "7. Emergency Medical",
+    calculation: {
+      lines: [
+        { step: "Medical bill", amount: 1300 },
+        { step: "Less the deductible", amount: -50 },
+      ],
+      payout: 1250,
+    },
+    decided_by: "UnderCover Agent, version 1",
+    decided_at: "2026-11-02T10:00:00+00:00",
+    manual_version: "2026.2",
+  };
+  fakeBackend({
+    ...claimRoutes(decided),
+    "/api/claims/CLM-1001/sign-off": {
+      ...decided,
+      status: "decided",
+      signed_off_by: "HND-01",
+      signed_off_at: "2026-11-02T10:05:00+00:00",
+      paid_amount: 1250,
+      paid_at: "2026-11-02T10:05:00+00:00",
+    },
+  });
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  expect(screen.getByText("Medical bill")).toBeDefined();
+  expect(screen.getByText("$1,300.00")).toBeDefined();
+  expect(screen.getByText("-$50.00")).toBeDefined();
+  expect(screen.getByText("Payout")).toBeDefined();
+  expect(
+    screen.getByText(/^Decided by UnderCover Agent, version 1 on /),
+  ).toBeDefined();
+  expect(screen.getByText("Claims manual version 2026.2")).toBeDefined();
+  expect(
+    screen.getByText("Policy section: 7. Emergency Medical"),
+  ).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Sign off $1,250.00" }));
+  await wait(0);
+  expect(screen.getByText(/^Signed off by Dana Whitfield on /)).toBeDefined();
+});

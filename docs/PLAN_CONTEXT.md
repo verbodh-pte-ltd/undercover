@@ -380,24 +380,24 @@ model can search what it remembers about this customer.
 The claim page shows each step of the agent's work as it happens, where each lookup came from, and the
 whole decision record.
 
-- [ ] The app, `agent/main.py` and `dashboard/src/api.ts` know the kinds `lookup`, `memory_search`,
+- [x] The app, `agent/main.py` and `dashboard/src/api.ts` know the kinds `lookup`, `memory_search`,
       `memory_save` and `refusal` beside the others. `add_step` refuses any other kind (tests).
-- [ ] Each tool call's step names the tool as the Gateway names it on that route
+- [x] Each tool call's step names the tool as the Gateway names it on that route
       (`undercover-context___lookup_term`), and by its own name otherwise (tests).
-- [ ] A lookup's step says what was looked up and its files with their sources, for each context tool:
+- [x] A lookup's step says what was looked up and its files with their sources, for each context tool:
       a term, a plan, the claim rules, a record's fields, a reference search, a document search and a
       section read (tests).
-- [ ] A memory search's step holds what it found, and a save's step what it saved (tests).
-- [ ] Refusals have a step of their own, and the Gateway's are labeled as the Gateway's (tests).
-- [ ] On the claim page (vitest):
+- [x] A memory search's step holds what it found, and a save's step what it saved (tests).
+- [x] Refusals have a step of their own, and the Gateway's are labeled as the Gateway's (tests).
+- [x] On the claim page (vitest):
   - each kind of step shows with its own label, and refusals stand out in Raspberry;
   - a Context used panel, in place of Sections read, lists each lookup once, grouped by file, with each
     file's system, owner and review date;
   - the decision panel shows the whole record: the decision, the payout, the calculation line by line,
     the section, the reason, who decided and when, the manual's version, and who signed off and when.
-- [ ] The page refreshes the steps while the claim is in progress, as it does today. The words follow the
+- [x] The page refreshes the steps while the claim is in progress, as it does today. The words follow the
       dashboard's plain style and `docs/BRAND.md`.
-- [ ] The e2e claim spec sees the decision record with its calculation and the Context used panel, in a run of
+- [x] The e2e claim spec sees the decision record with its calculation and the Context used panel, in a run of
       `npx playwright test e2e/claim.spec.ts`. The commit's pre-commit hook passes.
 
 ## Phase 6: The live checks and the documents
@@ -567,3 +567,18 @@ Phase 4:
 - The memory's search filters out any result whose namespace holds this claim's id, which is how the
   Summary strategy's `/customers/{actorId}/claims/{sessionId}/` record of the claim being worked shows.
   That namespace shape is from the brief and the lab, not seen on AWS.
+
+Phase 5:
+
+- Each step has `detail`, a JSON object or null, in a new `steps.detail` column; `add_step` refuses a
+  step without it, or of any other kind. The agent puts what a step needs in the tool's artifact
+  (`response_format="content_and_artifact"`), and `tool_step` in `agent/main.py` turns it into a
+  `refusal`, `lookup`, `memory_search` or `tool_result` step. `remember` records a `memory_save`.
+- A lookup's step text is `<tool>: <what was looked up>, from <files>`, and its detail holds each file
+  with its system, owner and review date, taken from the answer's `source` or each found section's.
+  A glossary entry's `sections` is a list of numbers, not of sections, which broke the first version
+  of this with a `TypeError` that failed the whole claim; only the eight-lookup test caught it.
+- On the Gateway route `search_memory` keeps its own name, since it isn't a Gateway tool.
+- `sections_read` is gone from the claim view and the dashboard; the Context used panel groups the
+  claim's lookup steps by file, each lookup once. `sectionLabel` in `format.ts` went with it.
+- The dashboard's build is 486.9 kB of JavaScript (485 kB before), under Vite's 500 kB warning.

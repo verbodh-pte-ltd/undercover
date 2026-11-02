@@ -48,7 +48,11 @@ export interface Claim extends ClaimSummary {
   signed_off_at: string | null;
   paid_at: string | null;
   attempts: number;
-  sections_read: string[];
+  // The rest of the record claims manual section 14 asks for.
+  calculation: Calculation | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  manual_version: string | null;
   run_id: number | null;
   copied_from: string | null;
   // Set when the Gateway refused the agent's payment, so the claim waits for sign-off.
@@ -80,10 +84,51 @@ export interface PastClaim {
   amount_paid: number;
 }
 
+export interface CalculationLine {
+  step: string;
+  amount: number;
+}
+
+export interface Calculation {
+  lines: CalculationLine[];
+  payout: number;
+}
+
+export type StepKind =
+  | "tool_call"
+  | "tool_result"
+  | "reply"
+  | "error"
+  | "lookup"
+  | "memory_search"
+  | "memory_save"
+  | "refusal";
+
+// Where a context file comes from.
+export interface Source {
+  file: string;
+  system: string;
+  owner: string;
+  reviewed: string;
+}
+
+// What a step holds besides its text: a lookup's files, a memory search's finds, a save,
+// or who refused.
+export interface StepDetail {
+  tool?: string;
+  by?: string;
+  looked_up?: string;
+  files?: Source[];
+  query?: string;
+  found?: string[];
+  saved?: string[];
+}
+
 export interface Step {
   id: number;
-  kind: "tool_call" | "tool_result" | "reply" | "error";
+  kind: StepKind;
   text: string;
+  detail: StepDetail | null;
 }
 
 export interface RunClaim {

@@ -9,7 +9,14 @@ from botocore.auth import SigV4Auth as BotocoreSigV4Auth
 from botocore.awsrequest import AWSRequest
 from mcp.shared.exceptions import McpError
 
-from agent.mcp_client import Answer, call_tool, refuser, target
+from agent.mcp_client import (
+    APP_TOOLS,
+    CONTEXT_TOOLS,
+    Answer,
+    call_tool,
+    refuser,
+    target,
+)
 
 SERVICE = "bedrock-agentcore"
 
@@ -55,7 +62,11 @@ class Gateway:
         self.auth = SigV4(boto3.Session())
 
     def name(self, tool: str) -> str:
-        """A tool's name on the Gateway: its target, three underscores, its name."""
+        """A tool's name on the Gateway: its target, three underscores, its name.
+
+        The agent's own tools, such as search_memory, keep theirs."""
+        if tool not in APP_TOOLS | CONTEXT_TOOLS:
+            return tool
         return f"{target(tool)}___{tool}"
 
     def use(self, tool: str, arguments: dict[str, Any]) -> Answer:

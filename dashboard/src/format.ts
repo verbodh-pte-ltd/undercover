@@ -53,17 +53,6 @@ export const yesNo = (probability: number) =>
 
 export const percent = (share: number) => `${String(Math.round(share * 100))}%`;
 
-const documentLabels: Record<string, string> = {
-  policy_wording: "Policy wording",
-  claims_manual: "Claims manual",
-};
-
-// "claims_manual 9" becomes "Claims manual, section 9".
-export const sectionLabel = (section: string) => {
-  const [document, number] = section.split(" ");
-  return `${documentLabels[document] ?? document}, section ${number}`;
-};
-
 export const label = (value: string) => {
   const words = value.replaceAll("_", " ");
   return words.charAt(0).toUpperCase() + words.slice(1);

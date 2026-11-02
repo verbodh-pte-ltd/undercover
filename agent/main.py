@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field, SecretStr
 from agent import memory as customers
 from agent.direct import CONTEXT_URL, Direct
 from agent.gateway import Gateway
-from agent.mcp_client import Answer
+from agent.mcp_client import CONTEXT_TOOLS, Answer
 
 BACKEND_URL = "http://127.0.0.1:8000"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -79,7 +79,6 @@ BACKEND_FIELDS = {
     "run_id",
     "copied_from",
     "held_by_gateway",
-    "sections_read",
     "calculation",
     "decided_by",
     "decided_at",
@@ -205,10 +204,36 @@ Context = ToolRuntime[ClaimContext]
 Used = tuple[str, dict[str, Any]]
 
 
+# What each lookup in the context layer looked up, from its arguments.
+LOOKED_UP = {
+    "lookup_term": "the term {term}",
+    "describe_fields": "the fields of a {record}",
+    "get_plan": "the {plan} plan",
+    "get_claim_rules": "the claim rules",
+    "search_reference_data": 'reference data for "{query}"',
+    "search_documents": 'the documents for "{query}"',
+    "list_sections": "the sections of {document}",
+    "read_section": "{document} section {number}",
+}
+
+
+def lookup(tool_name: str, arguments: dict[str, Any], text: str) -> dict[str, Any]:
+    """What a lookup looked up, and each file it came from with the file's source."""
+    found = json.loads(text)
+    sources = [found["source"]] if "source" in found else []
+    sections = [s for s in found.get("sections", []) if isinstance(s, dict)]
+    sources += [s["source"] for s in sections if "source" in s]
+    files = list({s["file"]: s for s in sources}.values())
+    return {"looked_up": LOOKED_UP[tool_name].format(**arguments), "files": files}
+
+
 def use(runtime: Context, tool_name: str, arguments: dict[str, Any]) -> Used:
-    """Call a tool on the claim's route."""
+    """Call a tool on the claim's route; a lookup's step says where it came from."""
     answer = runtime.context.route.use(tool_name, arguments)
-    return answer.text, {"refused_by": answer.refused_by}
+    artifact: dict[str, Any] = {"refused_by": answer.refused_by}
+    if tool_name in CONTEXT_TOOLS and answer.refused_by is None:
+        artifact["lookup"] = lookup(tool_name, arguments, answer.text)
+    return answer.text, artifact
 
 
 @tool(response_format="content_and_artifact")
@@ -330,7 +355,8 @@ def search_memory(query: str, runtime: Context) -> Used:
         )
     except customers.UNREACHABLE as exc:
         return f"Refused: memory can't be reached: {exc}", {"refused_by": "memory"}
-    return json.dumps(found), {"refused_by": None}
+    searched = {"query": query, "found": found}
+    return json.dumps(found), {"refused_by": None, "memory": searched}
 
 
 MODEL_TOOLS = [
@@ -466,9 +492,12 @@ def clock() -> float:
     return time.perf_counter()
 
 
-def record_step(claim_id: str, kind: str, text: str) -> None:
-    """Record one step on the claim."""
-    call("POST", f"/api/claims/{claim_id}/steps", {"kind": kind, "text": text})
+def record_step(
+    claim_id: str, kind: str, text: str, detail: dict[str, Any] | None = None
+) -> None:
+    """Record one step on the claim, with what the dashboard needs beyond its text."""
+    body = {"kind": kind, "text": text, "detail": detail}
+    call("POST", f"/api/claims/{claim_id}/steps", body)
 
 
 def record_model_call(claim_id: str, run_id: int | None, reply: BaseMessage) -> None:
@@ -588,7 +617,7 @@ def remember(state: ClaimState, runtime: Runtime[ClaimContext]) -> dict[str, Any
         return {}
     saved = customers.save(runtime.store, claim)
     text = " | ".join(saved) if saved else "memory can't be reached, nothing saved"
-    record_step(state["claim_id"], "tool_result", f"remember: {text}")
+    record_step(state["claim_id"], "memory_save", f"remember: {text}", {"saved": saved})
     return {}
 
 
@@ -621,8 +650,13 @@ def pay(
     claim_id, claim = state["claim_id"], runtime.context
     payout = json.loads(call("GET", f"/api/claims/{claim_id}"))["payout"]
     answer = claim.route.use("pay_claim", {"claim_id": claim_id, "amount": payout})
-    text = answer.text[:RESULT_PREVIEW] if answer.refused_by else f"Paid ${payout:,.2f}"
-    record_step(claim_id, "tool_result", f"{claim.route.name('pay_claim')}: {text}")
+    name = claim.route.name("pay_claim")
+    if answer.refused_by:
+        refused = {"tool": name, "by": answer.refused_by}
+        text = f"{name}: {answer.text[:RESULT_PREVIEW]}"
+        record_step(claim_id, "refusal", text, refused)
+    else:
+        record_step(claim_id, "tool_result", f"{name}: Paid ${payout:,.2f}")
     if answer.refused_by != "gateway":
         return Command(goto="__end__")
     call("POST", f"/api/claims/{claim_id}/hold")
@@ -647,20 +681,38 @@ def traced(
     return config
 
 
-def steps(message: BaseMessage, route: Route) -> list[dict[str, str]]:
+def tool_step(message: ToolMessage, route: Route) -> dict[str, Any]:
+    """A tool's answer as a step: a refusal, a lookup, a memory search or a result."""
+    name = route.name(message.name or "")
+    text = f"{name}: {message.text[:RESULT_PREVIEW]}"
+    artifact = message.artifact or {}
+    if artifact.get("refused_by"):
+        detail = {"tool": name, "by": artifact["refused_by"]}
+        return {"kind": "refusal", "text": text, "detail": detail}
+    if artifact.get("lookup"):
+        found = artifact["lookup"]
+        files = ", ".join(f["file"] for f in found["files"])
+        text = f"{name}: {found['looked_up']}" + (f", from {files}" if files else "")
+        return {"kind": "lookup", "text": text, "detail": {"tool": name, **found}}
+    if artifact.get("memory"):
+        detail = {"tool": name, **artifact["memory"]}
+        return {"kind": "memory_search", "text": text, "detail": detail}
+    return {"kind": "tool_result", "text": text, "detail": None}
+
+
+def steps(message: BaseMessage, route: Route) -> list[dict[str, Any]]:
     """Describe one message from the agent as steps for the dashboard, each tool
     named as the claim's route names it."""
     if isinstance(message, ToolMessage):
-        text = f"{route.name(message.name or '')}: {message.text[:RESULT_PREVIEW]}"
-        return [{"kind": "tool_result", "text": text}]
-    found = []
+        return [tool_step(message, route)]
+    found: list[dict[str, Any]] = []
     if isinstance(message, AIMessage):
         for tool_call in message.tool_calls:
             name = route.name(tool_call["name"])
             text = f"{name}({json.dumps(tool_call['args'])})"
-            found.append({"kind": "tool_call", "text": text})
+            found.append({"kind": "tool_call", "text": text, "detail": None})
     if message.text:
-        found.append({"kind": "reply", "text": message.text})
+        found.append({"kind": "reply", "text": message.text, "detail": None})
     return found
 
 
@@ -747,7 +799,7 @@ def stream_claim(
         for node in update.values():
             for message in (node or {}).get("messages", []):
                 for step in steps(message, context.route):
-                    record_step(claim_id, step["kind"], step["text"])
+                    record_step(claim_id, step["kind"], step["text"], step["detail"])
                 reply = message.text or reply
     return reply
 

@@ -19,7 +19,7 @@ test("steps appear on the claim while the agent works", async ({
   });
   const step = (text: string) => ({
     headers: AGENT,
-    data: { kind: "tool_call", text },
+    data: { kind: "tool_call", text, detail: null },
   });
   await request.post("/api/claims/CLM-1002/steps", step("get_claim(CLM-1002)"));
   await expect(page.getByText("get_claim(CLM-1002)")).toBeVisible();
@@ -47,8 +47,44 @@ test("a handler's sign-off pays the claim and tells the agent", async ({
   });
   expect(blocked.status()).toBe(403);
 
+  await request.post("/api/claims/CLM-1003/steps", {
+    headers: AGENT,
+    data: {
+      kind: "lookup",
+      text: "read_section: claims_manual section 6, from claims_manual.md",
+      detail: {
+        tool: "read_section",
+        looked_up: "claims_manual section 6",
+        files: [
+          {
+            file: "claims_manual.md",
+            system: "Claims operations",
+            owner: "Head of claims operations",
+            reviewed: "2026-09-01",
+          },
+        ],
+      },
+    },
+  });
+
   await page.goto("/#/claims/CLM-1003");
   await expect(page.getByText("Waiting for sign-off")).toBeVisible();
+  // The whole record, with its calculation, and where the agent's lookups came from.
+  await expect(page.getByRole("cell", { name: "Medical bill" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Payout" })).toBeVisible();
+  await expect(
+    page.getByText(/^Decided by UnderCover Agent, version 1 on /),
+  ).toBeVisible();
+  await expect(page.getByText("Claims manual version 2026.2")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Context used" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("claims_manual.md", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("claims_manual section 6", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("Not paid yet")).toBeVisible();
   await page.getByRole("button", { name: "Sign off $1,250.00" }).click();
   await expect(
