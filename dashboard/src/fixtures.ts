@@ -35,12 +35,12 @@ export const session: Session = {
 
 // Stands in for Supabase Auth: signed in with this session, or signed out with null.
 export function signIn(signedIn: Session | null = session) {
-  vi.spyOn(supabase.auth, "getSession").mockResolvedValue(
+  vi.spyOn(supabase().auth, "getSession").mockResolvedValue(
     signedIn
       ? { data: { session: signedIn }, error: null }
       : { data: { session: null }, error: null },
   );
-  vi.spyOn(supabase.auth, "onAuthStateChange").mockImplementation(
+  vi.spyOn(supabase().auth, "onAuthStateChange").mockImplementation(
     (callback) => {
       void callback("INITIAL_SESSION", signedIn);
       return {

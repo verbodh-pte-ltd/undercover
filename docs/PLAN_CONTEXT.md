@@ -441,11 +441,11 @@ Cognito is free at three users. `uv run monitor.py` shows the real spend.
 
 **Sign-in that works with either provider** (built and tested locally first, with stand-ins):
 
-- [ ] The backend checks a handler's token against the keys at `AUTH_JWKS_URL`, with the issuer and
+- [x] The backend checks a handler's token against the keys at `AUTH_JWKS_URL`, with the issuer and
       audience in `AUTH_ISSUER` and `AUTH_AUDIENCE`. With these unset it uses local Supabase's, as today.
       Tests sign tokens as Supabase's and as Cognito's ID tokens (`token_use` `id`, `aud` the app client
       id) with a stand-in key, and the handler is still found by the token's email.
-- [ ] The dashboard signs in through Cognito when `VITE_COGNITO_USER_POOL_ID` and `VITE_COGNITO_CLIENT_ID`
+- [x] The dashboard signs in through Cognito when `VITE_COGNITO_USER_POOL_ID` and `VITE_COGNITO_CLIENT_ID`
       are set at build time (`InitiateAuth` with `USER_PASSWORD_AUTH`, by `fetch`, no new SDK), and
       through Supabase otherwise. Vitest covers both; the e2e specs still sign in through the Supabase
       stand-in. The bundle stays under Vite's 500 kB warning.
@@ -497,3 +497,16 @@ runs the cells, or asks for them to be run; each box below is ticked from the ce
       `uv run monitor.py` shows the spend, which is reported.
 
 ## Notes from the build
+
+- **Phase 7, sign-in with either provider.** `backend/auth.py` reads `AUTH_JWKS_URL`, `AUTH_ISSUER`
+  and `AUTH_AUDIENCE` once, through `settings()`; unset, they are local Supabase's JWKS, no issuer
+  check and `authenticated`, as before. `backend/tests/test_cognito.py` signs RS256 Cognito ID tokens
+  with a stand-in key and finds Dana by email, and refuses a Cognito access token (no `aud`), another
+  app client, another pool, an expired token, and a Supabase token when set up for Cognito (9
+  tests). The dashboard's sign-in is `dashboard/src/auth.ts`: `chooseAuth` picks Cognito when both
+  `VITE_COGNITO_*` are set, otherwise Supabase, whose client (`supabase()`) is now made on first use
+  so a Cognito build needs no Supabase settings. Cognito's tokens are kept in `localStorage`, and the
+  ID token is renewed with `REFRESH_TOKEN_AUTH` a minute before it expires; a failed renewal signs
+  out. `dashboard/src/auth.test.ts` covers both providers (7 tests); the e2e sign-in and settings
+  specs pass through the Supabase stand-in. `npm run build` with dummy values gives one 487.07 kB
+  chunk in both modes, under the 500 kB warning, with little room left.

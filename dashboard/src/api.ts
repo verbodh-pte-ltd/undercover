@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { auth } from "./auth";
 
 export type Status =
   | "waiting"
@@ -246,8 +246,7 @@ export interface Settings {
 
 // The signed-in handler's access token, which goes with every read and action.
 async function authorization() {
-  const { data } = await supabase.auth.getSession();
-  return { Authorization: `Bearer ${data.session?.access_token ?? ""}` };
+  return { Authorization: `Bearer ${await auth.token()}` };
 }
 
 async function refusal(response: Response, fallback: string) {
