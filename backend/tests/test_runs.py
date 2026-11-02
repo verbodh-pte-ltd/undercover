@@ -114,7 +114,7 @@ def test_a_dispatch_lists_claims_in_progress_then_oldest_submitted():
     listed = client.get(f"/api/runs/{run_id}/claims").json()
     assert listed[0] == "CLM-1020"
     rest = listed[1:]
-    assert len(rest) == 24
+    assert len(rest) == 25
     assert [submitted(c) for c in rest] == sorted(submitted(c) for c in rest)
 
 
@@ -268,7 +268,7 @@ def test_an_evaluation_copies_its_claims_out_of_the_queue():
     assert (copy["claim_id"], copy["copied_from"]) == (copies[0], "CLM-1001")
     assert copy["run_id"] == run["run_id"]
     assert counts() == before
-    assert len(client.get("/api/claims/waiting").json()) == 25
+    assert len(client.get("/api/claims/waiting").json()) == 26
 
 
 def test_a_tiny_held_out_evaluation_has_five_claims():
@@ -392,3 +392,20 @@ def test_new_operations_follow_the_api_rules():
         "WorkTime",
     ]:
         assert set(components[name]["required"]) == set(components[name]["properties"])
+
+
+@pytest.mark.parametrize(
+    ("eval_set", "tiny", "size"),
+    [
+        ("evaluation", False, 25),
+        ("evaluation", True, 5),
+        ("held_out", False, 25),
+        ("held_out", True, 5),
+    ],
+)
+def test_the_security_claim_is_in_no_evaluation_set(eval_set, tiny, size):
+    run_id = new_run("evaluation", eval_set, tiny).json()["run_id"]
+    copies = client.get(f"/api/runs/{run_id}/claims").json()
+    copied_from = [client.get(f"/api/claims/{c}").json()["copied_from"] for c in copies]
+    assert len(copied_from) == size
+    assert "CLM-1901" not in copied_from

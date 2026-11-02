@@ -301,28 +301,37 @@ def seed_versions(conn: Connection) -> None:
     )
 
 
+def load_with_security(name: str) -> list[Any]:
+    """One of the queue's files, with the security team's claim from security/ last."""
+    return load(name) + load(f"security/{name}")
+
+
 def seed(conn: Connection) -> None:
-    """Copy the queue, the records, the handlers and the settings; make the versions."""
+    """Copy the queue, the records, the handlers and the settings; make the versions.
+
+    The security team's claim joins the end of the queue without its decision, so it
+    is in neither evaluation set.
+    """
     conn.execute(insert(handlers), load("handlers.json"))
     seed_settings(conn)
     seed_versions(conn)
     queue = [
         {"claim_id": c["claim_id"], "position": i, "data": json.dumps(c)}
-        for i, c in enumerate(load("claims.json"))
+        for i, c in enumerate(load_with_security("claims.json"))
     ]
     conn.execute(insert(claims), [{**c, "status": "waiting"} for c in queue])
     conn.execute(
         insert(policies),
         [
             {"policy_id": p["policy_id"], "data": json.dumps(p)}
-            for p in load("policies.json")
+            for p in load_with_security("policies.json")
         ],
     )
     conn.execute(
         insert(customers),
         [
             {"customer_id": c["customer_id"], "data": json.dumps(c)}
-            for c in load("customers.json")
+            for c in load_with_security("customers.json")
         ],
     )
     conn.execute(

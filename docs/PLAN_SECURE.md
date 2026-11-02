@@ -191,24 +191,24 @@ route but `health`.
 The claim graph's first node reads the claim on a second model and refers a claim that tries to instruct
 whoever handles it.
 
-- [ ] The `check` node runs on `openai/gpt-6-luna` at reasoning effort `none`, or on the model in
+- [x] The `check` node runs on `openai/gpt-6-luna` at reasoning effort `none`, or on the model in
       `MODEL_NAME` with no effort set, read through the agent's one reader of `MODEL_NAME` (test on the
       model's settings).
-- [ ] A claim the stub check flags is referred with payout 0, the check's reason and the section
+- [x] A claim the stub check flags is referred with payout 0, the check's reason and the section
       "Security check", and the claim agent's stub model is never called (test).
-- [ ] A claim the stub check passes is worked as before. The check's result is the claim's first step
+- [x] A claim the stub check passes is worked as before. The check's result is the claim's first step
       (test).
-- [ ] An answer that can't be read is tried again, up to three attempts. Each attempt is recorded as one
+- [x] An answer that can't be read is tried again, up to three attempts. Each attempt is recorded as one
       of the claim's model calls with its cost, so it counts in the claim's cost on the scoreboard
       (test).
-- [ ] A check that fails three times, or raises an error, never reaches the claim agent's model, and the
+- [x] A check that fails three times, or raises an error, never reaches the claim agent's model, and the
       claim fails as any other error does: back in the queue, then left for a handler (tests).
-- [ ] A claim carried on from saved progress, or resumed after a sign-off, isn't checked again. A claim
+- [x] A claim carried on from saved progress, or resumed after a sign-off, isn't checked again. A claim
       started again on a new thread is (tests count the check's calls).
-- [ ] `npm run seed` puts CLM-1901 at the end of the queue with its policy and customer from
+- [x] `npm run seed` puts CLM-1901 at the end of the queue with its policy and customer from
       `data/security/`, without its handler's decision. `data/claims.json` is unchanged. CLM-1901 is in
       neither evaluation set, tiny or whole (tests).
-- [ ] The check is not in the configuration, and nothing the improver proposes can change it (test on
+- [x] The check is not in the configuration, and nothing the improver proposes can change it (test on
       the configuration's fields). `npm run check` is green.
 
 ## Phase 3: The agent's own API, and the sign-off that pays
@@ -308,3 +308,22 @@ Phase 1:
   on its request.
 - The e2e specs read `/api/rounds` and `/api/settings` outside the page, which now need a handler.
   `asHandler` in `e2e/agent.ts` signs in through the Supabase Auth stand-in for those.
+
+Phase 2:
+
+- The check is the graph's `check` node, a module function in `agent/main.py` beside `screen()`, which
+  fetches the claim, drops the backend's own fields (`BACKEND_FIELDS`) and calls the model. Its result
+  is recorded with `record_step` rather than as a message, so nothing is added to the claim agent's
+  conversation: a tool result with no tool call before it would be refused by the model's API.
+- LangChain's base `with_structured_output` works on the tests' stub model by binding the `Screening`
+  schema as a tool, so the stub answers with a `Screening` tool call; an answer with no tool call
+  comes back with `parsed` empty, which the check treats as unreadable, as it does a parsing error
+  from the real model's JSON schema.
+- A check that raises a rate limit or timeout from the model library (`ModelRateLimitError`,
+  `ModelTimeoutError`) is let through to the dispatcher as the claim agent's own are, so the claim
+  carries on and the check runs again; any other error fails the claim.
+- With CLM-1901 seeded, the queue has 26 claims: the tests that counted 25 in the queue, the
+  dispatcher's runs, a dispatch's listed claims and the e2e queue page now count 26. The evaluation
+  sets stay at 25 and 5.
+- `npm run seed` wasn't run against the real database in this phase; the seed criteria are checked
+  by tests on SQLite. The live dispatch is Phase 5.

@@ -21,15 +21,29 @@ DECLINE = {
 }
 
 
-def test_queue_is_seeded_from_claims_json():
+def test_queue_is_seeded_from_claims_json_with_the_security_claim_last():
     queue_ids = [
         c["claim_id"] for c in json.loads(Path("data/claims.json").read_text())
     ]
     claims = client.get("/api/claims", headers=headers()).json()
-    assert [c["claim_id"] for c in claims] == queue_ids
-    assert len(claims) == 25
+    assert [c["claim_id"] for c in claims] == [*queue_ids, "CLM-1901"]
+    assert len(claims) == 26
     assert {c["status"] for c in claims} == {"waiting"}
+    assert len(queue_ids) == 25
     assert "CLM-1901" not in queue_ids
+
+
+def test_the_security_claim_has_its_policy_and_customer_and_no_decision():
+    found = client.get("/api/claims/CLM-1901").json()
+    assert (found["policy_id"], found["customer_id"]) == ("POL-2901", "CUS-3901")
+    assert found["customer_name"] == "Derek Vance"
+    assert (found["status"], found["decision"]) == ("waiting", None)
+    assert client.get("/api/policies/POL-2901").json()["plan"] == "premium"
+    assert client.get("/api/customers/CUS-3901/claims").json() == []
+    with store.connect() as conn:
+        keys = conn.scalars(select(store.answer_key.c.claim_id)).all()
+    assert len(keys) == 50
+    assert "CLM-1901" not in keys
 
 
 def test_list_claims_fields():
@@ -102,8 +116,8 @@ def count(conn, table):
 def test_opening_twice_does_not_reseed():
     store.connect().close()
     with store.connect() as conn:
-        assert count(conn, store.claims) == 25
-        assert count(conn, store.policies) == 50
+        assert count(conn, store.claims) == 26
+        assert count(conn, store.policies) == 51
 
 
 def test_instructions():
@@ -140,7 +154,7 @@ def test_unknown_document_or_section_is_404():
 def test_connection_works_across_threads():
     with store.connect() as conn, ThreadPoolExecutor() as pool:
         claims = pool.submit(count, conn, store.claims)
-        assert claims.result() == 25
+        assert claims.result() == 26
 
 
 def test_concurrent_first_requests_seed_once():
@@ -149,7 +163,7 @@ def test_concurrent_first_requests_seed_once():
             pool.map(lambda _: client.get("/api/claims", headers=headers()), range(8))
         )
     assert {r.status_code for r in responses} == {200}
-    assert len(client.get("/api/claims", headers=headers()).json()) == 25
+    assert len(client.get("/api/claims", headers=headers()).json()) == 26
 
 
 def test_reseed_puts_the_queue_back():
@@ -157,7 +171,7 @@ def test_reseed_puts_the_queue_back():
     store.reseed()
     assert client.get("/api/claims/CLM-1001").json()["status"] == "waiting"
     with store.connect() as conn:
-        assert count(conn, store.claims) == 25
+        assert count(conn, store.claims) == 26
 
 
 def test_postgres_engine_has_a_pool_of_four():

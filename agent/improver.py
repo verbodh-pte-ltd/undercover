@@ -181,7 +181,7 @@ class RoundGuard(AgentMiddleware):
 
 def improver_model() -> ChatOpenAI:
     """GPT-6 Luna at medium effort, or the model in MODEL_NAME at its default."""
-    free = os.getenv("MODEL_NAME")
+    free = main.one_model()
     return ChatOpenAI(
         model=free or MODEL,
         base_url=main.OPENROUTER_BASE_URL,

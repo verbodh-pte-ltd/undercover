@@ -9,9 +9,9 @@ improver, phase 7: the Improvement page and the look of the dashboard, and phase
 the documents, with the designer's review of the screenshots and its fixes. We use Postgres in Docker on this machine, not
 Supabase, and Supabase Auth from Supabase's local stack for the sign-in.
 
-Of the security changes before AWS (`docs/PLAN_SECURE.md`, from `docs/SECURE.md`), phase 1 is built: an
-API key for the agent. Phases 2 to 5 (the check for hidden instructions, the agent's own API and the
-sign-off that pays, the Lambda package, and the live checks) are not built yet.
+Of the security changes before AWS (`docs/PLAN_SECURE.md`, from `docs/SECURE.md`), phases 1 and 2 are
+built: an API key for the agent, and a check for instructions hidden in a claim. Phases 3 to 5 (the
+agent's own API and the sign-off that pays, the Lambda package, and the live checks) are not built yet.
 
 In the swarm build's live runs on local Postgres with GPT-6 Luna, after one reseed:
 
@@ -84,7 +84,9 @@ What changed for it, in the look only:
   it uses local Postgres in Docker, in the `undercover` schema, with a pool of 4 connections that
   callers wait for. Without it, it uses SQLite in `backend/undercover.db` (or the file in
   `UNDERCOVER_DB`), as the tests do. `backend/store.py` seeds the database from `data/` on first start:
-  the 25 claims, the policies, the customers, the held-out claims, the handlers from
+  the 25 claims and, at the end of the queue, the security team's CLM-1901 with its policy and
+  customer from `data/security/` (without its handler's decision, so it is in neither evaluation set),
+  the policies, the customers, the held-out claims, the handlers from
   `data/handlers.json` (with their emails, and whether each can sign off over the limit; only Dana
   Whitfield can), the handlers' decisions on both labelled sets in `answer_key`, with each
   handler's reason and reference from `data/evals/`, which no claim operation reads, and version 1 of the claim agent's configuration and of the improver's recipe. `npm run seed` rebuilds every table,
@@ -200,6 +202,18 @@ What changed for it, in the look only:
     or sign-off tool. It works to its run's configuration version (the current one for a claim in no
     run): its instructions, model and reasoning effort, or `MODEL_NAME` at the model's default effort. At
     most 30 model calls a claim. Each model call's tokens and cost are recorded with its run.
+  - The claim graph's first node, `check`, reads the claim as its customer filed it (without the
+    backend's own fields) on a second model, `openai/gpt-6-luna` at reasoning effort `none` (or
+    `MODEL_NAME` with no effort), with the lab's `SCREEN_INSTRUCTIONS` and `Screening` (`reason`, then
+    `instructions_found`) through Structured Outputs. Its result is the claim's first step
+    (`security_check: ...`). A claim it flags is referred with payout 0, the check's reason and the
+    section "Security check", and the graph ends without calling the claim agent's model. An answer
+    that can't be read is tried again, up to 3 attempts, each recorded as one of the claim's model
+    calls with its cost. A check that still fails, or raises, fails the claim like any other error.
+    Work carried on from saved progress or resumed after a sign-off isn't checked again; a claim
+    started again on a new thread is. The check is a constant in `agent/main.py`, outside the versioned
+    configuration, so the improver can't change it. `MODEL_NAME` is read in one place, `one_model()`
+    in `agent/main.py`, which the claim agent, the check and the improver all use.
   - Progress is saved after every step by `PostgresSaver`, a saver of its own for each claim run on the
     process's shared pool of 4, or in memory without `DATABASE_URL`.
   - `work(claim_id, run_id)` starts a waiting claim or carries on one in progress, tries a failed claim
@@ -237,7 +251,7 @@ What changed for it, in the look only:
   same header (its title and what it is for), the navigation marks the page you are on, numbers are
   right-aligned with their units, statuses are a colored chip with a word, and a page that can't load
   says to check the backend and reload. Handler ids show as names, and version 1's as "Seeded".
-  - The queue (`#/`) has a count per state, a "Claim agents at once" picker (1 to 25, 3 to start) and a
+  - The queue (`#/`, 26 claims after a seed) has a count per state, a "Claim agents at once" picker (1 to 25, 3 to start) and a
     "Start dispatch" button, and the latest dispatch: its claims and where each stands, its model cost
     and time, and its summary once it has finished.
   - The Scoreboard (`#/scoreboard`) starts an evaluation (set, whole or tiny, N) and lists evaluations
