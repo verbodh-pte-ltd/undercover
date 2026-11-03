@@ -31,8 +31,9 @@ brief.
 This plan builds on the runtime build (`docs/PLAN_RUNTIME.md`), which is being built now. It needs from
 that build: the claim agent as an AgentCore app (`agent/entrypoint.py`) to copy the pattern from; the app's
 two routes to an agent (`backend/agent_service.py`); the send back (`send_back_claim`); and the app
-creating runs itself, so starting a dispatch or an evaluation returns the run's id. Start Phase 1 only
-once all five runtime phases are ticked.
+creating runs itself, so starting a dispatch or an evaluation returns the run's id. This is an order of
+work, not a change to the design: the Copilot is still a second AgentCore app beside the claim agent, in
+the same package, as the brief says. Start Phase 1 only once all five runtime phases are ticked.
 
 ## Where our build differs from the brief
 
@@ -40,9 +41,12 @@ once all five runtime phases are ticked.
   already renews a Cognito token before it expires. Both get renewed when less than 20 minutes are left,
   before every message and every answer to a confirmation. The app checks either the same way
   (`backend/auth.py`), so nothing else changes.
-- **Our database on AWS is RDS, not Supabase.** The Copilot's `DATABASE_URL` on Runtime is the RDS
-  database, straight to port 5432 with TLS, as the claim agent's is (`labs/week3/week3_aws_route.py`).
-  Prepared statements stay off.
+- **Our database is local Postgres on the laptop and RDS on AWS, not Supabase.** That's UnderCover's own
+  choice, to keep the claims data inside its AWS account, and the runtime build made the same one. Where
+  the brief says "our Supabase database", read the database in `DATABASE_URL`. The Copilot's
+  `DATABASE_URL` on Runtime is the RDS database, straight to port 5432 with TLS, as the claim agent's is
+  (`labs/week3/week3_aws_route.py`). Prepared statements stay off, so it would work through Supabase's
+  pooler as well.
 - **Names from `week3day5_lab1.ipynb`:** the runtime `copilot`, started from `runtime/copilot.py` with the
   extra permissions in `runtime/copilot_policy.json`; the Memory `undercover_copilot_memory`; the settings
   `UNDERCOVER_COPILOT_MEMORY_ID`, `UNDERCOVER_COPILOT` and `UNDERCOVER_COPILOT_RUNTIME`; Dana's handler id
@@ -50,10 +54,20 @@ once all five runtime phases are ticked.
 
 ## Approach
 
-- **The sign-in only passes through.** Dashboard to app in the `Authorization` header; app to Copilot in
-  the payload; Copilot to app in the `Authorization` header again. Inside the Copilot it lives only in the
-  graph's context for the length of one request. A test saves a turn and searches the checkpoints, the
-  steps, the turn records and the memory events for the token.
+- **Two kinds of saved state, both in the one database.** The conversation itself (its messages and where
+  the graph stands, the pause included) is the graph's checkpoints, saved by `PostgresSaver` after every
+  step, so any later turn or Runtime session carries it on. What the sidebar shows (each turn's state, its
+  steps, a waiting confirmation card, the answer) is the app's own records, written only through the
+  app's routes. The sidebar reads only the app.
+- **The sign-in only passes through, and is a hard rule at every boundary.** Dashboard to app in the
+  `Authorization` header; app to Copilot in the payload; Copilot to app in the `Authorization` header
+  again. Inside the Copilot it lives only in the graph's context for the length of one request. It is
+  never written to the checkpoints, the config, the steps, the turn records, the card, the memory, an
+  error message or a log. A failed turn's reason is the exception's type and message, never a request's
+  headers or payload. A test saves a turn, a pause and a failure, then searches all of these for the token.
+- **A request with the agent's key is the agent's.** The app's handler check refuses a request that
+  carries the key, even with a valid sign-in, so the key can never stand in for a handler or be added to
+  one. Every route the Copilot calls is a handler's route.
 - **The Copilot's client to the app is its own.** It never uses `backend()`, which sends the agent's key,
   so it can't send the key by mistake. A test fails if any Copilot module imports `backend()` or reads
   `UNDERCOVER_API_KEY`.
@@ -75,13 +89,18 @@ once all five runtime phases are ticked.
   digits and hyphens; the handler; the title, from the first question; when); `turns` (conversation, the
   message, state `working`, `waiting`, `done`, `failed` or `stopped`, the answer, model calls, cost,
   seconds, the waiting card, the error, `started_at`, `answered_at`); `copilot_steps` (turn, kind, tool,
-  main input, state, seconds, detail).
+  main input, state, seconds, detail). A turn is `working`, `waiting_for_confirmation` (paused with its
+  card, until the handler answers), `done`, `failed` or `stopped`. A new message is taken only when the
+  conversation's latest turn is `done`, `failed` or `stopped`.
+- **The handler check** (`signed_in_handler`) refuses a request that also carries the agent's key, with
+  401, as `docs/COPILOT.md` item 2 says.
 - **The handler's routes** (all need a signed-in handler, and only the conversation's own handler, 404
   otherwise): `create_conversation`, `list_conversations` (newest first), `get_conversation` (its turns
   and steps, with a turn still working 20 minutes after it started or was answered shown as `stopped`),
   `send_message` (409 while a turn is working; a waiting confirmation must be answered first), and
-  `answer_confirmation` (sign off or cancel). The last two record the turn and then ask the Copilot,
-  passing the handler's token; a Copilot that didn't take the turn marks it failed with the reason.
+  `answer_confirmation` (sign off or cancel). The last two record the turn, ask the Copilot with the
+  conversation's id as the session, passing the handler's token, and reply to the dashboard at once; a
+  Copilot that didn't take the turn marks it failed with the reason.
 - **The Copilot's routes** (the handler's sign-in, never the key; only for the handler's own working
   turn): `record_copilot_step`, `pause_turn` (the app fills the card from its records: claim, customer,
   amount, the agent's reason), `finish_turn` and `fail_turn`.
@@ -100,6 +119,8 @@ Done when:
 
 - [ ] Tests: a conversation's routes refuse another handler (404) and a request with only the agent's key
       (401)
+- [ ] Every handler's route refuses a valid sign-in sent with the agent's key (401); the existing
+      dashboard tests still pass
 - [ ] One turn at a time (409); a message refused while a confirmation waits
 - [ ] A turn shown as stopped after 20 minutes working; a waiting turn never is
 - [ ] The card is filled from the records, whatever the Copilot sends
@@ -112,6 +133,11 @@ Done when:
 
 ## Phase 2: the Copilot's graph and tools
 
+- **The gate, before anything else.** `start_turn` and `answer_confirmation` in `agent/copilot.py` each
+  begin by asking the app who is signed in (`get_signed_in_handler`) with the turn's token. If the app
+  refuses, the turn fails with that reason and nothing else happens: no model call, no memory, no tool.
+  The handler from that answer, never from the model or the message, is who the turn works for. Phase 3's
+  AgentCore app only calls these two functions.
 - **The graph** (`agent/copilot.py`): `remember` (look up the handler's memory for this message, shown as
   a card) → `model` → `tools` → back to `model`, or `confirm` → `tools`, or `save` → end. `confirm` holds
   the `interrupt()` before a sign-off; it checks in code that the handler may sign off that claim before
@@ -137,24 +163,27 @@ Done when:
 
 Done when:
 
+- [ ] A sign-in the app refuses ends the turn and its confirmation answer before any model call (the stub
+      model records no calls), with the app's reason on the turn
 - [ ] A stub-model test runs a lookup turn end to end through `TestClient(app)`, recording its steps
 - [ ] The pause answered by a freshly built Copilot on the same saved state pays once and repeats nothing
 - [ ] Cancel leaves the claim unpaid and asks what's next
 - [ ] Marcus asking to sign off gets the reason, with no card
 - [ ] A refusal from the app is passed on; the agent's key is never sent (a test checks the headers)
-- [ ] The token isn't in the checkpoints, steps, turns or memory events after a turn
+- [ ] The token isn't in the checkpoints, config, steps, turns, card, memory events, a failed turn's
+      reason or the captured logs, after a turn, a pause and a failure
 - [ ] `wait_for_run` makes no model call while it waits, and gives up at 15 minutes (with a stand-in clock)
 - [ ] The success criteria from an evaluation's measures, from a failed evaluation, and with nothing paid
       over the limit yet
-- [ ] The memory lookup and save use the signed-in handler's id, and store only the message and answer
+- [ ] The memory lookup and save use the signed-in handler's id as the actor and the conversation's id as
+      the session, store only the message and answer, and do nothing without the setting
 - [ ] `npm run check:python` passes; committed
 
 ## Phase 3: the Copilot as an AgentCore app
 
 - **`agent/copilot_entrypoint.py`**: `BedrockAgentCoreApp`, one entrypoint with `start_turn`
   (conversation, turn, message, token), `answer_confirmation` (conversation, turn, answer, token) and
-  `health`. Each asks the app who is signed in first and ends the turn there if the app refuses, before
-  any model call. It answers at once and works the turn as an async task, completed in a `finally`.
+  `health`, calling Phase 2's two functions, which hold the sign-in gate. It answers at once and works the turn as an async task, completed in a `finally`.
   Nothing at import; ready on the first request, fetching only `OPENROUTER_API_KEY` and `DATABASE_URL` on
   Runtime. No key on the laptop.
 - **`runtime/copilot.py`** runs it; `agentcore/agentcore.json` gets the runtime `copilot` beside `agent`,
