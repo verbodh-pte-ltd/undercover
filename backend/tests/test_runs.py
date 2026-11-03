@@ -3,7 +3,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import store
+from backend import agent_service, store
 from backend.main import app
 from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, headers
@@ -18,17 +18,20 @@ DECLINE = {
 }
 
 
+@pytest.fixture(autouse=True)
+def asked(monkeypatch):
+    """An agent that takes every piece of work, noting each payload."""
+    payloads = []
+    monkeypatch.setattr(agent_service, "send", payloads.append)
+    return payloads
+
+
 def new_run(kind="dispatch", eval_set=None, tiny=False, n=3):
-    body = {
-        "kind": kind,
-        "n": n,
-        "eval_set": eval_set,
-        "tiny": tiny,
-        "model": "openai/gpt-6-luna",
-        "effort": "low",
-        "version": 1,
-    }
-    return client.post("/api/runs", json=body)
+    """Start a run as a handler does."""
+    if kind == "dispatch":
+        return client.post("/api/dispatches", json={"n": n}, headers=headers())
+    body = {"n": n, "eval_set": eval_set, "tiny": tiny}
+    return client.post("/api/evaluations", json=body, headers=headers())
 
 
 def start(claim_id, run_id):
@@ -55,7 +58,7 @@ def test_no_run_yet():
     assert client.get("/api/runs/current", headers=headers()).json() is None
 
 
-def test_create_a_dispatch():
+def test_a_dispatch_is_created_on_the_current_version_then_the_agent_asked(asked):
     run = new_run().json()
     keys = ["kind", "n", "eval_set", "model", "effort", "version"]
     assert {k: run[k] for k in keys} == {
@@ -67,31 +70,41 @@ def test_create_a_dispatch():
         "version": 1,
     }
     assert (run["status"], run["claims"], run["finished_at"]) == ("running", [], None)
+    assert asked == [{"operation": "work_run", "run_id": run["run_id"]}]
     assert (
         client.get("/api/runs/current", headers=headers()).json()["run_id"]
         == run["run_id"]
     )
+    assert client.get(f"/api/runs/{run['run_id']}").json()["status"] == "running"
+
+
+def test_with_model_name_set_a_run_records_it_at_the_default_effort(monkeypatch):
+    monkeypatch.setenv("MODEL_NAME", "openrouter/free")
+    run = new_run().json()
+    assert (run["model"], run["effort"]) == ("openrouter/free", "default")
 
 
 def test_only_one_run_at_a_time():
     run_id = new_run().json()["run_id"]
-    assert new_run().status_code == 409
+    refused = new_run("evaluation", "held_out", tiny=True)
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "A dispatch is already running",
+    )
     client.post(f"/api/runs/{run_id}/finish")
     assert new_run().status_code == 200
 
 
-def test_only_an_evaluation_has_a_set():
-    assert new_run(eval_set="evaluation").status_code == 422
-    assert new_run(kind="evaluation").status_code == 422
-
-
-def test_stopped_runs_are_marked_when_the_service_starts():
+def test_a_failed_run_stops_only_itself_with_its_reason():
     run_id = new_run().json()["run_id"]
-    assert client.post("/api/runs/stop-running").json() == {"stopped": 1}
-    assert (
-        client.get("/api/runs/current", headers=headers()).json()["status"] == "stopped"
+    failure = {"reason": "The agent's work failed: RuntimeError: down"}
+    stopped = client.post(f"/api/runs/{run_id}/failed", json=failure).json()
+    assert (stopped["status"], stopped["stopped_reason"]) == (
+        "stopped",
+        failure["reason"],
     )
-    assert client.get("/api/runs/current", headers=headers()).json()["run_id"] == run_id
+    assert new_run().status_code == 200
+    assert client.post("/api/runs/999/failed", json=failure).status_code == 404
 
 
 def test_unknown_run_is_404():
@@ -329,11 +342,12 @@ def test_the_measures_match_ones_worked_out_by_hand():
 
 def test_evaluations_are_listed_newest_first_and_stopped_shows():
     first = new_run("evaluation", "held_out", tiny=True).json()["run_id"]
-    client.post("/api/runs/stop-running")
+    client.post(f"/api/runs/{first}/failed", json={"reason": "It failed"})
     second = new_run("evaluation", "evaluation", tiny=True).json()["run_id"]
     listed = client.get("/api/evaluations", headers=headers()).json()
     assert [e["run_id"] for e in listed] == [second, first]
     assert [e["status"] for e in listed] == ["running", "stopped"]
+    assert [e["stopped_reason"] for e in listed] == [None, "It failed"]
     assert client.get("/api/evaluations/999", headers=headers()).status_code == 404
 
 
@@ -347,7 +361,9 @@ def test_a_dispatch_is_not_an_evaluation():
 def test_new_operations_follow_the_api_rules():
     schema = client.get("/openapi.json").json()
     for path, method in [
-        ("/api/runs", "post"),
+        ("/api/runs/{run_id}", "get"),
+        ("/api/runs/{run_id}/failed", "post"),
+        ("/api/work/heard", "post"),
         ("/api/dispatches", "post"),
         ("/api/evaluations", "post"),
         ("/api/claims/{claim_id}/model-calls", "post"),
@@ -358,7 +374,8 @@ def test_new_operations_follow_the_api_rules():
         assert operation["description"].count("\n") == 0
     components = schema["components"]["schemas"]
     for name in [
-        "RunCreate",
+        "Failure",
+        "Heard",
         "DispatchStart",
         "EvaluationStart",
         "ModelCall",

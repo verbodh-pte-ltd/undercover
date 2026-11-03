@@ -3,8 +3,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import func, insert, select, update
 
-from backend import store
+from backend import agent_service, store
 from backend.main import app, changed_lines
+from backend.tests import records
 from backend.tests.signing import AGENT, headers
 
 client = TestClient(app, headers=AGENT)
@@ -13,19 +14,8 @@ CLAIM = Path("backend/instructions/claim.md").read_text(encoding="utf-8")
 RECIPE = Path("backend/instructions/recipe.md").read_text(encoding="utf-8")
 
 
-def new_run(
-    kind="evaluation", eval_set: str | None = "held_out", tiny=False, version=1
-):
-    body = {
-        "kind": kind,
-        "n": 3,
-        "eval_set": eval_set,
-        "tiny": tiny,
-        "model": "openai/gpt-6-luna",
-        "effort": "low",
-        "version": version,
-    }
-    return client.post("/api/runs", json=body)
+def new_run(eval_set="held_out", tiny=False):
+    return records.new_run("evaluation", eval_set, tiny)
 
 
 def add_version(version, instructions, kept, model="openai/gpt-6-luna"):
@@ -156,34 +146,31 @@ def test_a_diff_ignores_spacing_and_skips_unchanged_text():
     ]
 
 
-def test_a_dispatch_and_an_evaluation_record_their_version():
+def test_a_dispatch_and_an_evaluation_record_the_current_version(monkeypatch):
+    monkeypatch.setattr(agent_service, "send", lambda payload: None)
     add_version(2, "Version 2.", True)
-    dispatch = new_run("dispatch", None, version=2).json()
-    assert dispatch["version"] == 2
-    client.post("/api/runs/stop-running")
-    run_id = new_run(version=1).json()["run_id"]
+    add_version(3, "Version 3, under test.", None)
+    dispatch = client.post("/api/dispatches", json={"n": 2}, headers=headers())
+    assert dispatch.json()["version"] == 2
+    client.post(f"/api/runs/{dispatch.json()['run_id']}/finish")
+    body = {"n": 2, "eval_set": "held_out", "tiny": True}
+    run_id = client.post("/api/evaluations", json=body, headers=headers()).json()[
+        "run_id"
+    ]
     assert (
         client.get(f"/api/evaluations/{run_id}", headers=headers()).json()["version"]
-        == 1
+        == 2
     )
-    assert client.get("/api/evaluations", headers=headers()).json()[0]["version"] == 1
-
-
-def test_a_run_on_an_unknown_version_is_refused():
-    response = new_run(version=9)
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Version 9 not found"
 
 
 def test_a_runs_configuration_is_its_version_with_its_model_and_effort():
     add_version(2, "Version 2.", True)
     body = {"model": "openrouter/free", "effort": "default", "version": 2}
-    run = new_run("dispatch", None).json()
-    client.post("/api/runs/stop-running")
+    run_id = records.new_run()
     with store.engine().begin() as conn:
-        query = update(store.runs).where(store.runs.c.run_id == run["run_id"])
+        query = update(store.runs).where(store.runs.c.run_id == run_id)
         conn.execute(query.values(**body))
-    assert client.get(f"/api/runs/{run['run_id']}/configuration").json() == {
+    assert client.get(f"/api/runs/{run_id}/configuration").json() == {
         **body,
         "instructions": "Version 2.",
         "round_id": None,
@@ -191,7 +178,7 @@ def test_a_runs_configuration_is_its_version_with_its_model_and_effort():
 
 
 def test_scores_average_only_whole_held_out_evaluations_that_rounds_ran():
-    outside = new_run().json()["run_id"]
+    outside = new_run()
     client.post(f"/api/runs/{outside}/finish")
     assert (
         client.get("/api/configuration/versions", headers=headers()).json()[0][
@@ -206,7 +193,7 @@ def test_scores_average_only_whole_held_out_evaluations_that_rounds_ran():
         ("evaluation", False),
         ("held_out", False),
     ]:
-        run_id = new_run(eval_set=eval_set, tiny=tiny).json()["run_id"]
+        run_id = new_run(eval_set=eval_set, tiny=tiny)
         if eval_set == "held_out" and not tiny:
             counted.append(run_id)
             copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]

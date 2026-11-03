@@ -148,6 +148,7 @@ export const dispatchRun: Run = {
   status: "finished",
   started_at: "2026-10-30T08:00:00+00:00",
   finished_at: "2026-10-30T08:00:12+00:00",
+  stopped_reason: null,
   claims: [
     {
       claim_id: "CLM-1001",
@@ -197,6 +198,7 @@ export const evaluation: Evaluation = {
   effort: "low",
   status: "finished",
   started_at: "2026-10-30T09:00:00+00:00",
+  stopped_reason: null,
   decision_accuracy: 0.5,
   accuracy: 0.5,
   cost_of_mistakes: 1500,

@@ -2,7 +2,8 @@
 
 npm run dev serves `app` on the laptop, and runtime/main.py runs it on AgentCore
 Runtime. Nothing happens at import: the agent gets ready on its first request, once
-per process.
+per process. The app keeps one run or round going at a time and creates each one
+before it asks; the agent works it by its id and keeps no lock of its own.
 """
 
 import os
@@ -24,15 +25,14 @@ from agent import dispatcher, improver, improver_api, main
 
 # On Runtime the deployment names each credential's provider in AgentCore Identity.
 CREDENTIAL = re.compile(r"AGENTCORE_CREDENTIAL_(\w+)_NAME")
-CONFLICT = 409
 ACCEPTED = {"accepted": True}
+CLOSED = {"finished", "stopped"}
+# How often, in seconds, the agent tells the app it's still working a run or a round.
+HEARD_EVERY = 60
 
 app = BedrockAgentCoreApp()
 getting_ready = threading.Lock()
 ready = threading.Event()
-# One dispatch, evaluation or stretch of a round's work at a time; `doing` says which.
-running = threading.Lock()
-doing = {"what": ""}
 
 
 class Operation(BaseModel):
@@ -43,30 +43,20 @@ class Health(Operation):
     operation: Literal["health"]
 
 
-class StartDispatch(Operation):
-    operation: Literal["start_dispatch"]
-    n: int = Field(ge=1, le=25)
+class WorkRun(Operation):
+    operation: Literal["work_run"]
+    run_id: int
 
 
-class StartEvaluation(Operation):
-    operation: Literal["start_evaluation"]
-    n: int = Field(ge=1, le=25)
-    eval_set: Literal["evaluation", "held_out"]
-    tiny: bool
-
-
-class StartRound(Operation):
-    operation: Literal["start_round"]
+class WorkRound(Operation):
+    operation: Literal["work_round"]
     round_id: int
-    thread_id: str
 
 
-class AnswerProposal(Operation):
-    operation: Literal["answer_proposal"]
+class CarryRoundOn(Operation):
+    operation: Literal["carry_round_on"]
     round_id: int
-    decision: Literal["approve", "reject"]
-    reason: str
-    handler_id: str
+    proposal_id: int
 
 
 class ResumeClaim(Operation):
@@ -75,15 +65,12 @@ class ResumeClaim(Operation):
 
 
 Payload = Annotated[
-    Health
-    | StartDispatch
-    | StartEvaluation
-    | StartRound
-    | AnswerProposal
-    | ResumeClaim,
+    Health | WorkRun | WorkRound | CarryRoundOn | ResumeClaim,
     Field(discriminator="operation"),
 ]
 PAYLOAD: TypeAdapter[Payload] = TypeAdapter(Payload)
+# The run or round a piece of work holds: ("run", 7) or ("round", 3).
+Holding = tuple[Literal["run", "round"], int]
 
 
 def credentials() -> dict[str, str]:
@@ -107,15 +94,6 @@ def fetch(provider: str) -> str:
     return value()
 
 
-def stop_what_was_running() -> None:
-    """Mark any run or round this agent was working as stopped."""
-    # The backend may not be up yet; the next start then marks nothing. A round waiting
-    # for a handler stays open, and carries on from its checkpoint when answered.
-    with suppress(httpx.HTTPError), main.backend() as client:
-        client.post("/api/runs/stop-running")
-        client.post("/api/rounds/stop-working")
-
-
 def get_ready() -> None:
     """Once per process, on the first request: credentials, the key, the pool."""
     with getting_ready:
@@ -133,7 +111,6 @@ def get_ready() -> None:
             )
         if os.getenv("DATABASE_URL"):
             main.pool()
-        stop_what_was_running()
         ready.set()
 
 
@@ -154,33 +131,55 @@ def problems(exc: ValidationError) -> str:
     )
 
 
-def in_background(work: Callable[..., Any], *args: Any, holding: bool) -> dict:
-    """Do work on a thread of its own, registered with the app until it ends."""
+def tell_the_app(holding: Holding, done: threading.Event) -> None:
+    """Tell the app every minute that the work goes on, until it's done."""
+    kind, work_id = holding
+    while not done.wait(HEARD_EVERY):
+        # A word that doesn't arrive is made up by the next one.
+        with suppress(httpx.HTTPError), main.backend() as client:
+            client.post("/api/work/heard", json={"kind": kind, "work_id": work_id})
+
+
+def stop(holding: Holding, exc: Exception) -> None:
+    """Stop the run or round whose work failed, and nothing else."""
+    kind, work_id = holding
+    reason = f"The agent's work failed: {type(exc).__name__}: {exc}"
+    print(f"{kind.capitalize()} {work_id} stopped. {reason}")
+    if kind == "round":
+        improver_api.stop_round(work_id, reason)
+        return
+    with main.backend() as client:
+        client.post(f"/api/runs/{work_id}/failed", json={"reason": reason})
+
+
+def in_background(
+    work: Callable[..., Any], *args: Any, holding: Holding | None = None
+) -> dict:
+    """Do work on a thread of its own, registered with the app until it ends.
+
+    Work on a run or a round tells the app every minute while it goes on, and
+    stops its run or round if it fails.
+    """
     task = app.add_async_task(getattr(work, "__name__", "work"))
+    done = threading.Event()
 
     def go() -> None:
         try:
             work(*args)
+        except Exception as exc:
+            if holding is None:
+                raise
+            # Unreached, the app counts the work stopped once it has been quiet.
+            with suppress(httpx.HTTPError):
+                stop(holding, exc)
         finally:
-            if holding:
-                running.release()
+            done.set()
             app.complete_async_task(task)
 
+    if holding is not None:
+        threading.Thread(target=tell_the_app, args=(holding, done), daemon=True).start()
     threading.Thread(target=go, daemon=True).start()
     return ACCEPTED
-
-
-def take(what: str) -> bool:
-    """Take the one-run lock for some work, unless something is running."""
-    if not running.acquire(blocking=False):
-        return False
-    doing["what"] = what
-    return True
-
-
-def refusal() -> dict[str, str]:
-    """The answer while something else is running."""
-    return {"refused": f"{doing['what']} is already running"}
 
 
 def resume(claim_id: str) -> None:
@@ -198,53 +197,55 @@ def take_resume(claim_id: str) -> dict:
     refused = main.resume_refusal(claim_id)
     if refused:
         return {"refused": refused}
-    return in_background(resume, claim_id, holding=False)
+    return in_background(resume, claim_id)
 
 
-def work_run(body: dict[str, Any]) -> None:
-    """Create the run on the current version, then work it."""
+def work_run(run_id: int) -> dict:
+    """Work a dispatch or an evaluation the app has created, while it's running."""
     with main.backend() as client:
-        version = client.get("/api/configuration/current").json()
-        body = {
-            **body,
-            "version": version["version"],
-            "model": main.model_name(version),
-            "effort": main.effort(version),
-        }
-        run = client.post("/api/runs", json=body).json()
-    dispatcher.dispatch(run["run_id"], body["n"])
+        found = client.get(f"/api/runs/{run_id}")
+    if not found.is_success:
+        return {"refused": found.json()["detail"]}
+    run = found.json()
+    if run["status"] != "running":
+        return {"refused": f"Run {run_id} is {run['status']}"}
+    return in_background(dispatcher.dispatch, run_id, run["n"], holding=("run", run_id))
 
 
-def start(what: str, work: Callable[..., Any], *args: Any) -> dict:
-    """Start work that holds the one-run lock, or refuse while something is running."""
-    if not take(what):
-        return refusal()
-    return in_background(work, *args, holding=True)
+def closed(round_id: int) -> str | None:
+    """Why the agent can't work a round, when it's missing or closed; or None."""
+    found = improver_api.find_round(round_id)
+    if not found.is_success:
+        return found.json()["detail"]
+    stage = found.json()["stage"]
+    return f"Round {round_id} is {stage}" if stage in CLOSED else None
 
 
-def answer(proposal: AnswerProposal) -> dict:
-    """Record a handler's answer on a round's proposal, then carry the round on."""
-    if not take(f"Round {proposal.round_id}"):
-        return refusal()
-    body = proposal.model_dump(include={"decision", "reason", "handler_id"})
-    try:
-        recorded = improver_api.record_decision(proposal.round_id, body)
-    except httpx.HTTPError:
-        # Without this, the lock stays taken and every later start is refused.
-        running.release()
-        raise
-    if not recorded.is_success:
-        running.release()
-        detail = recorded.json()["detail"]
-        if recorded.status_code == CONFLICT:
-            return {"refused": detail}
-        raise HTTPException(recorded.status_code, detail)
+def work_round(round_id: int) -> dict:
+    """Work a new round the app has created, while it's open."""
+    why = closed(round_id)
+    if why:
+        return {"refused": why}
+    return in_background(improver.work_round, round_id, holding=("round", round_id))
+
+
+def carry_round_on(round_id: int, proposal_id: int) -> dict:
+    """Carry a round on from a handler's review of its proposal, read from the app."""
+    why = closed(round_id)
+    if why:
+        return {"refused": why}
+    found = improver_api.review(round_id, proposal_id)
+    if not found.is_success:
+        return {"refused": found.json()["detail"]}
+    review = found.json()
+    if review["decision"] is None:
+        return {"refused": f"Proposal {proposal_id} hasn't been reviewed"}
     return in_background(
         improver.answer,
-        proposal.round_id,
-        proposal.decision,
-        proposal.reason,
-        holding=True,
+        round_id,
+        review["decision"],
+        review["reason"],
+        holding=("round", round_id),
     )
 
 
@@ -253,16 +254,12 @@ def operate(operation: Payload) -> dict:
     match operation:
         case Health():
             return {"healthy": True}
-        case StartDispatch(n=n):
-            body = {"kind": "dispatch", "n": n, "eval_set": None, "tiny": False}
-            return start("A dispatch", work_run, body)
-        case StartEvaluation():
-            body = operation.model_dump(exclude={"operation"})
-            return start("An evaluation", work_run, {"kind": "evaluation", **body})
-        case StartRound(round_id=round_id):
-            return start(f"Round {round_id}", improver.work_round, round_id)
-        case AnswerProposal():
-            return answer(operation)
+        case WorkRun(run_id=run_id):
+            return work_run(run_id)
+        case WorkRound(round_id=round_id):
+            return work_round(round_id)
+        case CarryRoundOn(round_id=round_id, proposal_id=proposal_id):
+            return carry_round_on(round_id, proposal_id)
         case ResumeClaim(claim_id=claim_id):
             return take_resume(claim_id)
 

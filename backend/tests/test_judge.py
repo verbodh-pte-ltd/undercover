@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from backend import judge, main, store
 from backend.main import app
-from backend.tests.records import record_decision
+from backend.tests.records import new_run, record_decision
 from backend.tests.signing import AGENT, headers
 
 # The real grade, before the tests' stub takes its place.
@@ -105,16 +105,7 @@ def test_an_answer_without_its_levels_is_not_graded(monkeypatch):
 
 
 def evaluation(eval_set="evaluation", tiny=False):
-    body = {
-        "kind": "evaluation",
-        "n": 3,
-        "eval_set": eval_set,
-        "tiny": tiny,
-        "model": "openai/gpt-6-luna",
-        "effort": "low",
-        "version": 1,
-    }
-    run_id = client.post("/api/runs", json=body).json()["run_id"]
+    run_id = new_run("evaluation", eval_set, tiny)
     return run_id, client.get(f"/api/runs/{run_id}/claims").json()
 
 

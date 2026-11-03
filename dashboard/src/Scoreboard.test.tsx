@@ -60,6 +60,23 @@ it("shows an evaluation with no graded claims as not graded", async () => {
   expect(await screen.findByText("Not graded")).toBeDefined();
 });
 
+it("shows why a stopped evaluation stopped, in the list and on its page", async () => {
+  const stopped = {
+    ...evaluation,
+    status: "stopped" as const,
+    stopped_reason: "The agent stopped answering",
+  };
+  fakeBackend({ "/api/evaluations": [stopped], "/api/evaluations/7": stopped });
+  render(<App />);
+  expect(await screen.findByText("The agent stopped answering")).toBeDefined();
+  cleanup();
+  window.location.hash = "#/scoreboard/7";
+  render(<App />);
+  expect(
+    await screen.findByText(/Stopped: The agent stopped answering\./),
+  ).toBeDefined();
+});
+
 it("says when there are no evaluations yet", async () => {
   fakeBackend({ "/api/evaluations": [] });
   render(<App />);

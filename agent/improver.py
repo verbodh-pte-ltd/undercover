@@ -1,7 +1,7 @@
 """The improver: follows its recipe to propose better versions of the claim agent.
 
 A LangChain agent, as in labs/week2/week2day5.ipynb. It pauses for a handler on each
-proposal, and the agent's service carries a round on from the handler's answer.
+proposal, and the agent carries a round on from the handler's answer.
 """
 
 import contextvars
@@ -98,7 +98,7 @@ def propose_change(
         reasoning_effort: A reasoning effort allowed for that model
         reason: Why this change should improve the scores
     """
-    # This runs only once a handler has approved it, and the service has recorded it.
+    # This runs only once a handler has approved it, and the app has recorded it.
     version = improver_api.get_round(round_of(config))["version"]
     return f"A handler approved it as version {version}. Run the evaluation next."
 
@@ -248,7 +248,7 @@ def work_round(round_id: int) -> None:
 
 
 def answer(round_id: int, decision: str, reason: str) -> None:
-    """Carry the improver on from a handler's answer, which the service has recorded."""
+    """Carry the improver on from a handler's answer, which the app has recorded."""
     answered: dict[str, str] = {"type": decision}
     if decision == "reject":
         answered["message"] = reason
@@ -279,6 +279,3 @@ def carry_on(round_id: int, inputs: Any) -> None:
             inputs = Command(resume={"decisions": [refused]})
     except RoundStoppedError:
         return
-    except Exception as exc:  # a round that failed must not stay open and block
-        improver_api.stop_working_rounds()
-        print(f"Round {round_id} stopped: {type(exc).__name__}: {exc}")

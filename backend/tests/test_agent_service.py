@@ -196,15 +196,15 @@ def test_on_the_runtime_route_a_timeout_or_a_cut_off_answer_may_have_started(
     unknown()
 
 
-def test_start_dispatch_and_evaluation_send_their_operations(laptop):
+def test_a_dispatch_and_an_evaluation_ask_the_agent_to_work_their_runs(laptop):
     sent, _ = laptop
-    response = client.post("/api/dispatches", json={"n": 3}, headers=headers())
-    assert response.json() == {"status": "started"}
+    dispatch = client.post("/api/dispatches", json={"n": 3}, headers=headers())
+    client.post(f"/api/runs/{dispatch.json()['run_id']}/finish")
     body = {"n": 5, "eval_set": "held_out", "tiny": True}
-    client.post("/api/evaluations", json=body, headers=headers())
+    evaluation = client.post("/api/evaluations", json=body, headers=headers())
     assert [s["json"] for s in sent] == [
-        {"operation": "start_dispatch", "n": 3},
-        {"operation": "start_evaluation", **body},
+        {"operation": "work_run", "run_id": dispatch.json()["run_id"]},
+        {"operation": "work_run", "run_id": evaluation.json()["run_id"]},
     ]
 
 

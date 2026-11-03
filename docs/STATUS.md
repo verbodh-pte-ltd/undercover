@@ -15,9 +15,9 @@ pays, ready for Lambda (`npm run build`, the backend serving the dashboard's bui
 connections for Lambda), and the live checks. Nothing is deployed.
 
 Sending claims back and the agent on AgentCore Runtime (`docs/PLAN_RUNTIME.md`, from
-`docs/RUNTIME.md`): phases 1 to 3 are built: the claim approval comes back, sign off or send back, and the
-agent as an AgentCore app. After pulling this, run `npm run seed` once: the `claims` table has a new column and there is a
-new `sent_back` table.
+`docs/RUNTIME.md`): phases 1 to 4 are built: the claim approval comes back, sign off or send back, the
+agent as an AgentCore app, and the app keeping one run at a time. After pulling this, run `npm run seed` once: there are new columns and the new `sent_back` and
+`agent_work` tables, and the store doesn't add columns to old tables.
 
 - The claim graph saves a claim to memory as its last step (`agent` → `settle` → `pay` or
   `sign_off` → `remember`), so a payout over the limit, or a payment the Gateway refused, is saved
@@ -60,7 +60,11 @@ new `sent_back` table.
 - The agent is an AgentCore app (`agent/entrypoint.py`) in place of
 its FastAPI service, which runs the same way on the laptop (port 8080) and, through the platform team's
 `runtime/main.py`, on AgentCore Runtime, and the app reaches it over HTTP or, with
-`UNDERCOVER_AGENT_RUNTIME` set, with boto3. Nothing is deployed.
+`UNDERCOVER_AGENT_RUNTIME` set, with boto3.
+- The app keeps one run or round going at a time in its `agent_work` row, creates the runs and rounds
+  and records the reviews itself, and asks the agent to work them by id (`work_run`, `work_round`,
+  `carry_round_on`). Work the app hasn't heard from for five minutes counts as stopped, with "The agent
+  stopped answering". Nothing is deployed.
 
 The context layer, memory and the Gateway (`docs/PLAN_CONTEXT.md`, from `docs/CONTEXT.md`) are built
 on this machine, phases 1 to 6; phase 7 (the Gateway, the Policy and Memory on AWS, with RDS and
@@ -247,12 +251,31 @@ What changed for it, in the look only:
     and the handlers. The sections of the two documents are the context layer's (`context/server.py`).
   - Write routes: start a claim in a run or none, record steps, record a decision, pay, sign off,
     release a claim that failed, and record a model call's tokens and cost or a stretch of work.
-  - Runs are dispatches or evaluations: `create_run`, `list_run_claims` (claims in progress first, then
-    waiting claims oldest submitted first, or an evaluation's copies), `finish_run`,
-    `stop_running_runs` and `get_current_run` (the latest dispatch, with its claims, summary, model cost
-    and time). Only one runs at a time. Each run records the configuration version it works to
-    (`version`, 404 for one that doesn't exist), and `get_run_configuration` gives a run's
-    instructions, model and effort.
+  - Runs are dispatches or evaluations, created by the app when a handler starts one (below):
+    `get_run` (the agent's read of one run), `list_run_claims` (claims in progress first, then waiting
+    claims oldest submitted first, or an evaluation's copies), `finish_run`, `stop_failed_run` (the
+    agent stops a run its work on failed, with the reason) and `get_current_run` (the latest dispatch,
+    with its claims, summary, model cost and time). Each run records the configuration version it works
+    to, and `get_run_configuration` gives a run's instructions, model and effort. A stopped run or
+    round keeps why in `stopped_reason`, which the dashboard shows.
+  - One piece of the agent's work at a time (`backend/slot.py`): the one-row table `agent_work` says
+    what's going (`kind` run or round, `work_id`), when the app started it and when it last heard from
+    the agent (`heard_at`). `start_dispatch`, `start_evaluation`, `start_round`, `approve_proposal` and
+    `reject_proposal` take it with one conditional update of that row on what was read, checking the row
+    count, in the same short transaction that creates the run (with an evaluation's copies), creates the
+    round or records the review, committed before the app asks the agent. Busy, the start gets a 409
+    naming what's going ("A dispatch is already running", "Round 3 is already running"). Work not heard
+    from for five minutes counts as stopped: the next start marks that run, or that round with its
+    running evaluation, stopped with "The agent stopped answering" and goes ahead. The agent sends
+    `record_work_heard` every minute while it works; a round's word covers its evaluations, which never
+    take the slot. Finishing a run, a round waiting for a handler's review, finishing or stopping a round
+    frees the slot. A resumed claim never touches it.
+  - The app then asks the agent to work it by id: `{"operation": "work_run", "run_id": ...}`,
+    `{"operation": "work_round", "round_id": ...}` or
+    `{"operation": "carry_round_on", "round_id": ..., "proposal_id": ...}`. When the agent didn't take
+    it (`NotTaken`), the app undoes its part: the run or the new round is stopped with the reason, a
+    review is cleared (the version or recipe it approved removed) so the proposal waits again, and the
+    slot is freed. A timeout leaves the work going.
   - Sign-in: `backend/auth.py` checks a Supabase access token against the public keys at
     `{VITE_SUPABASE_URL}/auth/v1/.well-known/jwks.json` with PyJWT's `PyJWKClient`, audience
     `authenticated`, and the backend finds the handler by the token's email. `GET /api/handlers/me`
@@ -277,15 +300,15 @@ What changed for it, in the look only:
     `default` and price 0 when it is set) and the latest change to each. `PUT /api/settings`
     (`change_settings`) takes every setting, checks each value, records who changed which and when
     in `setting_changes`, and answers 403 for a handler who can't sign off over the limit.
-  - `start_dispatch` and `start_evaluation` ask the agent through `backend/agent_service.py`, which
-    sends one payload naming the operation and its inputs, such as
-    `{"operation": "start_dispatch", "n": 25}`: over HTTP to `/invocations` at `UNDERCOVER_AGENT`
+  - The app asks the agent through `backend/agent_service.py`, which sends one payload naming the
+    operation and its inputs, such as `{"operation": "work_run", "run_id": 12}`: over HTTP to
+    `/invocations` at `UNDERCOVER_AGENT`
     (default `http://127.0.0.1:8080`) with `Authorization: Bearer <UNDERCOVER_API_KEY>` and a 10-second
     timeout, or, with `UNDERCOVER_AGENT_RUNTIME` set to the runtime's ARN, with boto3's
     `invoke_agent_runtime` in the app's region, in a new session (an id of 43 characters), one attempt,
     5 seconds to connect and 20 to read. The agent didn't take the work when the request never
     connected (503), it got an error answer (502) or the agent refused (409, with the reason): that's
-    `NotTaken`, and a start of a round then deletes the round. A timeout or an answer cut off may have
+    `NotTaken`, and the app undoes what it began. A timeout or an answer cut off may have
     started the work, so nothing is changed and the handler gets a 504 saying to reload the page.
   - An evaluation works copies of its set's claims, with ids such as `E3-CLM-1001`, out of the queue.
     Nobody signs off a copy. `list_evaluations` and `get_evaluation` score each one against
@@ -304,21 +327,23 @@ What changed for it, in the look only:
     `MODEL_NAME` set the judge isn't called and every claim shows as not graded. A version's held-out
     scores include the grade. `finish_run` finishes only a run still running, and only that call
     grades it, so a second call pays the judge nothing and a stopped run isn't graded.
-  - Rounds of the improver (`rounds`, with each approval or rejection in `round_events`). A handler who
-    can sign off over the limit starts (`POST /api/rounds`), stops (`POST /api/rounds/{id}/stop`),
-    approves (`/approve`) or rejects (`/reject`, with a reason) one; anyone else gets 403 saying why.
-    Only one round is open at a time. A start makes the round, with a copy of the settings, the recipe
-    version, the current version and a new thread id, and asks the agent (`start_round`); work the
-    agent didn't take leaves no round. An approval or rejection is passed to the agent
-    (`answer_proposal`) with the handler, and the backend records nothing of its own.
+  - Rounds of the improver (`rounds`, with each proposal and its approval or rejection in
+    `round_events`, whose id is the proposal's). A handler who can sign off over the limit starts
+    (`POST /api/rounds`), stops (`POST /api/rounds/{id}/stop`), approves (`/approve`) or rejects
+    (`/reject`, with a reason) one; anyone else gets 403 saying why. Only one round is open at a time.
+    A start makes the round, with a copy of the settings, the recipe version, the current version and a
+    new thread id, and asks the agent (`work_round`); a round the agent didn't take is stopped with the
+    reason. An approval or rejection is recorded by the app (an approved change becomes a version under
+    test, an approved recipe the next recipe), and the agent reads it (`get_proposal_review`) when it
+    carries the round on (`carry_round_on`). The agent stops a round its work on failed
+    (`stop_failed_round`), with its running evaluation.
     `GET /api/rounds` and `GET /api/rounds/{id}` show each round: its stage, the proposal waiting with
     its diff, the version tried, the verdict and why, the held-out scores before and after, who approved
     or rejected what, its runs, what it spent and what's left, and its `progress` in the first
     evaluations or the evaluations: how many it has started of those the stage needs (the first
     evaluations need only what earlier rounds left the current version short of). The service records a round with the
     agent's key: its stage, a proposed change (422 for a model or effort outside the models allowed) or
-    recipe, the handler's decision (an approved change becomes a version under test, an approved recipe
-    the next recipe), the improver's own model calls, and its whole-set evaluations
+    recipe, the improver's own model calls, and its whole-set evaluations
     (`POST /api/rounds/{id}/evaluations`, on the round's versions only, with the round's agents at once,
     on the version's own model and effort, or `MODEL_NAME` at `default`).
     `POST /api/rounds/{id}/verdict` applies the rule in `backend/rule.py` (the lab's): kept when the
@@ -361,9 +386,7 @@ What changed for it, in the look only:
     held-out scores (the averages of the whole held-out evaluations rounds ran on it; none until the
     improver runs rounds) and, from `difflib`, the lines it changed from the version before. The
     improver's recipe is kept in versions in `recipes`; `GET /api/recipes` (`list_recipes`) lists
-    them newest first with the lines each changed. When the agent gets ready, on its first request,
-    it stops any round at work (`POST /api/rounds/stop-working`); a round waiting for a handler stays
-    open.
+    them newest first with the lines each changed.
 - `backend/instructions/claim.md` and `backend/instructions/recipe.md`: version 1 of the claim agent's
   instructions (on `openai/gpt-6-luna` at low effort) and of the improver's recipe (the lab's first),
   which seeding copies into the database.
@@ -403,24 +426,24 @@ What changed for it, in the look only:
     the service is already working.
   - The agent's AgentCore app (`agent/entrypoint.py`, `app = BedrockAgentCoreApp()` with one
     entrypoint; `npm run dev` serves it with uvicorn on 127.0.0.1:8080 with reload, and
-    `runtime/main.py` runs it with `app.run()`). Each payload names an operation and carries the inputs
-    the service's routes took: `start_dispatch` (`n`), `start_evaluation` (`n`, `eval_set`, `tiny`),
-    `start_round` (`round_id`, `thread_id`), `answer_proposal` (`round_id`, `decision`, `reason`,
-    `handler_id`), `resume_claim` (`claim_id`) and `health`. Pydantic checks each payload, and an unknown
-    operation or an input missing, wrong or extra gets a 400 naming it. Each answers at once,
-    `{"accepted": true}` or `{"refused": "<reason>"}` (a dispatch, an evaluation or a round's work
-    while another runs), registers its work with `app.add_async_task` before answering and completes
+    `runtime/main.py` runs it with `app.run()`). Each payload names an operation and carries its
+    inputs: `work_run` (`run_id`), `work_round` (`round_id`), `carry_round_on` (`round_id`,
+    `proposal_id`), `resume_claim` (`claim_id`) and `health`. Pydantic checks each payload, and an
+    unknown operation or an input missing, wrong or extra gets a 400 naming it. Each answers at once,
+    `{"accepted": true}` or `{"refused": "<reason>"}` (a run that isn't running, a round that's missing
+    or closed, a proposal with no review), registers its work with `app.add_async_task` before answering and completes
     it in a `finally`, so `/ping` says `HealthyBusy` while work goes and `Healthy` once it has finished
     or failed. `health` answers `{"healthy": true}`. Nothing happens at import: the first request gets
     the agent ready, once per process behind a lock, and a failure answers the error and the next
     request tries again. On AgentCore Runtime (any `AGENTCORE_CREDENTIAL_<NAME>_NAME` set) it reseeds
     `random` and fetches each credential from AgentCore Identity with `requires_api_key` into `<NAME>`;
-    then it checks it has `UNDERCOVER_API_KEY`, opens the pool when there's a `DATABASE_URL`, and marks
-    any run or round left running as stopped. Off Runtime every operation but `health` needs
+    then it checks it has `UNDERCOVER_API_KEY` and opens the pool when there's a `DATABASE_URL`; it
+    stops nothing. Off Runtime every operation but `health` needs
     `Authorization: Bearer <UNDERCOVER_API_KEY>` (401 otherwise); on Runtime AWS checks the caller, so
-    no key is asked for. A dispatch or an evaluation runs on the current version, recording its model
-    and effort (`default` with `MODEL_NAME`); `resume_claim` finishes a signed-off claim's paused
-    thread beside anything else.
+    no key is asked for. The agent keeps no lock of its own: the app's slot keeps one run or round at a
+    time. While it works a run or a round it posts `record_work_heard` every minute (`HEARD_EVERY`), and
+    when that work fails it stops only that run or round, by id, with the error as the reason.
+    `resume_claim` finishes a signed-off claim's paused thread beside anything else.
   - The improver (`agent/improver.py`) is a LangChain `create_agent` on `openai/gpt-6-luna` at medium
     effort (or `MODEL_NAME`), with the lab's four tools (`read_results`, `propose_change`,
     `run_evaluation`, `propose_recipe`), which reach the backend only through `agent/improver_api.py`.
@@ -429,13 +452,12 @@ What changed for it, in the look only:
     Parallel tool calls are off, at most 30 model calls each stretch of work, and each call's cost is
     recorded with its round. A proposal the backend refuses (a model not allowed) goes back to it as a
     rejection without reaching a handler.
-  - A round runs in the agent (`start_round`, `answer_proposal`): the first
+  - A round runs in the agent (`work_round`, `carry_round_on`): the first
     evaluations the current version lacks (1 on the evaluation set, 2 on the held-out), then the
-    improver until it pauses. A handler's answer is recorded with the backend, then the improver
+    improver until it pauses. The agent reads a handler's review from the app, then the improver
     carries on; after an approved change `run_evaluation` runs the version once and twice through the
-    dispatcher, in a fresh `contextvars.Context`, and asks for the verdict. Each stretch holds the
-    one-run lock and lets it go at a pause; a start or an answer while something else runs is refused,
-    naming it. A stopped round makes no more model calls; a round that fails is stopped.
+    dispatcher, in a fresh `contextvars.Context`, and asks for the verdict. A stopped round makes no
+    more model calls; a round that fails is stopped with the reason.
   - Each claim is traced in Langfuse in a session named after its thread, tagged `run-<run_id>`, and
     `round-<round_id>` in a round's evaluations. The improver's work is in one session, `Round <id>`.
   - `uv run -m agent CLM-1001` works named claims with no run.
@@ -476,7 +498,9 @@ What changed for it, in the look only:
 - `e2e/`: Playwright tests, one at a time, on their own servers (backend :8001, dashboard :5174) and
   their own SQLite database, `e2e/e2e.db`, deleted at the start of each run. A stand-in for the agent's
   AgentCore app on :8003 (`e2e/agent-stand-in.mjs`) answers `/ping`, takes every payload posted to
-  `/invocations` and records it; the test backend has `UNDERCOVER_AGENT_RUNTIME` blank. A
+  `/invocations` and records it, and with the app's address and the agent's key it finishes each run
+  it's given (an evaluation's copies referred first), so later starts aren't refused; the specs play a
+  round out through the app and stop it. The test backend has `UNDERCOVER_AGENT_RUNTIME` blank. A
   stand-in for Supabase Auth on :8004 (`e2e/auth-stand-in.mjs`) signs tokens with its own key,
   serves its public key and answers CORS preflights; every spec signs in first. A stand-in for the
   judge's endpoint on :8005 (`e2e/judge-stand-in.mjs`) gives every claim a B at 2.2. The test
@@ -484,8 +508,10 @@ What changed for it, in the look only:
   the backend as the agent's side would; `asHandler` there signs in through the stand-in for a read
   outside the page.
   `e2e/rounds.spec.ts` starts a round on the dashboard, records a proposal through the backend's
-  routes as the agent would, approves it on the page, checks the approval reached the
-  stand-in with the handler, records it, and stops the round. The specs pass in any order.
+  routes as the agent would, approves it on the page, checks the app recorded it and asked the
+  stand-in to carry the round on, and stops the round. `e2e/queue.spec.ts` checks a dispatch the app
+  created reaches the stand-in by its id, and that a start while a round is going is refused on the
+  page with the reason. The specs pass in any order.
 
 ## Run it
 
@@ -554,8 +580,6 @@ environment of its own, so `.venv` is left as it is. `npm run check:runtime` doe
 - The dispatch summary counts no bucket for a sent-back claim.
 - When the call to the agent after a sign-off fails or times out, the app logs a warning and the
   sign-off and the payment stand, but the agent never resumes the claim, so it isn't saved to memory.
-- Until phase 4 of `docs/PLAN_RUNTIME.md`: the agent marks runs and rounds left running as stopped
-  when it gets ready, on its first request, so if that request is a start of a round (which the
-  backend has already made), the round is stopped at once. Start it again. The agent still keeps one
-  piece of work at a time in its own memory, which on Runtime holds only within one session.
+- Phase 4's live check (a dispatch at N=25 on `npm run dev`, and a second start refused on the
+  dashboard) is in phase 5.
 - Real payments and messages to customers, as `docs/SPEC.md` says.

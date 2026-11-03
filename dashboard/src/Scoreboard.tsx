@@ -152,6 +152,9 @@ export function Scoreboard() {
                         {runStates[e.status]}
                       </span>
                     </div>
+                    {e.stopped_reason && (
+                      <div className="muted small">{e.stopped_reason}</div>
+                    )}
                   </td>
                   <td>
                     {setLabels[e.eval_set]}
@@ -238,10 +241,12 @@ export function EvaluationView({ runId }: Readonly<{ runId: string }>) {
         {setLabels[evaluation.eval_set]}
         {evaluation.tiny ? ", tiny" : ""}, {evaluation.n} claim agents at once,{" "}
         {evaluation.model}, version {evaluation.version}.{" "}
-        {runStates[evaluation.status]}. {percent(evaluation.accuracy)} right,{" "}
-        {misses} missed, cost of mistakes {money(evaluation.cost_of_mistakes)}.
-        Grade {grade(evaluation.grade)}, judge's cost{" "}
-        {cost(evaluation.judge_cost)}.
+        {runStates[evaluation.status]}
+        {evaluation.stopped_reason
+          ? `: ${evaluation.stopped_reason}`
+          : ""}. {percent(evaluation.accuracy)} right, {misses} missed, cost of
+        mistakes {money(evaluation.cost_of_mistakes)}. Grade{" "}
+        {grade(evaluation.grade)}, judge's cost {cost(evaluation.judge_cost)}.
       </p>
       <div className="panel table-wrap">
         <table>

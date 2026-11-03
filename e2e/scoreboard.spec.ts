@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { AGENT, recordDecision } from "./agent";
+import { AGENT, asHandler } from "./agent";
 import { signIn } from "./sign-in";
 
 test.beforeEach(async ({ page }) => {
@@ -10,40 +10,33 @@ test("the scoreboard shows an evaluation played out through the API", async ({
   page,
   request,
 }) => {
-  // The tests run one at a time; finish any run an earlier test left going.
-  await request.post("/api/runs/stop-running", { headers: AGENT });
-  const created = await request.post("/api/runs", {
-    headers: AGENT,
-    data: {
-      kind: "evaluation",
-      n: 5,
-      eval_set: "held_out",
-      tiny: true,
-      model: "stand-in",
-      effort: "none",
-      version: 1,
-    },
+  // The app creates the run and its copies; the agent's stand-in refers each copy and
+  // finishes the run, and the judge's stand-in grades it.
+  const created = await request.post("/api/evaluations", {
+    headers: await asHandler(request),
+    data: { n: 5, eval_set: "held_out", tiny: true },
   });
+  expect(created.ok()).toBe(true);
   const { run_id } = (await created.json()) as { run_id: number };
   const run = String(run_id);
-  const copies = (await (
-    await request.get(`/api/runs/${run}/claims`, { headers: AGENT })
-  ).json()) as string[];
+  await expect
+    .poll(
+      async () =>
+        (
+          (await (
+            await request.get(`/api/runs/${run}`, { headers: AGENT })
+          ).json()) as { status: string }
+        ).status,
+    )
+    .toBe("finished");
+  const copies = (
+    (await (
+      await request.get(`/api/evaluations/${run}`, {
+        headers: await asHandler(request),
+      })
+    ).json()) as { claims: { claim_id: string }[] }
+  ).claims.map((c) => c.claim_id);
   expect(copies).toHaveLength(5);
-
-  for (const copy of copies) {
-    await request.post(`/api/claims/${copy}/start`, {
-      headers: AGENT,
-      data: { run_id },
-    });
-    await recordDecision(request, copy, {
-      decision: "refer",
-      payout: 0,
-      reason: "Needs a handler.",
-      policy_section: "Manual 2",
-    });
-  }
-  await request.post(`/api/runs/${run}/finish`, { headers: AGENT });
 
   await page.goto("/#/scoreboard");
   const row = page.getByRole("row", { name: new RegExp(`Evaluation ${run}`) });
@@ -55,7 +48,7 @@ test("the scoreboard shows an evaluation played out through the API", async ({
 
   await row.getByRole("link", { name: `Evaluation ${run}` }).click();
   await expect(page.locator("tbody tr")).toHaveCount(5);
-  await expect(page.getByText(/stand-in, version 1\./)).toBeVisible();
+  await expect(page.getByText(/openai\/gpt-6-luna, version 1\./)).toBeVisible();
   // The table names each copy by the claim it copies, such as CLM-1001 for E6-CLM-1001.
   const original = copies[0].slice(copies[0].indexOf("-") + 1);
   const first = page.getByRole("row", { name: new RegExp(original) });

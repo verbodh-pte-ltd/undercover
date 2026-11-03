@@ -87,6 +87,21 @@ it("shows a dispatch that has started no claims yet", async () => {
   expect(screen.queryByText(/approved,/)).toBeNull();
 });
 
+it("shows why a dispatch stopped", async () => {
+  fakeBackend({
+    "/api/claims": [summary],
+    "/api/runs/current": {
+      ...dispatchRun,
+      status: "stopped",
+      stopped_reason: "The agent stopped answering",
+    },
+  });
+  render(<App />);
+  expect(
+    await screen.findByText("Why it stopped: The agent stopped answering"),
+  ).toBeDefined();
+});
+
 it("starts a dispatch with the chosen number of claim agents", async () => {
   const fetchMock = fakeBackend({
     "/api/claims": [summary],

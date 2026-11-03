@@ -7,8 +7,8 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/#/improvement");
 });
 
-// The agent's stand-in accepts the start and the approval; the test records what the
-// agent's service would, through the backend's own routes.
+// The app creates the round and records the approval; the agent's stand-in accepts both,
+// and the test records what the agent would, through the backend's own routes.
 test("a handler approves a proposal played out through the API", async ({
   page,
   request,
@@ -18,11 +18,15 @@ test("a handler approves a proposal played out through the API", async ({
     .getByRole("dialog", { name: "Start a round?" })
     .getByRole("button", { name: "Start a round" })
     .click();
-  const [round] = (await (
-    await request.get("/api/rounds", { headers: await asHandler(request) })
-  ).json()) as {
-    round_id: number;
-  }[];
+  // Earlier specs may have left stopped rounds; the new one is open.
+  const open = async () =>
+    (
+      (await (
+        await request.get("/api/rounds", { headers: await asHandler(request) })
+      ).json()) as { round_id: number; stage: string }[]
+    ).filter((r) => r.stage !== "stopped" && r.stage !== "finished");
+  await expect.poll(async () => (await open()).length).toBe(1);
+  const [round] = await open();
   const id = String(round.round_id);
   await expect(
     page.getByRole("heading", { name: `Round ${id}` }),
@@ -61,26 +65,20 @@ test("a handler approves a proposal played out through the API", async ({
     .getByRole("button", { name: "Approve" })
     .click();
 
-  // The backend passes the approval and the signed-in handler to the agent.
-  const answer = {
-    operation: "answer_proposal",
-    round_id: Number(id),
-    decision: "approve",
-    reason: "",
-    handler_id: "HND-01",
-  };
-  await expect
-    .poll(async () => {
-      const calls = (await (
+  // The app records the approval, then asks the agent to carry the round on from it.
+  const calls = async () =>
+    (
+      (await (
         await request.get("http://127.0.0.1:8003/calls")
-      ).json()) as string[];
-      return calls.map((c) => JSON.parse(c) as unknown);
-    })
-    .toContainEqual(answer);
-  await request.post(`/api/rounds/${id}/decision`, {
-    headers: AGENT,
-    data: { decision: "approve", handler_id: "HND-01", reason: "" },
-  });
+      ).json()) as string[]
+    ).map((c) => JSON.parse(c) as { operation: string; round_id?: number });
+  await expect
+    .poll(async () =>
+      (await calls()).filter(
+        (c) => c.operation === "carry_round_on" && c.round_id === Number(id),
+      ),
+    )
+    .toHaveLength(1);
   await expect(
     page.getByText(/Dana Whitfield approved the change/),
   ).toBeVisible();

@@ -7,7 +7,7 @@ from sqlalchemy import update
 
 from backend import agent_service, store
 from backend.main import app
-from backend.tests.records import record_decision
+from backend.tests.records import new_run, record_decision
 from backend.tests.signing import AGENT, MARCUS, headers
 
 client = TestClient(app, headers=AGENT)
@@ -48,16 +48,7 @@ def claim(claim_id):
 
 
 def dispatch():
-    body = {
-        "kind": "dispatch",
-        "n": 3,
-        "eval_set": None,
-        "tiny": False,
-        "model": "stub",
-        "effort": "none",
-        "version": 1,
-    }
-    return client.post("/api/runs", json=body).json()["run_id"]
+    return new_run()
 
 
 def heard(claim_id, minutes_ago):
@@ -142,16 +133,7 @@ def test_a_send_back_is_refused_for_a_claim_not_waiting_for_sign_off():
 
 
 def test_a_send_back_is_refused_for_an_evaluations_copy():
-    body = {
-        "kind": "evaluation",
-        "n": 1,
-        "eval_set": "evaluation",
-        "tiny": True,
-        "model": "stub",
-        "effort": "none",
-        "version": 1,
-    }
-    run_id = client.post("/api/runs", json=body).json()["run_id"]
+    run_id = new_run("evaluation", "evaluation", tiny=True, n=1)
     copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
     decide(copy_id)
     refused = send_back(copy_id)

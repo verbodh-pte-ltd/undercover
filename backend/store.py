@@ -155,6 +155,8 @@ runs = Table(
     # ran it, if any.
     Column("version", Integer, nullable=False),
     Column("round_id", Integer),
+    # Why a stopped run stopped, when the app or the agent says.
+    Column("stopped_reason", Text),
 )
 run_claims = Table(
     "run_claims",
@@ -290,18 +292,34 @@ rounds = Table(
     Column("started_at", String, nullable=False),
     Column("stopped_by", String),
     Column("finished_at", String),
+    Column("stopped_reason", Text),
 )
-# Each approval or rejection of a round's proposals, with the handler and the reason.
+# Each of a round's proposals from when the improver makes it, as JSON; its id is the
+# proposal's. A handler's review fills in the decision, the handler, the reason and
+# when, all None until then.
 round_events = Table(
     "round_events",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("round_id", Integer, nullable=False),
     Column("kind", String, nullable=False),
-    Column("decision", String, nullable=False),
-    Column("handler_id", String, nullable=False),
-    Column("reason", Text, nullable=False),
-    Column("decided_at", String, nullable=False),
+    Column("proposal", Text),
+    Column("decision", String),
+    Column("handler_id", String),
+    Column("reason", Text),
+    Column("decided_at", String),
+)
+# The one piece of the agent's work going: a run or a round (kind and work_id), when
+# the app started it and when it last heard from the agent. One row, id 1, with kind
+# None while nothing is going.
+agent_work = Table(
+    "agent_work",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("kind", String),
+    Column("work_id", Integer),
+    Column("started_at", String),
+    Column("heard_at", String),
 )
 EVAL_SETS = {
     "evaluation": ("claims.json", "evals/decisions.json"),
@@ -399,6 +417,7 @@ def seed(conn: Connection) -> None:
     is in neither evaluation set.
     """
     conn.execute(insert(handlers), load("handlers.json"))
+    conn.execute(insert(agent_work).values(id=1))
     seed_plans(conn)
     seed_documents(conn)
     seed_settings(conn)

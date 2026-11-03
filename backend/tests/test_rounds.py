@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from backend import agent_service, judge, rule, store
 from backend.main import app
-from backend.tests.records import record_decision
+from backend.tests.records import new_run, record_decision
 from backend.tests.signing import AGENT, MARCUS, headers
 from backend.tests.test_settings import LAB
 
@@ -100,8 +100,7 @@ def first_evaluations(round_id, right=20):
 
 def propose_and_approve(round_id, change=CHANGE):
     client.post(f"/api/rounds/{round_id}/proposed-change", json=change)
-    answer = {"decision": "approve", "handler_id": "HND-01", "reason": ""}
-    return client.post(f"/api/rounds/{round_id}/decision", json=answer).json()
+    return client.post(f"/api/rounds/{round_id}/approve", headers=headers()).json()
 
 
 def current():
@@ -187,12 +186,10 @@ def test_only_a_handler_who_can_sign_off_over_the_limit_acts_on_a_round(service)
     assert client.get("/api/rounds", headers=headers()).json() == []
 
 
-def test_a_round_starts_in_the_agents_service_one_at_a_time(service):
+def test_the_app_creates_a_round_then_asks_the_agent_one_at_a_time(service):
     round_id = start_round()
     found = client.get(f"/api/rounds/{round_id}").json()
-    assert service == [
-        ("start_round", {"round_id": round_id, "thread_id": found["thread_id"]})
-    ]
+    assert service == [("work_round", {"round_id": round_id})]
     assert found["thread_id"].startswith("round-")
     assert (found["stage"], found["version_before"], found["recipe_version"]) == (
         "first_evaluations",
@@ -209,22 +206,30 @@ def test_a_round_starts_in_the_agents_service_one_at_a_time(service):
     assert start_round() == round_id + 1
 
 
-def test_a_refused_start_leaves_no_round(monkeypatch):
-    refusal = FakeResponse(200, {"refused": "A dispatch is running"})
+def test_a_refused_start_stops_the_round_with_the_reason(monkeypatch):
+    refusal = FakeResponse(200, {"refused": "Round 1 is stopped"})
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: refusal)
     response = client.post("/api/rounds", headers=headers())
     assert (response.status_code, response.json()["detail"]) == (
         409,
-        "A dispatch is running",
+        "Round 1 is stopped",
     )
-    assert client.get("/api/rounds", headers=headers()).json() == []
+    [found] = client.get("/api/rounds", headers=headers()).json()
+    assert (found["stage"], found["stopped_reason"]) == (
+        "stopped",
+        "Round 1 is stopped",
+    )
+    monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: ACCEPTED)
+    assert start_round() == found["round_id"] + 1
 
 
-def test_a_start_the_agent_answers_with_an_error_leaves_no_round(monkeypatch):
+def test_a_start_the_agent_answers_with_an_error_stops_the_round(monkeypatch):
     error = FakeResponse(500, {"error": "boom"})
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: error)
     assert client.post("/api/rounds", headers=headers()).status_code == 502
-    assert client.get("/api/rounds", headers=headers()).json() == []
+    [found] = client.get("/api/rounds", headers=headers()).json()
+    assert found["stage"] == "stopped"
+    assert found["stopped_reason"].startswith("The agent couldn't take it")
 
 
 def test_a_start_that_times_out_leaves_the_round_going(monkeypatch):
@@ -305,30 +310,37 @@ def test_a_proposal_changes_nothing_until_approved(service):
     assert found["proposal"]["before"] == LUNA
     assert found["proposal"]["changed_lines"][-1] == "+Decline a claim with no receipt."
     assert len(client.get("/api/configuration/versions", headers=headers()).json()) == 1
+    proposal_id = found["proposal"]["proposal_id"]
     response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
-    assert response.json() == {"status": "started"}
-    assert service[-1] == (
-        "answer_proposal",
-        {
-            "round_id": round_id,
-            "decision": "approve",
-            "reason": "",
-            "handler_id": "HND-01",
-        },
+    # The app records the review, then asks the agent to carry the round on.
+    found = response.json()
+    assert (found["stage"], found["version"], found["proposal"]) == (
+        "improving",
+        2,
+        None,
     )
-    # The backend records nothing of its own: the service records the answer.
-    assert client.get(f"/api/rounds/{round_id}").json()["events"] == []
-    assert len(client.get("/api/configuration/versions", headers=headers()).json()) == 1
+    assert [e["decision"] for e in found["events"]] == ["approve"]
+    assert service[-1] == (
+        "carry_round_on",
+        {"round_id": round_id, "proposal_id": proposal_id},
+    )
+    review = client.get(f"/api/rounds/{round_id}/proposals/{proposal_id}").json()
+    assert (review["kind"], review["decision"], review["handler_id"]) == (
+        "change",
+        "approve",
+        "HND-01",
+    )
+    assert client.get(f"/api/rounds/{round_id}/proposals/999").status_code == 404
 
 
 def test_a_rejection_records_the_handlers_reason(service):
     round_id = start_round()
     client.post(f"/api/rounds/{round_id}/proposed-change", json=CHANGE)
     reason = {"reason": "Too broad: some claims have no receipt by design"}
-    client.post(f"/api/rounds/{round_id}/reject", json=reason, headers=headers())
-    assert service[-1][1]["reason"] == reason["reason"]
-    answer = {"decision": "reject", "handler_id": "HND-01", **reason}
-    found = client.post(f"/api/rounds/{round_id}/decision", json=answer).json()
+    found = client.post(
+        f"/api/rounds/{round_id}/reject", json=reason, headers=headers()
+    ).json()
+    assert service[-1][0] == "carry_round_on"
     assert (found["stage"], found["proposal"], found["version"]) == (
         "improving",
         None,
@@ -346,20 +358,39 @@ def test_a_rejection_records_the_handlers_reason(service):
     assert response.status_code == 409
 
 
-def test_an_approval_refused_by_the_service_records_nothing(monkeypatch):
+@pytest.mark.parametrize("kind", ["change", "recipe"])
+def test_a_review_the_agent_didnt_take_is_cleared_and_the_proposal_waits(
+    monkeypatch, kind
+):
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: ACCEPTED)
     round_id = start_round()
-    client.post(f"/api/rounds/{round_id}/proposed-change", json=CHANGE)
-    refusal = FakeResponse(200, {"refused": "A dispatch is running"})
+    proposed = (
+        CHANGE if kind == "change" else {"recipe": "1. Stop.", "reason": "Shorter"}
+    )
+    client.post(f"/api/rounds/{round_id}/proposed-{kind}", json=proposed)
+    waiting = client.get(f"/api/rounds/{round_id}").json()["proposal"]
+    refusal = FakeResponse(200, {"refused": "Round 1 is stopped"})
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: refusal)
     response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     assert (response.status_code, response.json()["detail"]) == (
         409,
-        "A dispatch is running",
+        "Round 1 is stopped",
     )
     found = client.get(f"/api/rounds/{round_id}").json()
-    assert (found["stage"], found["events"]) == ("change_waiting", [])
-    assert found["proposal"]["instructions"] == CHANGE["instructions"]
+    assert (found["stage"], found["events"], found["version"]) == (
+        f"{kind}_waiting",
+        [],
+        None,
+    )
+    assert found["proposal"] == waiting
+    assert len(client.get("/api/configuration/versions", headers=headers()).json()) == 1
+    assert len(client.get("/api/recipes").json()) == 1
+    review = client.get(f"/api/rounds/{round_id}/proposals/{waiting['proposal_id']}")
+    assert review.json()["decision"] is None
+    # The slot is free, and the proposal can be reviewed again.
+    monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: ACCEPTED)
+    response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
+    assert response.json()["stage"] == "improving"
 
 
 def test_a_proposal_outside_the_models_allowed_goes_back(service):
@@ -380,8 +411,7 @@ def test_an_approved_recipe_becomes_the_next(service):
     found = client.post(f"/api/rounds/{round_id}/proposed-recipe", json=recipe).json()
     assert found["stage"] == "recipe_waiting"
     assert "+1. Read the results." in found["proposal"]["changed_lines"]
-    answer = {"decision": "approve", "handler_id": "HND-01", "reason": ""}
-    client.post(f"/api/rounds/{round_id}/decision", json=answer)
+    client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     with store.connect() as conn:
         latest = conn.execute(select(store.recipes).order_by(store.recipes.c.version))
         newest = latest.mappings().all()[-1]
@@ -390,17 +420,6 @@ def test_an_approved_recipe_becomes_the_next(service):
     client.post(f"/api/rounds/{round_id}/stage", json={"stage": "finished"})
     assert start_round() == round_id + 1
     assert client.get(f"/api/rounds/{round_id + 1}").json()["recipe_version"] == 2
-
-
-def test_a_decision_needs_a_handler_who_can_sign_off_over_the_limit(service):
-    round_id = start_round()
-    client.post(f"/api/rounds/{round_id}/proposed-change", json=CHANGE)
-    answer = {"decision": "approve", "handler_id": "HND-02", "reason": ""}
-    response = client.post(f"/api/rounds/{round_id}/decision", json=answer)
-    assert response.status_code == 403
-    answer["handler_id"] = "HND-99"
-    response = client.post(f"/api/rounds/{round_id}/decision", json=answer)
-    assert response.status_code == 404
 
 
 def test_the_improvers_view_holds_nothing_from_the_held_out_set_but_scores(
@@ -494,7 +513,6 @@ def test_a_rounds_evaluation_runs_on_the_versions_own_model(service, monkeypatch
     body = {"eval_set": "held_out", "version": 2, **LUNA}
     run = client.post(f"/api/rounds/{round_id}/evaluations", json=body).json()
     assert (run["model"], run["effort"]) == (GEMINI["model"], GEMINI["effort"])
-    client.post("/api/runs/stop-running")
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
     run = client.post(f"/api/rounds/{round_id}/evaluations", json=body).json()
     assert (run["model"], run["effort"]) == ("openrouter/free", "default")
@@ -502,23 +520,33 @@ def test_a_rounds_evaluation_runs_on_the_versions_own_model(service, monkeypatch
     assert (found["version"], found["round_id"]) == (2, round_id)
 
 
-def test_a_restart_stops_a_working_round_and_leaves_a_waiting_one(service):
+def test_a_failed_round_stops_only_itself_with_its_evaluation(service):
     round_id = start_round()
-    assert client.post("/api/rounds/stop-working").json() == {"stopped": 1}
-    found = client.get(f"/api/rounds/{round_id}").json()
-    assert (found["stage"], found["stopped_by"]) == ("stopped", None)
-    waiting = start_round()
-    client.post(f"/api/rounds/{waiting}/proposed-change", json=CHANGE)
-    assert client.post("/api/rounds/stop-working").json() == {"stopped": 0}
-    assert client.get(f"/api/rounds/{waiting}").json()["stage"] == "change_waiting"
+    body = {"eval_set": "held_out", "version": 1}
+    run_id = client.post(f"/api/rounds/{round_id}/evaluations", json=body).json()[
+        "run_id"
+    ]
+    failure = {"reason": "The agent's work failed: RuntimeError: down"}
+    found = client.post(f"/api/rounds/{round_id}/failed", json=failure).json()
+    assert (found["stage"], found["stopped_by"], found["stopped_reason"]) == (
+        "stopped",
+        None,
+        failure["reason"],
+    )
+    evaluation = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()
+    assert (evaluation["status"], evaluation["stopped_reason"]) == (
+        "stopped",
+        failure["reason"],
+    )
+    response = client.post(f"/api/rounds/{round_id}/failed", json=failure)
+    assert response.status_code == 409
 
 
 def test_the_recipes_versions_list_newest_first_with_their_changes(service):
     round_id = start_round()
     recipe = {"recipe": "1. Read the results.\n", "reason": "Shorter"}
     client.post(f"/api/rounds/{round_id}/proposed-recipe", json=recipe)
-    answer = {"decision": "approve", "handler_id": "HND-01", "reason": ""}
-    client.post(f"/api/rounds/{round_id}/decision", json=answer)
+    client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     newest, first = client.get("/api/recipes").json()
     assert (newest["version"], first["version"]) == (2, 1)
     assert "+1. Read the results." in newest["changed_lines"]
@@ -574,9 +602,10 @@ def test_a_stopped_round_refuses_what_it_records_and_leaves_the_current_version(
     ]
     found = client.post(f"/api/rounds/{round_id}/stop", headers=headers()).json()
     assert (found["stage"], found["stopped_by"]) == ("stopped", "HND-01")
-    assert (
-        client.get(f"/api/evaluations/{run_id}", headers=headers()).json()["status"]
-        == "stopped"
+    evaluation = client.get(f"/api/evaluations/{run_id}", headers=headers()).json()
+    assert (evaluation["status"], evaluation["stopped_reason"]) == (
+        "stopped",
+        f"Round {round_id} was stopped",
     )
     copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
     response = client.post(f"/api/claims/{copy_id}/start", json={"run_id": run_id})
@@ -585,7 +614,7 @@ def test_a_stopped_round_refuses_what_it_records_and_leaves_the_current_version(
         ("stage", {"stage": "improving"}),
         ("proposed-change", CHANGE),
         ("proposed-recipe", {"recipe": "1. Stop.", "reason": "Shorter"}),
-        ("decision", {"decision": "approve", "handler_id": "HND-01", "reason": ""}),
+        ("failed", {"reason": "It failed"}),
         ("model-calls", {"input_tokens": 1, "output_tokens": 1, "cost": 0.1}),
         ("evaluations", {"eval_set": "held_out", "version": 1}),
         ("verdict", None),
@@ -611,10 +640,7 @@ def test_a_round_evaluates_only_its_versions(service):
 def test_finishing_twice_grades_once(service, monkeypatch):
     asked = []
     monkeypatch.setattr(judge, "grade", lambda h, a: asked.append(h) or GRADED)
-    body = {**LUNA, "kind": "evaluation", "n": 5, "eval_set": "held_out"}
-    run_id = client.post("/api/runs", json={**body, "tiny": True, "version": 1}).json()[
-        "run_id"
-    ]
+    run_id = new_run("evaluation", "held_out", tiny=True, n=5)
     copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
     client.post(f"/api/claims/{copy_id}/start", json={"run_id": run_id})
     decision = {"decision": "refer", "payout": 0, "reason": "?", "policy_section": "9"}
@@ -644,11 +670,11 @@ def test_the_round_operations_follow_the_api_rules():
         "record_round_stage",
         "record_proposed_change",
         "record_proposed_recipe",
-        "record_round_decision",
+        "get_proposal_review",
         "record_improver_call",
         "create_round_evaluation",
         "apply_verdict",
-        "stop_working_rounds",
+        "stop_failed_round",
     }
     for path, item in schema["paths"].items():
         if path.startswith("/api/rounds"):

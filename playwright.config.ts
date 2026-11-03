@@ -7,6 +7,7 @@ import { API_KEY } from "./e2e/agent";
 // takes Supabase Auth's, and one on port 8005 takes the judge's.
 const AUTH = "http://127.0.0.1:8004";
 const JUDGE = "http://127.0.0.1:8005";
+const BACKEND = "http://127.0.0.1:8001";
 
 export default defineConfig({
   testDir: "e2e",
@@ -19,6 +20,8 @@ export default defineConfig({
     {
       command: "node e2e/agent-stand-in.mjs",
       url: "http://127.0.0.1:8003/ping",
+      // The app's address and the agent's key, to finish the runs it's given.
+      env: { UNDERCOVER_API: BACKEND, UNDERCOVER_API_KEY: API_KEY },
       reuseExistingServer: true,
     },
     {
