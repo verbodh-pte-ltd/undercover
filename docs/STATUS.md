@@ -15,9 +15,34 @@ pays, ready for Lambda (`npm run build`, the backend serving the dashboard's bui
 connections for Lambda), and the live checks. Nothing is deployed.
 
 Sending claims back and the agent on AgentCore Runtime (`docs/PLAN_RUNTIME.md`, from
-`docs/RUNTIME.md`): phases 1 to 4 are built: the claim approval comes back, sign off or send back, the
-agent as an AgentCore app, and the app keeping one run at a time. After pulling this, run `npm run seed` once: there are new columns and the new `sent_back` and
+`docs/RUNTIME.md`) is built, all five phases: the claim approval comes back, sign off or send back, the
+agent as an AgentCore app, the app keeping one run at a time, and the live checks. Nothing is deployed. After pulling this, run `npm run seed` once: there are new columns and the new `sent_back` and
 `agent_work` tables, and the store doesn't add columns to old tables.
+
+
+In the runtime build's live checks on 3 November 2026, on local Postgres with GPT-6 Luna (version 1, low
+effort) and local Supabase Auth, after one `npm run seed`, with `npm run dev` running on the direct route
+and with memory off (`UNDERCOVER_GATEWAY_URL` and `UNDERCOVER_MEMORY_ID` blanked for the run), driven
+through the app's API as Dana Whitfield:
+
+- A dispatch at N=25 worked the queue in 89 seconds: 15 approved, 6 declined and 2 referred, with
+  CLM-1003 ($3,750), CLM-1008 ($2,240) and CLM-1011 ($1,150) waiting for sign-off. A second dispatch
+  started while it ran got 409, "A dispatch is already running".
+- CLM-1003 was sent back with a note asking the agent to check for anything already paid by the airline
+  or a third party. The agent resumed it, checked the documents, found no such payment, and approved
+  $3,750 again, which waits for sign-off again. The claim page shows the Sent back panel with the note,
+  Dana and the time, beside the new decision, and the note among the steps.
+- CLM-1008 was signed off: decided and paid $2,240 at once, and the agent's resume added "Signed off by
+  HND-01".
+- An evaluation of the evaluation set's five tiny claims at N=5: 100% right on decision and payout, 80%
+  straight through.
+- Both claim pages were checked in light and dark mode with a headless Playwright script, signed in as
+  Dana.
+- With `npm run dev` stopped, `uv run --env-file .env --isolated --only-group runtime python -m
+  runtime.main` served the agent on 8080, and `{"operation": "health"}` answered `{"healthy": true}`.
+- What the runs spent, from the costs in the database: $0.0472 for the dispatch (170 model calls),
+  $0.0084 for the evaluation (29 calls) and $0.0008 for the resumes outside any run (4 calls), $0.0564
+  in all.
 
 - The claim graph saves a claim to memory as its last step (`agent` → `settle` → `pay` or
   `sign_off` → `remember`), so a payout over the limit, or a payment the Gateway refused, is saved
@@ -580,6 +605,4 @@ environment of its own, so `.venv` is left as it is. `npm run check:runtime` doe
 - The dispatch summary counts no bucket for a sent-back claim.
 - When the call to the agent after a sign-off fails or times out, the app logs a warning and the
   sign-off and the payment stand, but the agent never resumes the claim, so it isn't saved to memory.
-- Phase 4's live check (a dispatch at N=25 on `npm run dev`, and a second start refused on the
-  dashboard) is in phase 5.
 - Real payments and messages to customers, as `docs/SPEC.md` says.

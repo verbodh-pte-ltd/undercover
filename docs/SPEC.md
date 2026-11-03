@@ -29,7 +29,17 @@ When the agent approves a payout that needs a handler's sign-off, it waits for t
 everything it has worked out; until then the claim shows as waiting for sign-off. The sign-off itself
 pays the claim: the backend records the handler, the time and the payment together, and the claim is
 decided and paid at once, whether or not the agent is running. The agent then only finishes its own
-record of the claim and never pays it. A handler can only sign off for now.
+record of the claim, saves it to memory, and never pays it.
+
+A handler who can sign off over the limit can instead send the decision back to the agent with a note
+saying what to look at again, up to 1,000 characters. The claim keeps the decision that was sent back,
+with the note, who sent it back and when, and shows as sent back until the agent takes it. The agent
+treats the note as a senior handler's review, checked against the policy wording and the claims manual
+like everything else, and refers the claim with the reason when the wording doesn't support what the
+note asks. Its new decision goes through the same checks as any other: within the limit it is paid,
+over it the claim waits for sign-off again, and it can be sent back again. A send back the agent never
+received is worked by the next dispatch. Only one dispatch, evaluation or working round runs at a time,
+which the app enforces, and a resumed claim runs beside it.
 
 Before the agent's model sees a claim, a second model reads what the customer wrote and says whether
 it tries to instruct whoever handles the claim. A claim that does is referred to a handler with a

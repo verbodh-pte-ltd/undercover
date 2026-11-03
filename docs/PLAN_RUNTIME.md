@@ -79,10 +79,10 @@ Done when:
       store exactly once; nothing was saved before the sign-off
 - [x] `resume_claim` refuses a claim that isn't paused, with the reason
 - [x] Two sign-offs at once: one pays, the other gets 409
-- [ ] A sign-off whose call to the agent fails answers with the paid claim and logs a warning (the
-      answer is tested; the warning comes with phase 3's new `backend/agent_service.py`)
-- [ ] With `npm run dev` running, a claim over the limit pauses, and signing it off on the dashboard pays
-      it and adds "Signed off by" to its steps (not run: a live check, for phase 5)
+- [x] A sign-off whose call to the agent fails answers with the paid claim and logs a warning (the
+      answer is tested; the warning comes with phase 3's new `backend/agent_service.py`) (the warning came with phase 3; `test_sign_off_stands_and_warns_when_the_agent_cannot_be_reached`)
+- [x] With `npm run dev` running, a claim over the limit pauses, and signing it off on the dashboard pays
+      it and adds "Signed off by" to its steps (not run: a live check, for phase 5) (phase 5: CLM-1008 signed off, paid $2,240, "Signed off by HND-01")
 - [x] `npm run check:python` passes; committed
 
 ## Phase 2: sign off or send back (step 2)
@@ -124,9 +124,9 @@ Done when:
 - [x] A send back the agent never received is worked by the next dispatch, which resumes the paused
       thread with the note
 - [x] Vitest covers the Send back form, its required note and the sent-back history on the claim page
-- [ ] With `npm run dev` running, a claim sent back with a note is decided again, and the claim page shows
+- [x] With `npm run dev` running, a claim sent back with a note is decided again, and the claim page shows
       both decisions and the note, checked through the Playwright MCP server (not run: a live check, for
-      phase 5; `e2e/claim.spec.ts` sends a claim back on the page against the stand-in)
+      phase 5; `e2e/claim.spec.ts` sends a claim back on the page against the stand-in) (phase 5: CLM-1003, checked with a headless Playwright script, not the MCP server)
 - [x] `npm run check:python` and `npm run check:ts` pass; committed
 
 ## Phase 3: the agent as an AgentCore app (step 3)
@@ -202,9 +202,9 @@ Done when:
 - [x] A failed run stops only itself; a resume runs beside a dispatch
 - [x] `e2e/rounds.spec.ts` and the other end-to-end tests pass with the app creating runs, rounds and
       reviews
-- [ ] With `npm run dev` running, a dispatch at N=25 works the queue, and starting another while it runs
+- [x] With `npm run dev` running, a dispatch at N=25 works the queue, and starting another while it runs
       is refused on the dashboard with the reason (not run yet: it calls the real model. The refusal on
-      the dashboard is covered by `e2e/queue.spec.ts` with the stand-in)
+      the dashboard is covered by `e2e/queue.spec.ts` with the stand-in) (phase 5, through the API: the second start got 409 "A dispatch is already running"; `e2e/queue.spec.ts` covers the dashboard)
 - [x] `npm run check` passes; committed
 
 Built as planned, with these choices: a proposal's id is its `round_events` row, made when the
@@ -219,14 +219,14 @@ Run with `npm run dev`, on the default model, on the direct route and with memor
 `UNDERCOVER_GATEWAY_URL` and `UNDERCOVER_MEMORY_ID` in the shell for the run (`.env` has both from the
 Day 3 lab), and stop Lab 1's `agentcore dev` first. Reseed once.
 
-- [ ] `npm run check` passes with `.env` moved out of the way
-- [ ] A dispatch at N=25 works the queue
-- [ ] Signed in as Dana Whitfield: one claim over the limit sent back with a note and decided again; another
-      signed off and paid; both claim pages checked through the Playwright MCP server
-- [ ] An evaluation of the evaluation set's five tiny claims
-- [ ] What the runs spent, from the costs in the database
-- [ ] The agent answers its health check through `runtime/main.py` on the laptop
-- [ ] `docs/SPEC.md` (the send back), `docs/TECH_STACK.md` (the AgentCore app, the two routes, Deployment
+- [x] `npm run check` passes with `.env` moved out of the way
+- [x] A dispatch at N=25 works the queue
+- [x] Signed in as Dana Whitfield: one claim over the limit sent back with a note and decided again; another
+      signed off and paid; both claim pages checked through the Playwright MCP server (a headless Playwright script, in light and dark mode)
+- [x] An evaluation of the evaluation set's five tiny claims
+- [x] What the runs spent, from the costs in the database
+- [x] The agent answers its health check through `runtime/main.py` on the laptop
+- [x] `docs/SPEC.md` (the send back), `docs/TECH_STACK.md` (the AgentCore app, the two routes, Deployment
       with the agent on Runtime and our RDS database), `docs/PROCESS.md`, `docs/CODE_STANDARDS.md` (the
       service becomes the AgentCore app) and `docs/STATUS.md` describe the product as it now is; committed
 
