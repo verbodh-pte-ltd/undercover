@@ -11,6 +11,8 @@ FROM_DOT_ENV = [
     "UNDERCOVER_GATEWAY_URL",
     "UNDERCOVER_CONTEXT",
     "UNDERCOVER_MEMORY_ID",
+    # The agent's runtime on AgentCore Runtime: never called from a test.
+    "UNDERCOVER_AGENT_RUNTIME",
     "AWS_PROFILE",
     "AWS_SESSION_TOKEN",
 ]
@@ -31,7 +33,7 @@ FAKE_AWS = {
 def fresh_db(tmp_path, monkeypatch):
     """Give every test its own SQLite database, seeded from data/, and no tracing."""
     monkeypatch.setenv("UNDERCOVER_DB", str(tmp_path / "undercover.db"))
-    # Nothing listens on port 9, so a sign-off never reaches a real agent service.
+    # Nothing listens on port 9, so a sign-off never reaches a real agent.
     monkeypatch.setenv("UNDERCOVER_AGENT", "http://127.0.0.1:9")
     monkeypatch.setenv("UNDERCOVER_API_KEY", signing.API_KEY)
     for name in FROM_DOT_ENV:

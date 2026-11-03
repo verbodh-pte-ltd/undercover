@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -181,20 +182,34 @@ def test_a_signed_off_claim_cannot_be_released():
 
 def test_sign_off_asks_the_agent_to_carry_on(monkeypatch):
     calls = []
+
+    def post(url, json, **kwargs):
+        calls.append((url, json))
+        return httpx.Response(200, json={"accepted": True})
+
     monkeypatch.setenv("UNDERCOVER_AGENT", "http://agent.test")
-    monkeypatch.setattr(
-        agent_service.httpx, "post", lambda url, **kw: calls.append(url)
-    )
+    monkeypatch.setattr(agent_service.httpx, "post", post)
     decide("CLM-1001", LARGE)
     sign_off("CLM-1001")
-    assert calls == ["http://agent.test/claims/CLM-1001/resume"]
+    assert calls == [
+        (
+            "http://agent.test/invocations",
+            {"operation": "resume_claim", "claim_id": "CLM-1001"},
+        )
+    ]
 
 
-def test_sign_off_stands_when_the_agent_cannot_be_reached():
+def test_sign_off_stands_and_warns_when_the_agent_cannot_be_reached(caplog):
     decide("CLM-1001", LARGE)
     response = sign_off("CLM-1001")
     assert response.status_code == 200
+    assert response.json()["paid_amount"] == 1250.0
     assert client.get("/api/claims/CLM-1001").json()["signed_off_by"] == "HND-01"
+    [warning] = [r for r in caplog.records if r.name == "backend.agent_service"]
+    assert warning.levelname == "WARNING"
+    assert warning.getMessage() == (
+        "The agent didn't resume CLM-1001: The agent isn't running"
+    )
 
 
 def test_sign_off_when_not_waiting_is_409():

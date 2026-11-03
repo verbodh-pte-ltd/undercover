@@ -93,10 +93,12 @@ test("a handler's sign-off pays the claim and tells the agent", async ({
   await expect(page.getByText(/^Paid \$1,250\.00 on /)).toBeVisible();
   await expect(page.getByText("Decided", { exact: true })).toBeVisible();
 
-  // The agent's service is told, so its paused thread finishes without paying.
+  // The agent is told, so its paused thread finishes without paying.
   await expect(async () => {
     const calls = await request.get("http://127.0.0.1:8003/calls");
-    expect(await calls.json()).toContain("POST /claims/CLM-1003/resume");
+    expect(await calls.json()).toContain(
+      '{"operation":"resume_claim","claim_id":"CLM-1003"}',
+    );
   }).toPass();
 });
 

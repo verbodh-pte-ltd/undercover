@@ -32,7 +32,7 @@ test("the Configuration page shows version 1, read only", async ({ page }) => {
   await expect(page.getByRole("textbox")).toHaveCount(0);
 });
 
-test("starting a dispatch on the dashboard reaches the agent's service with N", async ({
+test("starting a dispatch on the dashboard reaches the agent with N", async ({
   page,
   request,
 }) => {
@@ -41,12 +41,12 @@ test("starting a dispatch on the dashboard reaches the agent's service with N", 
   await page.getByRole("button", { name: "Start dispatch" }).click();
   await expect(async () => {
     const calls = (await (await request.get(standIn)).json()) as string[];
-    expect(calls).toContain('POST /dispatches {"n":7}');
+    expect(calls).toContain('{"operation":"start_dispatch","n":7}');
   }).toPass();
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("starting an evaluation on the dashboard reaches the agent's service", async ({
+test("starting an evaluation on the dashboard reaches the agent", async ({
   page,
   request,
 }) => {
@@ -58,7 +58,7 @@ test("starting an evaluation on the dashboard reaches the agent's service", asyn
   await expect(async () => {
     const calls = (await (await request.get(standIn)).json()) as string[];
     expect(calls).toContain(
-      'POST /evaluations {"n":5,"eval_set":"held_out","tiny":true}',
+      '{"operation":"start_evaluation","n":5,"eval_set":"held_out","tiny":true}',
     );
   }).toPass();
 });

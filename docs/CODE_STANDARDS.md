@@ -27,8 +27,12 @@ The agent has six parts:
 10. **The dispatcher** (`agent/dispatcher.py`): works a dispatch or an evaluation with up to N claim
     agents at once. It touches the claim agent only through `work()`, so it can later call the agent in
     the cloud instead.
-11. **The service** (`agent/service.py`): starts dispatches, evaluations and rounds, carries a round
-    on from a handler's answer, and resumes signed-off claims, for the backend.
+11. **The AgentCore app** (`agent/entrypoint.py`): one entrypoint that takes each payload from the
+    backend, which names an operation and its inputs, checks it, answers at once, and works on a
+    thread registered with the app until the work ends: it starts dispatches, evaluations and rounds,
+    carries a round on from a handler's answer, and resumes signed-off claims. Nothing happens when
+    it's imported; it gets ready on its first request. The same app runs on the laptop and, through
+    `runtime/main.py`, on AgentCore Runtime.
 12. **The improver** (`agent/improver.py`): follows its recipe to propose new versions and recipes,
     pausing for a handler. Its instructions are goals that wrap the recipe, which is data it follows.
 13. **The improver's client** (`agent/improver_api.py`): the only way to the round, the improver's
