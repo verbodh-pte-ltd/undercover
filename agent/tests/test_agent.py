@@ -360,6 +360,163 @@ def test_a_claim_resumed_after_its_sign_off_finishes_without_paying(check, monke
     assert paused("CLM-1001") == ()
 
 
+NOTE = "The bill includes a hotel night. Check section 7 again."
+
+
+def send_back(claim_id="CLM-1001", note=NOTE):
+    sent = client.post(
+        f"/api/claims/{claim_id}/send-back", json={"note": note}, headers=headers()
+    )
+    assert sent.status_code == 200
+    return sent.json()
+
+
+def reviewer(monkeypatch, *replies):
+    """A stand-in for the current version's model that keeps what it was sent."""
+    model = CheckModel(messages=Script(*replies), sent=[])
+    monkeypatch.setattr(main, "model", lambda version: model)
+    return model
+
+
+def model_calls(thread_id="CLM-1001-1"):
+    saved = main.saver().get_tuple({"configurable": {"thread_id": thread_id}})
+    assert saved is not None
+    return saved.checkpoint["channel_values"]["model_calls"]
+
+
+def test_a_sent_back_claim_is_decided_again_and_a_new_payout_within_the_limit_paid(
+    check, monkeypatch
+):
+    hold()
+    assert model_calls() == 3
+    send_back()
+    model = reviewer(
+        monkeypatch, *approve("CLM-1001", 420.0), AIMessage(content="Approved, $420.")
+    )
+    assert main.resume_refusal("CLM-1001") is None
+    assert main.resume_claim("CLM-1001") == "Approved, $420."
+    result = claim("CLM-1001")
+    assert (result["status"], result["payout"], result["paid_amount"]) == (
+        "decided",
+        420.0,
+        420.0,
+    )
+    assert result["sent_back"][0]["payout"] == 1250.0
+    # The model got the note from Dana, by name, as a message from the handler.
+    note = model.sent[0][-1]
+    assert note.type == "human"
+    assert note.content == main.SENT_BACK.format(handler="Dana Whitfield", note=NOTE)
+    assert "refer the claim to a handler" in note.content
+    assert NOTE not in current_instructions()
+    # Its allowance of model calls starts again, and the check isn't run again.
+    assert model_calls() == 3
+    assert check.runs == 1
+    assert paused("CLM-1001") == ()
+    texts = steps_of("CLM-1001")
+    assert f"Sent back by Dana Whitfield: {NOTE}" in texts
+    assert not [t for t in texts if t.startswith(main.SENT_BACK[:20])]
+
+
+def current_instructions():
+    return client.get("/api/configuration/current").json()["instructions"]
+
+
+def test_a_new_payout_over_the_limit_pauses_again_and_can_be_sent_back_again(
+    monkeypatch,
+):
+    hold()
+    send_back(note="First look.")
+    reviewer(monkeypatch, *approve("CLM-1001", 1100.0), AIMessage(content="Approved."))
+    assert (
+        main.resume_claim("CLM-1001") == "CLM-1001 is waiting for a handler's sign-off."
+    )
+    result = claim("CLM-1001")
+    assert (result["status"], result["payout"]) == ("waiting_for_sign_off", 1100.0)
+    assert len(paused("CLM-1001")) == 1
+    send_back(note="Second look.")
+    assert [s["note"] for s in claim("CLM-1001")["sent_back"]] == [
+        "Second look.",
+        "First look.",
+    ]
+
+
+def test_a_sent_back_claim_already_taken_is_refused(monkeypatch):
+    monkeypatch.setattr(main, "model", lambda version: stub())
+    hold()
+    send_back()
+    assert client.post("/api/claims/CLM-1001/take").status_code == 200
+    assert main.resume_refusal("CLM-1001") == (
+        "CLM-1001 was sent back and has already been taken"
+    )
+
+
+def test_a_resume_that_loses_the_race_for_a_sent_back_claim_does_nothing(
+    monkeypatch,
+):
+    hold()
+    send_back()
+    assert client.post("/api/claims/CLM-1001/take").status_code == 200
+    # The claim was sent back when the resume read it, but another took it first.
+    reads = iter([{**claim("CLM-1001"), "status": "sent_back"}])
+
+    class Racing(TestClient):
+        def get(self, url, *args, **kwargs):
+            response = super().get(url, *args, **kwargs)
+            if url == "/api/claims/CLM-1001":
+                found = next(reads, None)
+                if found is not None:
+                    response._content = json.dumps(found).encode()
+            return response
+
+    monkeypatch.setattr(main, "backend", lambda: Racing(app, headers=main.key_header()))
+    reply = main.resume_claim("CLM-1001")
+    assert reply.startswith("not taken: ")
+    assert "is not sent back" in reply
+
+
+def test_a_resume_tells_the_app_every_minute_while_it_works(monkeypatch):
+    hold()
+    send_back()
+    sent = recording(monkeypatch)
+    monkeypatch.setattr(main, "HEARD_EVERY", 0.01)
+
+    def slow(claim_id, thread_id):
+        time.sleep(0.1)
+        return "worked"
+
+    monkeypatch.setattr(main, "carry_on", slow)
+    assert main.resume_claim("CLM-1001") == "worked"
+    told = sent.count("POST /api/claims/CLM-1001/resume-heard")
+    assert told >= 2
+    time.sleep(0.05)
+    assert sent.count("POST /api/claims/CLM-1001/resume-heard") == told
+
+
+def test_a_send_back_the_agent_never_got_is_worked_by_the_next_dispatch(
+    check, monkeypatch
+):
+    hold()
+    # The agent's service can't be reached in the tests, so nothing resumed it.
+    send_back()
+    assert claim("CLM-1001")["status"] == "sent_back"
+    run_id = new_run()
+    assert client.get(f"/api/runs/{run_id}/claims").json()[0] == "CLM-1001"
+    model = CheckModel(
+        messages=Script(*approve("CLM-1001", 420.0), AIMessage(content="Paid.")),
+        sent=[],
+    )
+    assert main.work("CLM-1001", run_id, model) == "Paid."
+    assert model.sent[0][-1].content.endswith(main.SENT_BACK[-40:])
+    assert NOTE in model.sent[0][-1].content
+    result = claim("CLM-1001")
+    assert (result["status"], result["paid_amount"], result["thread_id"]) == (
+        "decided",
+        420.0,
+        "CLM-1001-1",
+    )
+    assert check.runs == 1
+
+
 def test_a_claim_approved_within_the_limit_is_still_paid_by_the_graph(monkeypatch):
     sent = recording(monkeypatch)
     hold(payout=420.0)

@@ -47,6 +47,7 @@ HANDLER = {
     "start_dispatch",
     "start_evaluation",
     "sign_off",
+    "send_back_claim",
     "start_round",
     "stop_round",
     "approve_proposal",
@@ -57,6 +58,8 @@ KEY = {
     "record_decision",
     "pay_claim",
     "hold_for_sign_off",
+    "take_sent_back_claim",
+    "record_resume_heard",
     "start_claim",
     "release_claim",
     "add_step",
@@ -90,6 +93,7 @@ GROUPS = {
 # Every handler action, with a body it would accept.
 ACTIONS = [
     ("post", "/api/claims/CLM-1001/sign-off", None),
+    ("post", "/api/claims/CLM-1001/send-back", {"note": "Look again."}),
     ("post", "/api/dispatches", {"n": 3}),
     ("post", "/api/evaluations", {"n": 3, "eval_set": "evaluation", "tiny": True}),
     ("post", "/api/rounds", None),

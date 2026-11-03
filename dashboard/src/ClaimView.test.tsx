@@ -330,3 +330,104 @@ it("shows the whole decision record with its calculation line by line", async ()
   await wait(0);
   expect(screen.getByText(/^Signed off by Dana Whitfield on /)).toBeDefined();
 });
+
+const sentBackRecord = {
+  decision: "approve" as const,
+  payout: 1250,
+  calculation: null,
+  reason: "The treatment is covered.",
+  policy_section: "7. Emergency Medical",
+  decided_by: "UnderCover Agent, version 1",
+  decided_at: "2026-11-02T10:00:00+00:00",
+  note: "Check the receipt: the bill looks like it includes a hotel stay.",
+  sent_back_by: "HND-01",
+  sent_back_by_name: "Dana Whitfield",
+  sent_back_at: "2026-11-02T10:05:00+00:00",
+};
+
+it("sends a decision back with a required note, counted to 1,000 characters", async () => {
+  const fetchMock = fakeBackend({
+    ...claimRoutes(held),
+    "/api/claims/CLM-1001/send-back": {
+      ...held,
+      status: "sent_back",
+      decision: null,
+      payout: null,
+      reason: null,
+      policy_section: null,
+      sent_back: [sentBackRecord],
+    },
+  });
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  const sendBack = screen.getByRole("button", { name: "Send back" });
+  expect((sendBack as HTMLButtonElement).disabled).toBe(true);
+  const note = screen.getByLabelText(/Or send it back to the agent/);
+  expect(note.getAttribute("maxlength")).toBe("1000");
+  expect(note.hasAttribute("required")).toBe(true);
+  expect(screen.getByText("0 of 1,000 characters")).toBeDefined();
+
+  fireEvent.change(note, { target: { value: sentBackRecord.note } });
+  expect(screen.getByText("64 of 1,000 characters")).toBeDefined();
+  expect((sendBack as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(sendBack);
+  await wait(0);
+  expect(fetchMock).toHaveBeenCalledWith("/api/claims/CLM-1001/send-back", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer token",
+    },
+    body: JSON.stringify({ note: sentBackRecord.note }),
+  });
+  expect(screen.getByText("Sent back", { selector: ".chip" })).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Send back" })).toBeNull();
+  expect(screen.getByText(/the next dispatch does/)).toBeDefined();
+  expect(screen.getByText(sentBackRecord.note)).toBeDefined();
+});
+
+it("shows why a send back was refused", async () => {
+  fakeBackend({
+    ...claimRoutes(held),
+    "/api/claims/CLM-1001/send-back": [
+      409,
+      { detail: "Claim CLM-1001 is not waiting for sign-off" },
+    ],
+  });
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  fireEvent.change(screen.getByLabelText(/Or send it back/), {
+    target: { value: "Look again." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send back" }));
+  await wait(0);
+  expect(screen.getByRole("alert").textContent).toBe(
+    "Claim CLM-1001 is not waiting for sign-off",
+  );
+});
+
+it("shows each decision sent back with its note, who and when, beside the current one", async () => {
+  fakeBackend(
+    claimRoutes({
+      ...held,
+      payout: 980,
+      reason: "Only the treatment is covered.",
+      sent_back: [
+        { ...sentBackRecord, note: "Second look, please." },
+        sentBackRecord,
+      ],
+    }),
+  );
+  render(<ClaimView claimId="CLM-1001" handler={dana} />);
+  await wait(0);
+  expect(screen.getByRole("heading", { name: "Sent back" })).toBeDefined();
+  expect(screen.getByText("Only the treatment is covered.")).toBeDefined();
+  const notes = screen
+    .getAllByText(/^Second look|^Check the receipt/)
+    .map((n) => n.textContent);
+  expect(notes).toEqual(["Second look, please.", sentBackRecord.note]);
+  expect(
+    screen.getAllByText(/^Sent back by Dana Whitfield on Nov 2, 2026/),
+  ).toHaveLength(2);
+  expect(screen.getAllByText("$1,250.00").length).toBeGreaterThan(0);
+});

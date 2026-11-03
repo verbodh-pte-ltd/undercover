@@ -15,7 +15,9 @@ pays, ready for Lambda (`npm run build`, the backend serving the dashboard's bui
 connections for Lambda), and the live checks. Nothing is deployed.
 
 Sending claims back and the agent on AgentCore Runtime (`docs/PLAN_RUNTIME.md`, from
-`docs/RUNTIME.md`): phase 1 is built, the claim approval comes back.
+`docs/RUNTIME.md`): phase 1, the claim approval comes back, and phase 2, sign off or send back, are
+built. After pulling this, run `npm run seed` once: the `claims` table has a new column and there is a
+new `sent_back` table.
 
 - The claim graph saves a claim to memory as its last step (`agent` → `settle` → `pay` or
   `sign_off` → `remember`), so a payout over the limit, or a payment the Gateway refused, is saved
@@ -28,6 +30,33 @@ Sending claims back and the agent on AgentCore Runtime (`docs/PLAN_RUNTIME.md`, 
   reason, or 202 and resumes it in the background.
 - A sign-off goes through only while the claim waits for sign-off, as one conditional update, so two
   at once pay once and the other gets 409.
+- A handler who can sign off over the limit can instead send the decision back with a note of 1 to
+  1,000 characters: `send_back_claim` (`POST /api/claims/{claim_id}/send-back`), again only while the
+  claim waits for sign-off (409 for an evaluation's copy or any other status, 403 for anyone else,
+  422 for the note). In one transaction it keeps the decision in the `sent_back` table with the note,
+  who sent it back and when, clears the claim's decision, calculation and sign-off fields, records
+  the note as a `sent_back` step and sets the status `sent_back`. Then it asks the agent's service to
+  resume the claim, as a sign-off does. `get_claim` gives the sent-back decisions, newest first, as
+  `sent_back`.
+- A sent-back claim is taken once, from `sent_back` to `in_progress` by a conditional update: by a
+  resume through `take_sent_back_claim` (`POST /api/claims/{claim_id}/take`, the agent's key only,
+  which sets `resume_heard_at`), or by a dispatch through `start_claim`. While it works, a resume
+  calls `record_resume_heard` (`POST /api/claims/{claim_id}/resume-heard`) every minute. A dispatch
+  lists claims in progress (leaving out one whose resume was heard from in the last five minutes, and
+  `start_claim` refuses it with 409), then sent-back claims, then waiting ones, so a send back the
+  agent never received is worked by the next dispatch.
+- Whoever takes the claim resumes its paused thread: the `sign_off` node gives the model the note as a
+  message from the handler, by name, with `SENT_BACK` in `agent/main.py` saying how to treat it (a
+  senior handler's review, checked against the wording and the manual, referred with the reason when
+  the wording doesn't support it), and sets its model calls back to 0. The new decision goes through
+  the same checks: within the limit it is paid, over it the claim waits for sign-off again, and it can
+  be sent back again.
+- The dashboard: on a claim waiting for sign-off, Dana sees Sign off and, below it, Send back with a
+  required note counted to 1,000 characters. The queue shows "Sent back" as a status. The claim page
+  shows each decision sent back in a Sent back panel, with its note, who sent it back and when, beside
+  the current decision, the note among the steps, and, while the claim is sent back, that the next
+  dispatch works it if the agent can't take it now.
+- `backend/instructions/claim.md` is unchanged: our version never said a decision can't be changed.
 
 The context layer, memory and the Gateway (`docs/PLAN_CONTEXT.md`, from `docs/CONTEXT.md`) are built
 on this machine, phases 1 to 6; phase 7 (the Gateway, the Policy and Memory on AWS, with RDS and
@@ -477,7 +506,8 @@ environment of its own, so `.venv` is left as it is.
 
 ## Not built yet
 
-- Rejecting a held payout. A handler can only sign off for now.
+- Rejecting a held payout outright. A handler signs it off or sends it back to the agent.
+- The dispatch summary counts no bucket for a sent-back claim.
 - When the call to the agent after a sign-off fails or times out, the sign-off and the payment stand,
   but the agent never resumes the claim, so it isn't saved to memory. Logging a warning for the
   failed call comes with the app's new route to the agent (`docs/PLAN_RUNTIME.md`, phase 3).

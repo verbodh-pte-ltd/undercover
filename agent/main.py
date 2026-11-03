@@ -85,7 +85,21 @@ BACKEND_FIELDS = {
     "manual_version",
     "cost",
     "seconds",
+    "sent_back",
 }
+# How often a resume tells the app it is still working the claim, in seconds.
+HEARD_EVERY = 60
+# The message that carries a handler's note when they send a decision back. It's part
+# of the agent's code, so a new version of the instructions can't drop it.
+SENT_BACK = (
+    "{handler}, a senior claims handler, sent your decision on this claim back to"
+    " you with this note:\n\n{note}\n\n"
+    "Your earlier decision no longer stands: record a new one. Treat the note as a"
+    " senior handler's review of your decision, and check what it asks against the"
+    " policy wording and the claims manual, as you check everything else. If the"
+    " wording doesn't support what the note asks, refer the claim to a handler and"
+    " give the reason."
+)
 SCREEN_INSTRUCTIONS = (
     "You check claims sent to UnderCover Travel Insurance before a claims handler"
     " sees them.\n"
@@ -634,12 +648,19 @@ def settle(state: ClaimState) -> Command[Literal["sign_off", "pay", "remember"]]
     return Command(goto="pay")
 
 
-def sign_off(state: ClaimState) -> Command[Literal["remember"]]:
-    """Wait for a handler's answer: a sign-off, which pays the claim, ends the work."""
+def sign_off(state: ClaimState) -> Command[Literal["agent", "remember"]]:
+    """Wait for a handler's answer: a sign-off, which pays the claim, ends the work;
+    a send back gives the model the note to decide again, with its calls afresh."""
     # A resume runs this node again from the top, so nothing goes before the pause.
     answer = interrupt({"claim_id": state["claim_id"]})
-    record_step(state["claim_id"], "reply", f"Signed off by {answer['signed_off_by']}")
-    return Command(goto="remember")
+    if "signed_off_by" in answer:
+        text = f"Signed off by {answer['signed_off_by']}"
+        record_step(state["claim_id"], "reply", text)
+        return Command(goto="remember")
+    note = SENT_BACK.format(handler=answer["sent_back_by"], note=answer["note"])
+    return Command(
+        goto="agent", update={"messages": [HumanMessage(note)], "model_calls": 0}
+    )
 
 
 def pay(
@@ -760,6 +781,10 @@ def handlers_answer(claim: dict[str, Any]) -> dict[str, Any] | None:
     """The answer a paused claim resumes with, from the app's record, or None yet."""
     if claim["signed_off_by"] is not None:
         return {"signed_off_by": claim["signed_off_by"]}
+    # A sent-back claim, once taken, resumes with its latest note.
+    if claim["status"] == "in_progress" and claim["sent_back"]:
+        latest = claim["sent_back"][0]
+        return {"sent_back_by": latest["sent_back_by_name"], "note": latest["note"]}
     return None
 
 
@@ -829,6 +854,8 @@ def stream_claim(
             continue
         for node in update.values():
             for message in (node or {}).get("messages", []):
+                if isinstance(message, HumanMessage):
+                    continue  # a handler's note, already a step from the app
                 for step in steps(message, context.route):
                     record_step(claim_id, step["kind"], step["text"], step["detail"])
                 reply = message.text or reply
@@ -898,15 +925,37 @@ def resume_refusal(claim_id: str) -> str | None:
     prepared = prepare(claim_id, claim["thread_id"], None, None)
     if not prepared.graph.get_state(prepared.config).interrupts:
         return f"{claim_id} isn't paused"
-    if handlers_answer(claim) is None:
-        return f"{claim_id} is waiting for a handler's sign-off"
-    return None
+    if claim["status"] == "in_progress":
+        return f"{claim_id} was sent back and has already been taken"
+    if claim["status"] == "sent_back" or claim["signed_off_by"] is not None:
+        return None
+    return f"{claim_id} is waiting for a handler's sign-off"
 
 
 def resume_claim(claim_id: str) -> str:
     """Resume a paused claim with the handler's answer from the app, outside any run.
 
-    It works on the current version's claim agent, beside any dispatch.
+    A sent-back claim is taken from the app first, which only one caller gets. It
+    works on the current version's claim agent, beside any dispatch, and tells the
+    app every minute while it works.
     """
-    claim = json.loads(call("GET", f"/api/claims/{claim_id}"))
-    return carry_on(claim_id, claim["thread_id"])
+    with backend() as client:
+        claim = client.get(f"/api/claims/{claim_id}").json()
+        if claim["status"] == "sent_back":
+            taken = client.post(f"/api/claims/{claim_id}/take")
+            if not taken.is_success:
+                return f"not taken: {taken.text}"
+    done = threading.Event()
+    telling = threading.Thread(target=keep_telling, args=(claim_id, done), daemon=True)
+    telling.start()
+    try:
+        return carry_on(claim_id, claim["thread_id"])
+    finally:
+        done.set()
+        telling.join()  # so nothing tells the app after the work has ended
+
+
+def keep_telling(claim_id: str, done: threading.Event) -> None:
+    """Tell the app every minute that a resume is still working the claim."""
+    while not done.wait(HEARD_EVERY):
+        call("POST", f"/api/claims/{claim_id}/resume-heard")

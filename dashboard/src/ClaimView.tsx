@@ -98,6 +98,33 @@ function Decision({
   );
 }
 
+function SentBackDecisions({ claim }: Readonly<{ claim: Claim }>) {
+  return (
+    <ul className="stack plain">
+      {claim.sent_back.map((earlier) => (
+        <li key={earlier.sent_back_at} className="stack-sm">
+          <p className="decision">
+            {label(earlier.decision)}
+            {earlier.decision === "approve" && (
+              <span className="mono"> {money(earlier.payout)}</span>
+            )}
+          </p>
+          <p>{earlier.reason}</p>
+          <p className="muted">Policy section: {earlier.policy_section}</p>
+          <p className="muted">
+            Decided by {earlier.decided_by} on {when(earlier.decided_at)}
+          </p>
+          <blockquote className="sent-back-note">{earlier.note}</blockquote>
+          <p className="muted">
+            Sent back by {earlier.sent_back_by_name} on{" "}
+            {when(earlier.sent_back_at)}
+          </p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 const stepLabel = (step: Step) => {
   if (step.kind === "refusal") {
     return step.detail?.by === "gateway" ? "Refused by the Gateway" : "Refused";
@@ -250,7 +277,9 @@ export function ClaimView({
 
   // Until the agent has decided, keep checking for its new steps.
   const undecided =
-    claim?.status === "waiting" || claim?.status === "in_progress";
+    claim?.status === "waiting" ||
+    claim?.status === "in_progress" ||
+    claim?.status === "sent_back";
   useEffect(() => {
     if (!undecided) return;
     const timer = setInterval(() => {
@@ -302,9 +331,25 @@ export function ClaimView({
             )}
             {claim.status === "waiting_for_sign_off" &&
               claim.run_id === null && (
-                <SignOff claim={claim} handler={handler} onSigned={setClaim} />
+                <SignOff
+                  claim={claim}
+                  handler={handler}
+                  onAnswered={setClaim}
+                />
               )}
+            {claim.status === "sent_back" && (
+              <p className="note">
+                Sent back to the agent, which decides the claim again. If the
+                agent can't take it now, the next dispatch does.
+              </p>
+            )}
           </div>
+          {claim.sent_back.length > 0 && (
+            <div className="panel stack-sm">
+              <h2>Sent back</h2>
+              <SentBackDecisions claim={claim} />
+            </div>
+          )}
           <div className="panel stack-sm">
             <h2>Story</h2>
             <p className="muted">
