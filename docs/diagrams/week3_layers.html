@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UnderCover Security Layers</title>
+<style>
+/* One matrix: rows are the four layers, columns are the three kinds of caller.
+   Below it, one payment traced through every layer in order. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1d2330; --muted: #5d6677; --line: #dde1e8;
+  --ai: #6d4bd8; --ai-bg: #f1edff;
+  --authn: #0f7b8a; --authn-bg: #e6f6f8;
+  --authz: #b4462f; --authz-bg: #fdeeea;
+  --infra: #8a6a12; --infra-bg: #fbf4e2;
+  --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --body: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12151b; --surface: #1a1e26; --fg: #e5e8ee; --muted: #9aa3b2; --line: #2b313c;
+  --ai: #a990ff; --ai-bg: #231d3a; --authn: #4cc3d2; --authn-bg: #13292d;
+  --authz: #f08a72; --authz-bg: #321c17; --infra: #e2bf5c; --infra-bg: #2b2412; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #12151b; --surface: #1a1e26; --fg: #e5e8ee; --muted: #9aa3b2; --line: #2b313c;
+  --ai: #a990ff; --ai-bg: #231d3a; --authn: #4cc3d2; --authn-bg: #13292d;
+  --authz: #f08a72; --authz-bg: #321c17; --infra: #e2bf5c; --infra-bg: #2b2412; color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--body); padding: 28px 16px 48px; }
+main { max-width: 1240px; margin: 0 auto; display: grid; gap: 28px; }
+h1 { margin: 0; font-size: 1.6rem; }
+.lede { margin: 6px 0 0; color: var(--muted); max-width: 70ch; }
+h2 { margin: 0 0 10px; font-size: 1.1rem; }
+.matrix { display: grid; grid-template-columns: 170px repeat(3, minmax(0, 1fr)); gap: 8px; }
+.head { font-weight: 600; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.head small { display: block; color: var(--muted); font-weight: 400; }
+.layer { padding: 12px; border-radius: 8px; font-weight: 700; border-left: 5px solid; }
+.layer small { display: block; font-weight: 400; color: var(--muted); margin-top: 2px; }
+.cell { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 8px; align-content: start; }
+.item b { display: block; }
+.item span { color: var(--muted); }
+.item code, .step code { font: 12px var(--mono); }
+.tag { font: 11px var(--mono); border-radius: 4px; padding: 1px 6px; margin-left: 4px; white-space: nowrap; border: 1px solid var(--line); color: var(--muted); font-weight: 400; }
+.none { color: var(--muted); font-style: italic; }
+.ai { border-color: var(--ai); background: var(--ai-bg); color: var(--ai); }
+.authn { border-color: var(--authn); background: var(--authn-bg); color: var(--authn); }
+.authz { border-color: var(--authz); background: var(--authz-bg); color: var(--authz); }
+.infra { border-color: var(--infra); background: var(--infra-bg); color: var(--infra); }
+.row-ai .cell { border-top: 3px solid var(--ai); }
+.row-authn .cell { border-top: 3px solid var(--authn); }
+.row-authz .cell { border-top: 3px solid var(--authz); }
+.row-infra .cell { border-top: 3px solid var(--infra); }
+.row { display: contents; }
+.trace { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; counter-reset: s; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; position: relative; border-top: 3px solid; }
+.step::before { counter-increment: s; content: counter(s); font: 700 12px var(--mono); color: var(--muted); }
+.step b { display: block; margin-top: 2px; }
+.step span { color: var(--muted); font-size: 13px; }
+.step.ai { border-top-color: var(--ai); background: var(--surface); color: var(--fg); }
+.step.authn { border-top-color: var(--authn); background: var(--surface); color: var(--fg); }
+.step.authz { border-top-color: var(--authz); background: var(--surface); color: var(--fg); }
+.step.infra { border-top-color: var(--infra); background: var(--surface); color: var(--fg); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 13px; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; }
+.note { color: var(--muted); font-size: 13px; }
+@media (max-width: 900px) {
+  .matrix { grid-template-columns: 1fr; }
+  .head.corner { display: none; }
+  .matrix > .head:not(.corner) { display: none; }
+  .cell::before { content: attr(data-col); display: block; font-weight: 600; color: var(--fg); }
+  .trace { grid-template-columns: 1fr 1fr; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>UnderCover on AWS: the security layers</h1>
+    <p class="lede">Who can reach UnderCover, how each caller proves who it is, what it may do, and where it runs, from Week 3 Day 1 to the RDS and Cognito notebook. The tags name the notebook or build that adds each piece.</p>
+  </header>
+
+  <div class="legend">
+    <span><i style="background:var(--ai)"></i>AI: the models and the checks on them</span>
+    <span><i style="background:var(--authn)"></i>Authentication: who are you?</span>
+    <span><i style="background:var(--authz)"></i>Authorization: what may you do?</span>
+    <span><i style="background:var(--infra)"></i>Infrastructure: where it runs</span>
+  </div>
+
+  <section>
+    <h2>Every layer, for each kind of caller</h2>
+    <div class="matrix">
+      <div class="head corner"></div>
+      <div class="head">A claims handler<small>Dana, Marcus or Priya, in the deployed dashboard</small></div>
+      <div class="head">The claim agent<small>on your laptop, calling tools through the Gateway</small></div>
+      <div class="head">You, the engineer<small>running the notebooks and the AWS command line</small></div>
+
+      <div class="row row-ai">
+        <div class="layer ai">AI layer<small>models and their checks</small></div>
+        <div class="cell" data-col="A claims handler">
+          <p class="none">None directly. The handler's own judgment is the control: a sign-off is the only way a payment over $1,000 is made.</p>
+        </div>
+        <div class="cell" data-col="The claim agent">
+          <div class="item"><b>Claim agent <span class="tag">Secure build</span></b><span>LangChain agent, model from <code>MODEL_NAME</code> through OpenRouter.</span></div>
+          <div class="item"><b>Model check for hidden instructions <span class="tag">Lab 1</span></b><span>A second model screens the claim before the agent acts on it.</span></div>
+          <div class="item"><b>Output checks <span class="tag">Lab 1 assignment</span></b><span>An approval must pay what <code>calculate_payout</code> worked out.</span></div>
+        </div>
+        <div class="cell" data-col="You, the engineer">
+          <div class="item"><b>OpenRouter API key</b><span><code>OPENROUTER_API_KEY</code> in <code>.env</code>, only on your laptop.</span></div>
+        </div>
+      </div>
+
+      <div class="row row-authn">
+        <div class="layer authn">Authentication<small>who are you?</small></div>
+        <div class="cell" data-col="A claims handler">
+          <div class="item"><b>Cognito user pool <code>undercover-handlers</code> <span class="tag">RDS+Cognito nb</span></b><span>Email and <code>HANDLER_PASSWORD</code>, <code>USER_PASSWORD_AUTH</code>, self sign-up off.</span></div>
+          <div class="item"><b>ID token check in the app</b><span>The app verifies the token against <code>AUTH_JWKS_URL</code>, <code>AUTH_ISSUER</code> and <code>AUTH_AUDIENCE</code>.</span></div>
+        </div>
+        <div class="cell" data-col="The claim agent">
+          <div class="item"><b>AWS Signature V4 to the Gateway <span class="tag">Lab 2</span></b><span>The Gateway's authorizer is <code>AWS_IAM</code>: only signed calls from your account get in.</span></div>
+          <div class="item"><b>API key from the Gateway to the app <span class="tag">Lab 2</span></b><span>The Gateway adds <code>X-API-Key</code>. Without it the app answers 401.</span></div>
+        </div>
+        <div class="cell" data-col="You, the engineer">
+          <div class="item"><b>IAM Identity Center sign-in <span class="tag">Day 1</span></b><span><code>aws sso login --sso-session personal-sso</code>, which lasts a few hours.</span></div>
+          <div class="item"><b>Two profiles</b><span><code>[default]</code> is the course role. <code>AWS_ADMIN_PROFILE</code> is AdministratorAccess, used only to widen the course role.</span></div>
+          <div class="item"><b>MFA on the root user <span class="tag">Day 1</span></b></div>
+        </div>
+      </div>
+
+      <div class="row row-authz">
+        <div class="layer authz">Authorization<small>what may you do?</small></div>
+        <div class="cell" data-col="A claims handler">
+          <div class="item"><b>Handler's rights</b><span>From <code>data/handlers.json</code>. Only <code>can_approve_over_limit</code> handlers, such as Dana, sign off over $1,000.</span></div>
+        </div>
+        <div class="cell" data-col="The claim agent">
+          <div class="item"><b>Cedar policy engine, in ENFORCE <span class="tag">Lab 2</span></b><span>Permits the app's tools, and forbids <code>pay_claim</code> over $1,000 before the call reaches the app.</span></div>
+          <div class="item"><b>The app's own rules</b><span>Refuses a payment over the $1,000 approval limit (403) and a payment on an unapproved claim (409).</span></div>
+        </div>
+        <div class="cell" data-col="You, the engineer">
+          <div class="item"><b>Course role policy <span class="tag">Day 1</span></b><span>Plus <code>FdeLab</code> statements: RDS only on <code>undercover*</code>, security-group changes only when tagged <code>label=FDE-lab</code>.</span></div>
+          <div class="item"><b>Least-privilege roles <span class="tag">Lab 2</span></b><span><code>undercover-app-role</code> writes logs only. <code>undercover-gateway-role</code> fetches the API key and uses the policy engine.</span></div>
+        </div>
+      </div>
+
+      <div class="row row-infra">
+        <div class="layer infra">Infrastructure<small>where it runs, us-east-1</small></div>
+        <div class="cell" data-col="A claims handler">
+          <div class="item"><b>Lambda <code>undercover-app</code> and its Function URL <span class="tag">Lab 2</span></b><span>Public HTTPS address that serves the dashboard and the API.</span></div>
+          <div class="item"><b>RDS PostgreSQL 17 <code>undercover-db</code> <span class="tag">RDS+Cognito nb</span></b><span><code>db.t4g.micro</code>, TLS required, password only in <code>AWS_DATABASE_URL</code>.</span></div>
+        </div>
+        <div class="cell" data-col="The claim agent">
+          <div class="item"><b>AgentCore Gateway <span class="tag">Lab 2</span></b><span>Turns the app's routes into six MCP tools.</span></div>
+          <div class="item"><b>AgentCore Identity <span class="tag">Lab 2</span></b><span>Keeps the app's API key in Secrets Manager.</span></div>
+        </div>
+        <div class="cell" data-col="You, the engineer">
+          <div class="item"><b>Security group <code>undercover-db-sg</code></b><span>Port 5432 open, because Lambda outside a VPC has no fixed address.</span></div>
+          <div class="item"><b>CloudWatch Logs, a budget and tags</b><span>Logs kept 7 days, a Day 1 budget, and every piece tagged <code>project=undercover</code> and <code>label=FDE-lab</code>.</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>One payment through every layer: the agent tries to pay $4,800</h2>
+    <div class="trace">
+      <div class="step ai"><b>Model check</b><span>Screens the claim for a hidden instruction before the agent works on it.</span></div>
+      <div class="step authn"><b>SigV4 signature</b><span>The Gateway accepts only calls signed by your account.</span></div>
+      <div class="step authz"><b>Cedar policy</b><span>Over $1,000, so the Gateway refuses it. In Lab 2's run: "Tool call not allowed".</span></div>
+      <div class="step authn"><b>API key</b><span>Under $1,000 the Gateway passes the call on with <code>X-API-Key</code>.</span></div>
+      <div class="step authz"><b>The app's rules</b><span>The approval limit and approval state are checked again. In LOG_ONLY mode this layer said 403.</span></div>
+      <div class="step infra"><b>RDS</b><span>Only a payment that passed every layer is written to the database, over TLS.</span></div>
+    </div>
+    <p class="note">The results quoted come from running Lab 2 on 2026-11-03: in ENFORCE mode the $4,800 call was refused by the policy, and the $400 call reached the app, which refused it because CLM-1901 isn't approved.</p>
+  </section>
+</main>
+</body>
+</html>
