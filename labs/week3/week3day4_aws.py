@@ -446,8 +446,8 @@ def enforce_policy(gateway, role):
                 policyEngineConfiguration={"arn": engine_arn, "mode": "ENFORCE"},
             )
             break
-        except agentcore.exceptions.ValidationException as error:
-            if "GetPolicyEngine" not in str(error):
+        except (agentcore.exceptions.ValidationException, agentcore.exceptions.AccessDeniedException) as error:
+            if "GetPolicyEngine" not in str(error) and "AuthorizeAction" not in str(error):
                 raise
             print("Waiting for the role's new permission to reach AgentCore")
             time.sleep(5)
