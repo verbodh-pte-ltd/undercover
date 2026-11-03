@@ -61,20 +61,22 @@ test("a handler approves a proposal played out through the API", async ({
     .getByRole("button", { name: "Approve" })
     .click();
 
-  // The backend passes the approval and the signed-in handler to the agent's service.
+  // The backend passes the approval and the signed-in handler to the agent.
+  const answer = {
+    operation: "answer_proposal",
+    round_id: Number(id),
+    decision: "approve",
+    reason: "",
+    handler_id: "HND-01",
+  };
   await expect
     .poll(async () => {
       const calls = (await (
         await request.get("http://127.0.0.1:8003/calls")
       ).json()) as string[];
-      const sent = calls.find((c) =>
-        c.startsWith(`POST /rounds/${id}/decision `),
-      );
-      return (
-        sent && (JSON.parse(sent.split(" ").slice(2).join(" ")) as unknown)
-      );
+      return calls.map((c) => JSON.parse(c) as unknown);
     })
-    .toEqual({ decision: "approve", reason: "", handler_id: "HND-01" });
+    .toContainEqual(answer);
   await request.post(`/api/rounds/${id}/decision`, {
     headers: AGENT,
     data: { decision: "approve", handler_id: "HND-01", reason: "" },

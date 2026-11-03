@@ -222,6 +222,9 @@ def test_the_backend_imports_nothing_from_the_agent():
     outside = imported - set(sys.stdlib_module_names) - {"backend"}
     assert "agent" not in imported
     assert outside == {
+        # boto3 and botocore only to call the agent on AgentCore Runtime.
+        "boto3",
+        "botocore",
         "fastapi",
         "httpx",
         "jwt",
@@ -288,6 +291,7 @@ def test_the_backend_reads_only_these_environment_variables():
         "AWS_LAMBDA_FUNCTION_NAME",
         "UNDERCOVER_DB",
         "UNDERCOVER_AGENT",
+        "UNDERCOVER_AGENT_RUNTIME",
         "MODEL_NAME",
         "JUDGE_URL",
         "OPENROUTER_API_KEY",

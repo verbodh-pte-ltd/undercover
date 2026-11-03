@@ -156,19 +156,19 @@ Done when:
 
 Done when:
 
-- [ ] `TestClient` tests with stand-ins: importing the agent opens nothing; on Runtime the first request
+- [x] `TestClient` tests with stand-ins: importing the agent opens nothing; on Runtime the first request
       fetches each credential into its setting once
-- [ ] Each operation accepts work and refuses it; a payload with an input missing gets 400
-- [ ] The ping says `HealthyBusy` while work goes and `Healthy` once it finished or failed
-- [ ] Off Runtime a request without the key gets 401, `health` doesn't need it; on Runtime no key is asked
-- [ ] The app's two routes with stand-ins: the key and the session id; the payload; accepted; refused passed
+- [x] Each operation accepts work and refuses it; a payload with an input missing gets 400
+- [x] The ping says `HealthyBusy` while work goes and `Healthy` once it finished or failed
+- [x] Off Runtime a request without the key gets 401, `health` doesn't need it; on Runtime no key is asked
+- [x] The app's two routes with stand-ins: the key and the session id; the payload; accepted; refused passed
       on as 409; a failed connection and an error answer change nothing and say so; a timeout or a cut-off
       answer changes nothing
-- [ ] `npm run check:runtime` passes inside `npm run check`
-- [ ] With `npm run dev` stopped, `uv run --env-file .env --isolated --only-group runtime python -m
+- [x] `npm run check:runtime` passes inside `npm run check`
+- [x] With `npm run dev` stopped, `uv run --env-file .env --isolated --only-group runtime python -m
       runtime.main` serves on port 8080, and `{"operation": "health"}` posted to `/invocations` answers
       `{"healthy": true}`
-- [ ] The end-to-end stand-in answers `/invocations` and `/ping`; `npm run check` passes; committed
+- [x] The end-to-end stand-in answers `/invocations` and `/ping`; `npm run check` passes; committed
 
 ## Phase 4: the app keeps one run at a time (step 4)
 

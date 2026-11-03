@@ -2,8 +2,8 @@ import { defineConfig } from "@playwright/test";
 import { API_KEY } from "./e2e/agent";
 
 // The end-to-end tests run their own backend and dashboard on their own ports and database,
-// so they never change the data behind `npm run dev`. A stand-in on port 8003 takes the agent
-// service's calls, so they never reach the agent that `npm run dev` starts, one on port 8004
+// so they never change the data behind `npm run dev`. A stand-in on port 8003 takes the
+// payloads meant for the agent's AgentCore app, so they never reach the agent that `npm run dev` starts, one on port 8004
 // takes Supabase Auth's, and one on port 8005 takes the judge's.
 const AUTH = "http://127.0.0.1:8004";
 const JUDGE = "http://127.0.0.1:8005";
@@ -18,7 +18,7 @@ export default defineConfig({
   webServer: [
     {
       command: "node e2e/agent-stand-in.mjs",
-      url: "http://127.0.0.1:8003/health",
+      url: "http://127.0.0.1:8003/ping",
       reuseExistingServer: true,
     },
     {
@@ -41,6 +41,8 @@ export default defineConfig({
         // Never local Postgres, even when DATABASE_URL is set in the shell.
         DATABASE_URL: "",
         UNDERCOVER_AGENT: "http://127.0.0.1:8003",
+        // Never AgentCore Runtime, even when the shell names one.
+        UNDERCOVER_AGENT_RUNTIME: "",
         VITE_SUPABASE_URL: AUTH,
         JUDGE_URL: JUDGE,
         OPENROUTER_API_KEY: "e2e-key",

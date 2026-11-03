@@ -32,22 +32,26 @@ class FakeResponse:
     def __init__(self, status_code, body):
         self.status_code = status_code
         self.body = body
+        self.text = json.dumps(body)
+        self.is_error = status_code >= 400
 
     def json(self):
         return self.body
 
-    def raise_for_status(self):
-        return None
+
+ACCEPTED = FakeResponse(200, {"accepted": True})
 
 
 @pytest.fixture
 def service(monkeypatch):
-    """A stand-in for the agent's service that accepts every call and records it."""
+    """A stand-in for the agent that takes every payload and records it."""
     sent = []
 
-    def post(url, json, timeout):
-        sent.append((url.removeprefix(agent_service.url()), json))
-        return FakeResponse(202, {"status": "started"})
+    def post(url, json, **kwargs):
+        sent.append(
+            (json["operation"], {k: v for k, v in json.items() if k != "operation"})
+        )
+        return ACCEPTED
 
     monkeypatch.setattr(agent_service.httpx, "post", post)
     return sent
@@ -187,7 +191,7 @@ def test_a_round_starts_in_the_agents_service_one_at_a_time(service):
     round_id = start_round()
     found = client.get(f"/api/rounds/{round_id}").json()
     assert service == [
-        ("/rounds", {"round_id": round_id, "thread_id": found["thread_id"]})
+        ("start_round", {"round_id": round_id, "thread_id": found["thread_id"]})
     ]
     assert found["thread_id"].startswith("round-")
     assert (found["stage"], found["version_before"], found["recipe_version"]) == (
@@ -206,7 +210,7 @@ def test_a_round_starts_in_the_agents_service_one_at_a_time(service):
 
 
 def test_a_refused_start_leaves_no_round(monkeypatch):
-    refusal = FakeResponse(409, {"detail": "A dispatch is running"})
+    refusal = FakeResponse(200, {"refused": "A dispatch is running"})
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: refusal)
     response = client.post("/api/rounds", headers=headers())
     assert (response.status_code, response.json()["detail"]) == (
@@ -216,15 +220,23 @@ def test_a_refused_start_leaves_no_round(monkeypatch):
     assert client.get("/api/rounds", headers=headers()).json() == []
 
 
-def test_a_start_the_service_cant_take_leaves_no_round(monkeypatch):
-    class NotFound(FakeResponse):
-        def raise_for_status(self):
-            raise httpx.HTTPStatusError("404", request=None, response=None)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: NotFound(404, {}))
-    with pytest.raises(httpx.HTTPStatusError):
-        client.post("/api/rounds", headers=headers())
+def test_a_start_the_agent_answers_with_an_error_leaves_no_round(monkeypatch):
+    error = FakeResponse(500, {"error": "boom"})
+    monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: error)
+    assert client.post("/api/rounds", headers=headers()).status_code == 502
     assert client.get("/api/rounds", headers=headers()).json() == []
+
+
+def test_a_start_that_times_out_leaves_the_round_going(monkeypatch):
+    def slow(*args, **kwargs):
+        raise httpx.ReadTimeout("no answer")
+
+    monkeypatch.setattr(agent_service.httpx, "post", slow)
+    response = client.post("/api/rounds", headers=headers())
+    assert response.status_code == 504
+    assert "Reload the page" in response.json()["detail"]
+    [found] = client.get("/api/rounds", headers=headers()).json()
+    assert found["stage"] == "first_evaluations"
 
 
 def test_a_round_keeps_its_settings_when_they_change(service):
@@ -296,8 +308,13 @@ def test_a_proposal_changes_nothing_until_approved(service):
     response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     assert response.json() == {"status": "started"}
     assert service[-1] == (
-        f"/rounds/{round_id}/decision",
-        {"decision": "approve", "reason": "", "handler_id": "HND-01"},
+        "answer_proposal",
+        {
+            "round_id": round_id,
+            "decision": "approve",
+            "reason": "",
+            "handler_id": "HND-01",
+        },
     )
     # The backend records nothing of its own: the service records the answer.
     assert client.get(f"/api/rounds/{round_id}").json()["events"] == []
@@ -330,12 +347,10 @@ def test_a_rejection_records_the_handlers_reason(service):
 
 
 def test_an_approval_refused_by_the_service_records_nothing(monkeypatch):
-    monkeypatch.setattr(
-        agent_service.httpx, "post", lambda *a, **kw: FakeResponse(202, {})
-    )
+    monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: ACCEPTED)
     round_id = start_round()
     client.post(f"/api/rounds/{round_id}/proposed-change", json=CHANGE)
-    refusal = FakeResponse(409, {"detail": "A dispatch is running"})
+    refusal = FakeResponse(200, {"refused": "A dispatch is running"})
     monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: refusal)
     response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     assert (response.status_code, response.json()["detail"]) == (

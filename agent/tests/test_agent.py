@@ -15,10 +15,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import insert
 
 from agent import __main__ as runner
-from agent import dispatcher, improver, main, service
+from agent import dispatcher, entrypoint, improver, main
 from backend import store
 from backend.main import app
-from backend.tests.signing import AGENT, headers
+from backend.tests.signing import AGENT, API_KEY, headers
 
 client = TestClient(app, headers=AGENT)
 # The agent's own client and check model, before the tests swap them for stand-ins.
@@ -682,78 +682,11 @@ def test_everything_in_the_agent_calls_the_backend_through_one_client():
     }
     assert sum(s.count("httpx.Client(") for s in sources.values()) == 1
     assert "httpx.Client(" in inspect.getsource(REAL_BACKEND)
-    for name in ["dispatcher.py", "improver_api.py", "service.py"]:
+    for name in ["dispatcher.py", "improver_api.py", "entrypoint.py"]:
         assert "main.backend()" in sources[name]
     for source in sources.values():
         for call in ["httpx.get(", "httpx.post(", "httpx.put(", "httpx.request("]:
             assert call not in source
-
-
-def test_the_service_wont_start_without_the_key(monkeypatch):
-    monkeypatch.delenv("UNDERCOVER_API_KEY")
-    with (
-        pytest.raises(RuntimeError, match="UNDERCOVER_API_KEY is missing"),
-        TestClient(service.app),
-    ):
-        pass
-
-
-# The agent's service
-
-
-def test_the_service_finishes_a_signed_off_claim_without_paying(monkeypatch):
-    monkeypatch.setattr(main, "model", lambda version: stub())
-    hold()
-    client.post("/api/claims/CLM-1001/sign-off", headers=headers())
-    sent = recording(monkeypatch)
-    response = TestClient(service.app).post("/claims/CLM-1001/resume")
-    assert response.status_code == 202
-    assert "Signed off by HND-01" in steps_of("CLM-1001")
-    assert not [r for r in sent if r.endswith("/payment")]
-    result = claim("CLM-1001")
-    assert (result["status"], result["paid_amount"]) == ("decided", 1250.0)
-    assert TestClient(service.app).get("/health").json() == {"status": "ok"}
-
-
-def test_the_service_leaves_a_claim_that_is_not_in_progress(monkeypatch):
-    monkeypatch.setattr(main, "model", lambda version: stub())
-    hold()
-    TestClient(service.app).post("/claims/CLM-1001/resume")
-    assert claim("CLM-1001")["status"] == "waiting_for_sign_off"
-
-
-def test_the_service_starts_a_dispatch_and_refuses_a_second(monkeypatch):
-    started = []
-    finish = threading.Event()
-
-    def dispatch(run_id, n, llm=None):
-        started.append((run_id, n))
-        finish.wait(5)
-
-    monkeypatch.setattr(dispatcher, "dispatch", dispatch)
-    with TestClient(service.app) as agent:
-        assert agent.post("/dispatches", json={"n": 4}).status_code == 202
-        second = agent.post(
-            "/evaluations", json={"n": 2, "eval_set": "held_out", "tiny": True}
-        )
-        assert second.status_code == 409
-        finish.set()
-        for _ in range(100):
-            if not service.running.locked():
-                break
-            time.sleep(0.01)
-    run = client.get("/api/runs/current", headers=headers()).json()
-    assert started == [(run["run_id"], 4)]
-    assert run["n"] == 4
-
-
-def test_the_service_marks_a_stopped_run_when_it_starts():
-    new_run()
-    with TestClient(service.app):
-        pass
-    assert (
-        client.get("/api/runs/current", headers=headers()).json()["status"] == "stopped"
-    )
 
 
 def test_claim_agents_starting_together_share_one_pool(monkeypatch):
@@ -762,7 +695,8 @@ def test_claim_agents_starting_together_share_one_pool(monkeypatch):
     class FakePool:
         def __init__(self, url, **kwargs):
             time.sleep(0.05)
-            made.append(kwargs["max_size"])
+            # No prepared statements, which Supabase's transaction pooler can't keep.
+            made.append((kwargs["max_size"], kwargs["kwargs"]["prepare_threshold"]))
 
     class FakeConnection:
         def __enter__(self):
@@ -787,7 +721,7 @@ def test_claim_agents_starting_together_share_one_pool(monkeypatch):
             worker.join()
     finally:
         main.make_pool.cache_clear()
-    assert made == [4]
+    assert made == [(4, None)]
 
 
 # The configuration in versions
@@ -810,16 +744,34 @@ def add_version(version, kept, instructions="Version 2: decide the claim."):
         )
 
 
-def started(monkeypatch, path, body):
-    """Start a run through the service, with a dispatcher that does nothing."""
+def invoke(payload, key: str | None = API_KEY):
+    """Post a payload to the agent's AgentCore app, with the agent's key unless None."""
+    sent = {"Authorization": f"Bearer {key}"} if key else {}
+    return TestClient(entrypoint.app).post("/invocations", json=payload, headers=sent)
+
+
+def ping():
+    return TestClient(entrypoint.app).get("/ping").json()["status"]
+
+
+def settle():
+    """Wait until the agent's ping says its work in hand has ended."""
+    # A whole stretch of work can take seconds on a busy machine.
+    for _ in range(6000):
+        if ping() == "Healthy":
+            return
+        time.sleep(0.01)
+    raise AssertionError("the agent is still working")
+
+
+def started(monkeypatch, payload):
+    """Start a run through the agent, with a dispatcher that does nothing."""
     monkeypatch.setattr(dispatcher, "dispatch", lambda run_id, n, llm=None: [])
-    with TestClient(service.app) as agent:
-        assert agent.post(path, json=body).status_code == 202
-        for _ in range(100):
-            if not service.running.locked():
-                break
-            time.sleep(0.01)
-    if path == "/dispatches":
+    # A fresh agent, which stops the run the last call left running as it gets ready.
+    monkeypatch.setattr(entrypoint, "ready", threading.Event())
+    assert invoke(payload).json() == {"accepted": True}
+    settle()
+    if payload["operation"] == "start_dispatch":
         return client.get("/api/runs/current", headers=headers()).json()
     return client.get("/api/evaluations", headers=headers()).json()[0]
 
@@ -828,9 +780,10 @@ def test_a_dispatch_and_an_evaluation_record_the_current_version(monkeypatch):
     monkeypatch.delenv("MODEL_NAME", raising=False)
     add_version(2, kept=True)
     add_version(3, kept=False)
-    dispatch = started(monkeypatch, "/dispatches", {"n": 2})
+    dispatch = started(monkeypatch, {"operation": "start_dispatch", "n": 2})
     evaluation = started(
-        monkeypatch, "/evaluations", {"n": 2, "eval_set": "held_out", "tiny": True}
+        monkeypatch,
+        {"operation": "start_evaluation", "n": 2, "eval_set": "held_out", "tiny": True},
     )
     for run in [dispatch, evaluation]:
         assert (run["version"], run["model"], run["effort"]) == (
@@ -842,7 +795,7 @@ def test_a_dispatch_and_an_evaluation_record_the_current_version(monkeypatch):
 
 def test_with_model_name_set_a_run_records_it_at_the_default_effort(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
-    run = started(monkeypatch, "/dispatches", {"n": 2})
+    run = started(monkeypatch, {"operation": "start_dispatch", "n": 2})
     assert (run["version"], run["model"], run["effort"]) == (
         1,
         "openrouter/free",

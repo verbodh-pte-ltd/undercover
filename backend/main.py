@@ -11,7 +11,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-import httpx
 import jwt
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
@@ -893,13 +892,13 @@ def change_settings(changed: Settings, handler: Handler, db: Db) -> dict[str, An
 @app.post("/api/dispatches", operation_id="start_dispatch")
 def start_dispatch(start: DispatchStart, _: Handler) -> dict[str, Any]:
     """Ask the agent's service to work the queue with up to n claim agents at once."""
-    return agent_service.start("dispatches", start.model_dump())
+    return agent_service.start("start_dispatch", start.model_dump())
 
 
 @app.post("/api/evaluations", operation_id="start_evaluation")
 def start_evaluation(start: EvaluationStart, _: Handler) -> dict[str, Any]:
     """Ask the agent's service to evaluate the agent on a labelled set of claims."""
-    return agent_service.start("evaluations", start.model_dump())
+    return agent_service.start("start_evaluation", start.model_dump())
 
 
 def add_run(db: Connection, create: RunCreate, round_id: int | None) -> dict[str, Any]:
@@ -1586,9 +1585,9 @@ def start_round(handler: Handler, db: Db) -> dict[str, Any]:
     db.commit()
     body = {"round_id": round_id, "thread_id": values["thread_id"]}
     try:
-        agent_service.start("rounds", body)
-    # A round the service didn't start must not stay open and block the next one.
-    except (HTTPException, httpx.HTTPError):
+        agent_service.start("start_round", body)
+    # A round the agent didn't take must not stay open and block the next one.
+    except agent_service.NotTaken:
         db.execute(delete(rounds).where(rounds.c.round_id == round_id))
         db.commit()
         raise
@@ -1656,7 +1655,7 @@ def answer_proposal(
     # End the read, so the service can record the answer while this waits.
     db.commit()
     body = {"decision": decision, "reason": reason, "handler_id": handler["handler_id"]}
-    return agent_service.start(f"rounds/{round_id}/decision", body)
+    return agent_service.start("answer_proposal", {"round_id": round_id, **body})
 
 
 @app.post("/api/rounds/{round_id}/approve", operation_id="approve_proposal")

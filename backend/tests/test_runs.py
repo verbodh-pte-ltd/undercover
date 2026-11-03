@@ -1,10 +1,9 @@
 import json
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import agent_service, store
+from backend import store
 from backend.main import app
 from backend.tests.records import record_decision
 from backend.tests.signing import AGENT, headers
@@ -210,56 +209,6 @@ def test_a_step_of_another_kind_or_without_its_detail_is_refused():
     assert client.post("/api/claims/CLM-1001/steps", json=other).status_code == 422
     bare = {"kind": "reply", "text": "x"}
     assert client.post("/api/claims/CLM-1001/steps", json=bare).status_code == 422
-
-
-class FakeResponse:
-    def __init__(self, status_code, body):
-        self.status_code = status_code
-        self.body = body
-
-    def json(self):
-        return self.body
-
-    def raise_for_status(self):
-        return None
-
-
-def test_start_dispatch_asks_the_service_with_n(monkeypatch):
-    sent = []
-
-    def post(url, json, timeout):
-        sent.append((url, json))
-        return FakeResponse(202, {"status": "started"})
-
-    monkeypatch.setenv("UNDERCOVER_AGENT", "http://agent.test")
-    monkeypatch.setattr(agent_service.httpx, "post", post)
-    assert client.post("/api/dispatches", json={"n": 3}, headers=headers()).json() == {
-        "status": "started"
-    }
-    body = {"n": 5, "eval_set": "held_out", "tiny": True}
-    client.post("/api/evaluations", json=body, headers=headers())
-    assert sent == [
-        ("http://agent.test/dispatches", {"n": 3}),
-        ("http://agent.test/evaluations", body),
-    ]
-
-
-def test_a_second_start_is_refused(monkeypatch):
-    refusal = FakeResponse(409, {"detail": "A dispatch is already running"})
-    monkeypatch.setattr(agent_service.httpx, "post", lambda *a, **kw: refusal)
-    response = client.post("/api/dispatches", json={"n": 3}, headers=headers())
-    assert response.status_code == 409
-    assert response.json()["detail"] == "A dispatch is already running"
-
-
-def test_start_says_when_the_service_is_not_running(monkeypatch):
-    def refuse(*args, **kwargs):
-        raise httpx.ConnectError("refused")
-
-    monkeypatch.setattr(agent_service.httpx, "post", refuse)
-    response = client.post("/api/dispatches", json={"n": 3}, headers=headers())
-    assert response.status_code == 503
-    assert response.json()["detail"] == "The agent's service isn't running"
 
 
 def test_n_is_from_1_to_25():

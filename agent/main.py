@@ -463,7 +463,8 @@ def make_pool() -> ConnectionPool[Any]:
         timeout=POOL_WAIT,
         kwargs={
             "autocommit": True,
-            "prepare_threshold": 0,
+            # Off, so the pool works through either of Supabase's poolers.
+            "prepare_threshold": None,
             "row_factory": dict_row,
             "options": f"-c search_path={SCHEMA}",
         },

@@ -1,9 +1,9 @@
 # Process
 
-`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend, the dashboard, the agent's service and the context layer (`uv run -m context` on :8006), with the settings in `.env`. `npm run seed` reseeds the database. On this machine the database is the `undercover-postgres` Docker container, which must be running, and sign-in needs Supabase's local stack (`npx supabase start`). Sign in as a handler from `data/handlers.json` with `HANDLER_PASSWORD` from `.env`. `.env` also holds
+`uv sync` and `npm install` at the repo root install everything, including a git pre-commit hook. `npm run dev` starts the backend (:8000), the dashboard (:5173), the agent's AgentCore app (:8080) and the context layer (`uv run -m context` on :8006), with the settings in `.env`. Lab 1's `agentcore dev` also serves on :8080, so stop it first. `npm run seed` reseeds the database. On this machine the database is the `undercover-postgres` Docker container, which must be running, and sign-in needs Supabase's local stack (`npx supabase start`). Sign in as a handler from `data/handlers.json` with `HANDLER_PASSWORD` from `.env`. `.env` also holds
 `UNDERCOVER_API_KEY`, the agent's key to the backend, a random value of at least 32 characters: the
-agent's service won't start without it, and the backend refuses the agent's calls without it. Never
-print it.
+agent answers every request with an error without it, and the backend sends it to the agent and
+refuses the agent's calls without it. Never print it.
 
 `npm run build` builds the dashboard into `dashboard/dist`, which the backend then serves at `/`, as it
 will on AWS Lambda (`docs/TECH_STACK.md`, Deployment).
@@ -15,10 +15,12 @@ will on AWS Lambda (`docs/TECH_STACK.md`, Deployment).
   group, in a temporary environment of its own, so `.venv` is left as it is
 - The context group: `npm run check:context` imports `context.server` with only the `context` group,
   the same way
+- The runtime group: `npm run check:runtime` imports `runtime.main` with only the `runtime` group, the
+  same way
 - TypeScript: ESLint, Prettier, tsc, and vitest with 80% coverage
-- Playwright end-to-end tests, on their own SQLite database, with stand-ins for the agent's service on port 8003, Supabase Auth on port 8004 and the judge on port 8005. Every spec signs in first
+- Playwright end-to-end tests, on their own SQLite database, with stand-ins for the agent's AgentCore app on port 8003 (`/invocations` and `/ping`), Supabase Auth on port 8004 and the judge on port 8005. Every spec signs in first
 
-The checks never read `.env`, so they need no database, Langfuse, OpenRouter or Supabase. Tests never call a model, the judge, Supabase Auth, AWS, the Gateway or AgentCore Memory: the Gateway is a stand-in served in the tests (`agent/tests/standin.py`), the context layer runs on a free port, the memory is a stand-in store, and `conftest.py` sets fake AWS keys and points the AWS files at a missing file.
+The checks never read `.env`, so they need no database, Langfuse, OpenRouter or Supabase. Tests never call a model, the judge, Supabase Auth, AWS, the Gateway, AgentCore Memory, Identity or Runtime (`UNDERCOVER_AGENT_RUNTIME` is blank in pytest and the end-to-end backend): the Gateway is a stand-in served in the tests (`agent/tests/standin.py`), the context layer runs on a free port, the memory is a stand-in store, and `conftest.py` sets fake AWS keys and points the AWS files at a missing file.
 
 The pre-commit hook runs the format, lint, type and unit test checks on every commit.
 
