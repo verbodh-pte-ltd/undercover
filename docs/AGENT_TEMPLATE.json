@@ -1,0 +1,78 @@
+{
+  "name": "Agent template from the Copilot plan",
+  "source": "docs/PLAN_COPILOT.md",
+  "fits": "A chat agent that works for a signed-in user, with that user's permissions, and asks before it does anything risky.",
+  "reusable": [
+    {
+      "part": "A hand-written LangGraph StateGraph: model and tools in a loop",
+      "gives": "A loop you control and can test with a stub model",
+      "in_the_copilot": "agent/copilot.py: remember, model, tools, confirm, save"
+    },
+    {
+      "part": "A confirm node with interrupt(), resumed with Command(resume=...)",
+      "gives": "A human approves before any risky action, and the graph resumes cleanly",
+      "in_the_copilot": "confirm pauses before sign_off and checks in code that the handler may sign off"
+    },
+    {
+      "part": "PostgresSaver checkpoints",
+      "gives": "A conversation survives restarts and new Runtime sessions",
+      "in_the_copilot": "PostgresSaver on the shared pool, with prepared statements off"
+    },
+    {
+      "part": "The user's sign-in in the graph's context (context_schema, read through ToolRuntime), never in the config",
+      "gives": "Tokens are never saved in checkpoints",
+      "in_the_copilot": "CopilotContext: the token, the handler, the conversation, the turn"
+    },
+    {
+      "part": "The app owns the conversations, turns and steps tables",
+      "gives": "The UI reads one trusted state, even after a reload",
+      "in_the_copilot": "conversations, turns and copilot_steps in backend/store.py"
+    },
+    {
+      "part": "The agent calls the app with the user's sign-in, never a service key",
+      "gives": "The agent can never do more than the user can",
+      "in_the_copilot": "agent/copilot_api.py; the app answers 401 to a request that carries the agent's key"
+    },
+    {
+      "part": "Waiting in code",
+      "gives": "Long jobs cost no model calls",
+      "in_the_copilot": "wait_for_run reads the run every 5 seconds, up to 15 minutes"
+    },
+    {
+      "part": "Figures worked out in code",
+      "gives": "The model can't invent numbers",
+      "in_the_copilot": "check_success_criteria builds the three rows; the app fills the confirmation card from its records"
+    },
+    {
+      "part": "An AgentCore app entrypoint, with each turn's work as an async task",
+      "gives": "The same deploy route as the claim agent",
+      "in_the_copilot": "agent/copilot_entrypoint.py, runtime/copilot.py"
+    },
+    {
+      "part": "Memory per user",
+      "gives": "The agent remembers each user across conversations",
+      "in_the_copilot": "AgentCoreMemoryStore under (\"handlers\", handler_id), saving only the message and the answer"
+    }
+  ],
+  "replace_each_time": [
+    "The tools and the instructions",
+    "What the confirmation card shows",
+    "The success criteria",
+    "The data the agent reads (for the Copilot: claims, customers, runs)",
+    "Who may approve what (for the Copilot: Marcus can't sign off over the approval limit)"
+  ],
+  "fits_badly": [
+    {
+      "case": "Answers streamed word by word",
+      "why": "The plan polls about once a second while a turn is working"
+    },
+    {
+      "case": "No user in the loop, such as batch jobs",
+      "why": "Use the claim agent's pattern for those"
+    },
+    {
+      "case": "Several agents handing work to each other",
+      "why": "This is one agent with one graph"
+    }
+  ]
+}
