@@ -64,20 +64,21 @@ KEY = {
     "record_work_time",
     "get_current_configuration",
     "get_run_configuration",
-    "create_run",
+    "get_run",
     "list_run_claims",
     "finish_run",
-    "stop_running_runs",
+    "stop_failed_run",
+    "record_work_heard",
     "get_round",
     "read_round_results",
     "record_round_stage",
     "record_proposed_change",
     "record_proposed_recipe",
-    "record_round_decision",
+    "get_proposal_review",
     "record_improver_call",
     "create_round_evaluation",
     "apply_verdict",
-    "stop_working_rounds",
+    "stop_failed_round",
     "list_waiting_claims",
     "list_unfinished_claims",
     "get_policy_wording",
@@ -102,9 +103,7 @@ ACTIONS = [
 
 @pytest.fixture(autouse=True)
 def no_agent(monkeypatch):
-    monkeypatch.setattr(
-        agent_service, "start", lambda path, body: {"status": "started"}
-    )
+    monkeypatch.setattr(agent_service, "send", lambda payload: None)
 
 
 def routes() -> list[APIRoute]:

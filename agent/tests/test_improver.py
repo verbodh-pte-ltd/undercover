@@ -2,7 +2,6 @@ import json
 import threading
 import uuid
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
@@ -17,9 +16,9 @@ from agent.tests.test_agent import (
     invoke,
     settle,
 )
-from backend import agent_service, judge, store
+from backend import agent_service, judge, slot, store
 from backend.main import app
-from backend.tests.records import record_decision
+from backend.tests.records import new_run, record_decision
 from backend.tests.signing import AGENT, headers
 from backend.tests.test_rounds import GRADED, answer_key
 
@@ -54,17 +53,11 @@ def asks(name, args=None):
     )
 
 
-def ready():
-    """An agent that has already got ready in this process."""
-    found = threading.Event()
-    found.set()
-    return found
-
-
-def restart(monkeypatch):
-    """A new process: its first request gets ready, stopping what was left working."""
-    monkeypatch.setattr(entrypoint, "ready", threading.Event())
-    assert invoke({"operation": "health"}).json() == {"healthy": True}
+def held_by():
+    """What holds the app's slot for the agent's work."""
+    with store.connect() as db:
+        row = slot.holder(db)
+    return (row["kind"], row["work_id"])
 
 
 @pytest.fixture(autouse=True)
@@ -76,8 +69,6 @@ def bridge(monkeypatch):
         return agent.post("/invocations", json=json, headers=headers)
 
     monkeypatch.setattr(agent_service.httpx, "post", post)
-    # Already ready, so a first request never stops the round it was asked to work.
-    monkeypatch.setattr(entrypoint, "ready", ready())
     monkeypatch.setattr(judge, "grade", lambda handler, agent: GRADED)
     bound.clear()
 
@@ -204,6 +195,7 @@ def test_a_whole_round(monkeypatch, contexts):
     assert improver_costs(round_id) == [COST] * 4 + [0.0]
     assert all(b.get("parallel_tool_calls") is False for b in bound)
     assert len(bound) == 5
+    assert held_by() == (None, None)
 
 
 def test_a_rejections_reason_reaches_the_improver_which_proposes_again(
@@ -258,11 +250,12 @@ def test_an_approval_while_a_dispatch_runs_is_refused_with_nothing_recorded(
 ):
     plays(monkeypatch, asks("propose_change", CHANGE))
     round_id = act("").json()["round_id"]
-    entrypoint.take("A dispatch")
-    try:
-        response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
-    finally:
-        entrypoint.running.release()
+    assert held_by() == (None, None)
+    run_id = new_run()
+    with store.connect() as db:
+        assert slot.swap(db, slot.holder(db), "run", run_id)
+        db.commit()
+    response = client.post(f"/api/rounds/{round_id}/approve", headers=headers())
     assert response.status_code == 409
     assert response.json()["detail"] == "A dispatch is already running"
     found = get_round(round_id)
@@ -322,14 +315,18 @@ def test_a_stopped_round_makes_no_more_model_calls_and_lets_go(monkeypatch, cont
     round_id = act("").json()["round_id"]
     assert get_round(round_id)["stage"] == "stopped"
     assert len(script.items) == 1
-    assert not entrypoint.running.locked()
+    assert held_by() == (None, None)
 
 
 def test_a_failed_round_is_stopped_and_lets_go(monkeypatch, contexts):
     plays(monkeypatch, RuntimeError("the model is down"))
     round_id = act("").json()["round_id"]
-    assert get_round(round_id)["stage"] == "stopped"
-    assert not entrypoint.running.locked()
+    found = get_round(round_id)
+    assert (found["stage"], found["stopped_reason"]) == (
+        "stopped",
+        "The agent's work failed: RuntimeError: the model is down",
+    )
+    assert held_by() == (None, None)
 
 
 def test_the_improvers_model_calls_are_capped(monkeypatch, contexts):
@@ -341,23 +338,15 @@ def test_the_improvers_model_calls_are_capped(monkeypatch, contexts):
     assert len(improver_costs(round_id)) == improver.MAX_MODEL_CALLS
 
 
-def test_a_restart_stops_a_working_round_and_a_waiting_one_carries_on(
-    monkeypatch, contexts
-):
+def test_a_restart_stops_nothing_and_a_waiting_round_carries_on(monkeypatch, contexts):
     plays(monkeypatch, asks("propose_change", CHANGE), AIMessage("Done."))
     waiting = act("").json()["round_id"]
-    restart(monkeypatch)
+    monkeypatch.setattr(entrypoint, "ready", threading.Event())
+    assert invoke({"operation": "health"}).json() == {"healthy": True}
     assert get_round(waiting)["stage"] == "change_waiting"
     act(f"/{waiting}/reject", {"reason": "No"})
     assert get_round(waiting)["stage"] == "finished"
-    with store.engine().begin() as conn:
-        conn.execute(
-            store.rounds.update()
-            .where(store.rounds.c.round_id == waiting)
-            .values(stage="improving")
-        )
-    restart(monkeypatch)
-    assert get_round(waiting)["stage"] == "stopped"
+    assert held_by() == (None, None)
 
 
 def test_the_improvers_work_is_one_langfuse_session_for_the_round(monkeypatch):
@@ -417,14 +406,3 @@ def test_the_improver_is_luna_at_medium_unless_model_name_is_set(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "openrouter/free")
     free = improver.improver_model()
     assert (free.model_name, free.reasoning_effort) == ("openrouter/free", None)
-
-
-def test_an_answer_lets_go_of_the_lock_when_the_backend_cant_be_reached(monkeypatch):
-    def unreachable(round_id, body):
-        raise httpx.ConnectError("refused")
-
-    monkeypatch.setattr(improver_api, "record_decision", unreachable)
-    answer = {"decision": "approve", "reason": "", "handler_id": "HND-01"}
-    response = invoke({"operation": "answer_proposal", "round_id": 1, **answer})
-    assert response.status_code == 500
-    assert not entrypoint.running.locked()

@@ -121,6 +121,7 @@ function RunPanel({ run }: Readonly<{ run: Run }>) {
         {seconds(run.seconds)}
         {run.run_seconds !== null && `, run time ${seconds(run.run_seconds)}`}
       </p>
+      {run.stopped_reason && <p>Why it stopped: {run.stopped_reason}</p>}
       {run.status !== "running" && <Summary run={run} />}
       {run.claims.length === 0 ? (
         <p className="muted">No claims started yet.</p>

@@ -18,6 +18,7 @@ from agent import __main__ as runner
 from agent import dispatcher, entrypoint, improver, main
 from backend import store
 from backend.main import app
+from backend.tests.records import new_run
 from backend.tests.signing import AGENT, API_KEY, headers
 
 client = TestClient(app, headers=AGENT)
@@ -165,19 +166,6 @@ def approve(claim_id, payout):
         calls(("calculate_payout", medical(bill))),
         calls(("record_decision", decision(claim_id, payout))),
     ]
-
-
-def new_run(kind="dispatch", eval_set=None, tiny=False, n=3, version=1):
-    body = {
-        "kind": kind,
-        "n": n,
-        "eval_set": eval_set,
-        "tiny": tiny,
-        "model": "stub",
-        "effort": "none",
-        "version": version,
-    }
-    return client.post("/api/runs", json=body).json()["run_id"]
 
 
 def claim(claim_id):
@@ -764,45 +752,6 @@ def settle():
     raise AssertionError("the agent is still working")
 
 
-def started(monkeypatch, payload):
-    """Start a run through the agent, with a dispatcher that does nothing."""
-    monkeypatch.setattr(dispatcher, "dispatch", lambda run_id, n, llm=None: [])
-    # A fresh agent, which stops the run the last call left running as it gets ready.
-    monkeypatch.setattr(entrypoint, "ready", threading.Event())
-    assert invoke(payload).json() == {"accepted": True}
-    settle()
-    if payload["operation"] == "start_dispatch":
-        return client.get("/api/runs/current", headers=headers()).json()
-    return client.get("/api/evaluations", headers=headers()).json()[0]
-
-
-def test_a_dispatch_and_an_evaluation_record_the_current_version(monkeypatch):
-    monkeypatch.delenv("MODEL_NAME", raising=False)
-    add_version(2, kept=True)
-    add_version(3, kept=False)
-    dispatch = started(monkeypatch, {"operation": "start_dispatch", "n": 2})
-    evaluation = started(
-        monkeypatch,
-        {"operation": "start_evaluation", "n": 2, "eval_set": "held_out", "tiny": True},
-    )
-    for run in [dispatch, evaluation]:
-        assert (run["version"], run["model"], run["effort"]) == (
-            2,
-            "google/gemini-3.5-flash-lite",
-            "minimal",
-        )
-
-
-def test_with_model_name_set_a_run_records_it_at_the_default_effort(monkeypatch):
-    monkeypatch.setenv("MODEL_NAME", "openrouter/free")
-    run = started(monkeypatch, {"operation": "start_dispatch", "n": 2})
-    assert (run["version"], run["model"], run["effort"]) == (
-        1,
-        "openrouter/free",
-        "default",
-    )
-
-
 def test_a_runs_claim_agents_work_to_its_version(monkeypatch):
     add_version(2, kept=None, instructions="Version 2, under test.")
     seen = []
@@ -822,7 +771,6 @@ def test_a_runs_claim_agents_work_to_its_version(monkeypatch):
     monkeypatch.setattr(main, "claim_graph", claim_graph)
     monkeypatch.setattr(main, "model", model)
     main.work("CLM-1001", new_run(version=2))
-    client.post("/api/runs/stop-running")
     main.work("CLM-1002", None)
     current = client.get("/api/configuration/current").json()["instructions"]
     assert seen == ["Version 2, under test.", current]
@@ -1057,7 +1005,6 @@ def test_the_check_is_outside_the_configuration_and_the_improvers_reach(check):
 def test_the_agent_records_who_decided_with_its_version():
     main.work("CLM-1001", new_run(), stub(*decide("CLM-1001")))
     assert claim("CLM-1001")["decided_by"] == "UnderCover Agent, version 1"
-    client.post("/api/runs/stop-running")
     add_version(2, kept=None, instructions="Version 2, under test.")
     run_id = new_run("evaluation", "evaluation", tiny=True, n=1, version=2)
     copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]

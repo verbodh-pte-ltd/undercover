@@ -29,8 +29,9 @@ The agent has six parts:
     the cloud instead.
 11. **The AgentCore app** (`agent/entrypoint.py`): one entrypoint that takes each payload from the
     backend, which names an operation and its inputs, checks it, answers at once, and works on a
-    thread registered with the app until the work ends: it starts dispatches, evaluations and rounds,
-    carries a round on from a handler's answer, and resumes signed-off claims. Nothing happens when
+    thread registered with the app until the work ends: it works the runs and rounds the backend has
+    created, by id, carries a round on from the review the backend recorded, and resumes signed-off
+    claims. The backend, not the agent, keeps one run or round going at a time. Nothing happens when
     it's imported; it gets ready on its first request. The same app runs on the laptop and, through
     `runtime/main.py`, on AgentCore Runtime.
 12. **The improver** (`agent/improver.py`): follows its recipe to propose new versions and recipes,

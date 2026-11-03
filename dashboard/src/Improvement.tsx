@@ -99,9 +99,10 @@ function Stages({ round }: Readonly<{ round: Round }>) {
 }
 
 function stopped(round: Round, name: (id: string) => string) {
-  const by = round.stopped_by ? `by ${name(round.stopped_by)}` : "by a restart";
+  const by = round.stopped_by ? ` by ${name(round.stopped_by)}` : "";
   const at = round.finished_at ? ` on ${when(round.finished_at)}` : "";
-  return ` Stopped ${by}${at}.`;
+  const why = round.stopped_reason ? `: ${round.stopped_reason}` : "";
+  return ` Stopped${by}${at}${why}.`;
 }
 
 function RoundDetails({

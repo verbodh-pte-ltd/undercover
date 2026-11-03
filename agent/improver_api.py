@@ -35,9 +35,19 @@ def read_results(round_id: int) -> httpx.Response:
     return get(f"/api/rounds/{round_id}/results")
 
 
+def find_round(round_id: int) -> httpx.Response:
+    """The round, or the app's answer when it has none."""
+    return get(f"/api/rounds/{round_id}")
+
+
 def get_round(round_id: int) -> dict[str, Any]:
     """The round: its stage, the version it tried and its verdict."""
-    return get(f"/api/rounds/{round_id}").json()
+    return find_round(round_id).json()
+
+
+def review(round_id: int, proposal_id: int) -> httpx.Response:
+    """A proposal with a handler's review of it, as the app recorded it."""
+    return get(f"/api/rounds/{round_id}/proposals/{proposal_id}")
 
 
 def recipe(version: int) -> str:
@@ -57,11 +67,6 @@ def propose(round_id: int, name: str, args: dict[str, Any]) -> httpx.Response:
         "reason": args["reason"],
     }
     return post(f"/api/rounds/{round_id}/proposed-change", change)
-
-
-def record_decision(round_id: int, body: dict[str, Any]) -> httpx.Response:
-    """Record a handler's approval or rejection of the proposal waiting."""
-    return post(f"/api/rounds/{round_id}/decision", body)
 
 
 def record_stage(round_id: int, stage: str) -> None:
@@ -91,6 +96,6 @@ def record_model_call(round_id: int, reply: BaseMessage) -> None:
     post(f"/api/rounds/{round_id}/model-calls", body)
 
 
-def stop_working_rounds() -> None:
-    """Stop any round at work, as after a restart or a failure."""
-    post("/api/rounds/stop-working")
+def stop_round(round_id: int, reason: str) -> None:
+    """Stop this round, whose work failed, with the reason."""
+    post(f"/api/rounds/{round_id}/failed", {"reason": reason})

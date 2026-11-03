@@ -113,12 +113,6 @@ def send(payload: dict[str, Any]) -> None:
     raise may_have_started()
 
 
-def start(operation: str, inputs: dict[str, Any]) -> dict[str, Any]:
-    """Ask the agent to start a run or round, or answer a proposal, or say why not."""
-    send({"operation": operation, **inputs})
-    return {"status": "started"}
-
-
 def resume_claim(claim_id: str) -> None:
     """Ask the agent to carry on a signed-off claim; a failure only logs a warning."""
     try:

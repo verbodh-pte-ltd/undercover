@@ -1,44 +1,32 @@
 import importlib
 import os
 import threading
+import time
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
-from agent import dispatcher, entrypoint, improver, improver_api, main
+from agent import dispatcher, entrypoint, improver, main
 from agent.tests.test_agent import (  # noqa: F401 (check and in_process_backend are fixtures)
     check,
     claim,
     hold,
     in_process_backend,
     invoke,
-    new_run,
     ping,
     recording,
     settle,
     steps_of,
     stub,
 )
+from backend import agent_service, store
 from backend.main import app
+from backend.tests.records import new_run
 from backend.tests.signing import AGENT, headers
+from backend.tests.test_rounds import CHANGE
 
 client = TestClient(app, headers=AGENT)
-DISPATCH = {"operation": "start_dispatch", "n": 4}
-EVALUATION = {
-    "operation": "start_evaluation",
-    "n": 2,
-    "eval_set": "held_out",
-    "tiny": True,
-}
-ROUND = {"operation": "start_round", "round_id": 3, "thread_id": "round-x"}
-ANSWER = {
-    "operation": "answer_proposal",
-    "round_id": 3,
-    "decision": "approve",
-    "reason": "",
-    "handler_id": "HND-01",
-}
 CREDENTIALS = {
     "AGENTCORE_CREDENTIAL_OPENROUTER_API_KEY_NAME": "undercover-openrouter",
     "AGENTCORE_CREDENTIAL_UNDERCOVER_API_KEY_NAME": "undercover-agent-key",
@@ -102,20 +90,44 @@ def waiting(monkeypatch):
         started.append(("round", round_id))
         finish.wait(5)
 
-    def carry_on(round_id, decision, reason):
+    def answer(round_id, decision, reason):
         started.append(("answer", round_id, decision, reason))
         finish.wait(5)
 
     monkeypatch.setattr(dispatcher, "dispatch", dispatch)
     monkeypatch.setattr(improver, "work_round", work_round)
-    monkeypatch.setattr(improver, "answer", carry_on)
+    monkeypatch.setattr(improver, "answer", answer)
     yield finish, started
     finish.set()
     settle()
 
 
-def recorded(status, detail="Recorded"):
-    return lambda round_id, body: httpx.Response(status, json={"detail": detail})
+@pytest.fixture
+def the_app_starts(monkeypatch):
+    """The app starts runs and rounds as a handler asks, and the agent isn't asked."""
+    monkeypatch.setattr(agent_service, "send", lambda payload: None)
+
+
+def work(run_id):
+    return {"operation": "work_run", "run_id": run_id}
+
+
+def a_round():
+    """A round the app has started, open and holding the slot."""
+    return client.post("/api/rounds", headers=headers()).json()["round_id"]
+
+
+def reviewed(round_id, decision="approve"):
+    """The round's proposal, reviewed by a handler; its id."""
+    found = client.post(f"/api/rounds/{round_id}/proposed-change", json=CHANGE).json()
+    proposal_id = found["proposal"]["proposal_id"]
+    body = {"reason": "Too broad"} if decision == "reject" else None
+    client.post(f"/api/rounds/{round_id}/{decision}", json=body, headers=headers())
+    return proposal_id
+
+
+def run(run_id):
+    return client.get(f"/api/runs/{run_id}").json()
 
 
 # Getting ready
@@ -151,8 +163,6 @@ def test_on_runtime_the_first_request_fetches_each_credential_once(
     monkeypatch.setenv("DATABASE_URL", "from .env")
     opened = []
     monkeypatch.setattr(main, "pool", lambda: opened.append(os.environ["DATABASE_URL"]))
-    # The app's in-process stand-in has no Postgres to stop runs in.
-    monkeypatch.setattr(entrypoint, "stop_what_was_running", lambda: None)
     reseeded = []
     real_seed = entrypoint.random.seed
     monkeypatch.setattr(
@@ -179,8 +189,6 @@ def test_getting_ready_opens_the_pool_once_when_there_is_a_database(monkeypatch)
     opened = []
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:1/db")
     monkeypatch.setattr(main, "pool", lambda: opened.append("pool"))
-    # The app's in-process stand-in has no Postgres to stop runs in.
-    monkeypatch.setattr(entrypoint, "stop_what_was_running", lambda: None)
     invoke({"operation": "health"})
     invoke({"operation": "health"})
     assert opened == ["pool"]
@@ -198,11 +206,12 @@ def test_without_the_key_a_request_answers_the_error_and_the_next_tries_again(
     assert invoke({"operation": "health"}, key=None).json() == {"healthy": True}
 
 
-def test_the_first_request_marks_a_run_left_running_as_stopped():
-    new_run()
+def test_getting_ready_stops_nothing(the_app_starts):
+    run_id = new_run()
+    round_id = a_round()
     invoke({"operation": "health"})
-    run = client.get("/api/runs/current", headers=headers()).json()
-    assert run["status"] == "stopped"
+    assert run(run_id)["status"] == "running"
+    assert client.get(f"/api/rounds/{round_id}").json()["stage"] == "first_evaluations"
 
 
 # The agent's key
@@ -212,7 +221,7 @@ def test_off_runtime_a_request_without_the_key_is_refused_but_health(monkeypatch
     started = []
     monkeypatch.setattr(dispatcher, "dispatch", lambda *args: started.append(args))
     for key in [None, "the-wrong-key-of-at-least-32-characters"]:
-        response = invoke(DISPATCH, key=key)
+        response = invoke(work(new_run()), key=key)
         assert response.status_code == 401
         assert response.json() == {"error": "The agent's key is missing or wrong"}
     assert invoke({"operation": "health"}, key=None).json() == {"healthy": True}
@@ -221,7 +230,7 @@ def test_off_runtime_a_request_without_the_key_is_refused_but_health(monkeypatch
 
 def test_on_runtime_no_key_is_asked_for(on_runtime, waiting):
     finish, started = waiting
-    assert invoke(DISPATCH, key=None).json() == {"accepted": True}
+    assert invoke(work(new_run()), key=None).json() == {"accepted": True}
     finish.set()
     settle()
     assert [s[0] for s in started] == ["dispatch"]
@@ -233,12 +242,13 @@ def test_on_runtime_no_key_is_asked_for(on_runtime, waiting):
 @pytest.mark.parametrize(
     ("payload", "problem"),
     [
-        ({"operation": "start_dispatch"}, "n: Field required"),
-        ({"operation": "start_dispatch", "n": 26}, "n: Input should be less than"),
-        ({"operation": "start_evaluation", "n": 2, "tiny": True}, "eval_set: Field"),
+        ({"operation": "work_run"}, "run_id: Field required"),
+        ({"operation": "work_run", "run_id": "x"}, "run_id: Input should be a valid"),
+        ({"operation": "work_round"}, "round_id: Field required"),
+        ({"operation": "carry_round_on", "round_id": 1}, "proposal_id: Field"),
         ({"operation": "resume_claim"}, "claim_id: Field required"),
         ({"operation": "health", "extra": 1}, "extra: Extra inputs"),
-        ({"operation": "fly"}, "does not match any of the expected tags"),
+        ({"operation": "start_dispatch", "n": 3}, "does not match any of the expected"),
         ({"n": 3}, "Unable to extract tag using discriminator 'operation'"),
         ([1, 2], "operation"),
     ],
@@ -252,68 +262,137 @@ def test_a_payload_with_an_input_missing_or_wrong_gets_400(payload, problem):
 # Each operation, and the ping
 
 
-def test_a_dispatch_is_accepted_the_ping_is_busy_and_a_second_start_is_refused(
-    waiting,
+def test_a_run_is_worked_by_its_id_while_the_ping_is_busy(waiting):
+    finish, started = waiting
+    run_id = new_run("evaluation", "held_out", tiny=True, n=2)
+    assert ping() == "Healthy"
+    assert invoke(work(run_id)).json() == {"accepted": True}
+    assert ping() == "HealthyBusy"
+    finish.set()
+    settle()
+    assert ping() == "Healthy"
+    assert started == [("dispatch", run_id, 2)]
+
+
+def test_a_run_that_isnt_running_is_refused(waiting):
+    _, started = waiting
+    run_id = new_run()
+    client.post(f"/api/runs/{run_id}/finish")
+    assert invoke(work(run_id)).json() == {"refused": f"Run {run_id} is finished"}
+    assert invoke(work(999)).json() == {"refused": "Run 999 not found"}
+    assert started == []
+
+
+def test_a_round_is_worked_by_its_id_and_refused_once_closed(waiting, the_app_starts):
+    finish, started = waiting
+    round_id = a_round()
+    payload = {"operation": "work_round", "round_id": round_id}
+    assert invoke(payload).json() == {"accepted": True}
+    finish.set()
+    settle()
+    assert started == [("round", round_id)]
+    client.post(f"/api/rounds/{round_id}/stop", headers=headers())
+    assert invoke(payload).json() == {"refused": f"Round {round_id} is stopped"}
+    missing = {"operation": "work_round", "round_id": 999}
+    assert invoke(missing).json() == {"refused": "Round 999 not found"}
+
+
+@pytest.mark.parametrize(
+    ("decision", "reason"), [("approve", ""), ("reject", "Too broad")]
+)
+def test_a_round_is_carried_on_from_the_review_the_app_recorded(
+    waiting, the_app_starts, decision, reason
 ):
     finish, started = waiting
-    assert ping() == "Healthy"
-    assert invoke(DISPATCH).json() == {"accepted": True}
-    assert ping() == "HealthyBusy"
-    refused = {"refused": "A dispatch is already running"}
-    for payload in [DISPATCH, EVALUATION, ROUND, ANSWER]:
-        assert invoke(payload).json() == refused
+    round_id = a_round()
+    proposal_id = reviewed(round_id, decision)
+    payload = {
+        "operation": "carry_round_on",
+        "round_id": round_id,
+        "proposal_id": proposal_id,
+    }
+    assert invoke(payload).json() == {"accepted": True}
     finish.set()
     settle()
-    assert ping() == "Healthy"
-    run = client.get("/api/runs/current", headers=headers()).json()
-    assert started == [("dispatch", run["run_id"], 4)]
-    assert run["n"] == 4
+    assert started == [("answer", round_id, decision, reason)]
 
 
-def test_an_evaluation_is_accepted_and_refuses_a_dispatch(waiting):
-    finish, started = waiting
-    assert invoke(EVALUATION).json() == {"accepted": True}
-    assert invoke(DISPATCH).json() == {"refused": "An evaluation is already running"}
-    finish.set()
+def test_carrying_on_is_refused_without_a_review_or_on_a_closed_round(
+    waiting, the_app_starts
+):
+    _, started = waiting
+    round_id = a_round()
+    found = client.post(f"/api/rounds/{round_id}/proposed-change", json=CHANGE).json()
+    proposal_id = found["proposal"]["proposal_id"]
+    payload = {
+        "operation": "carry_round_on",
+        "round_id": round_id,
+        "proposal_id": proposal_id,
+    }
+    refused = {"refused": f"Proposal {proposal_id} hasn't been reviewed"}
+    assert invoke(payload).json() == refused
+    missing = {**payload, "proposal_id": 999}
+    assert invoke(missing).json() == {
+        "refused": f"Proposal 999 not found in round {round_id}"
+    }
+    client.post(f"/api/rounds/{round_id}/stop", headers=headers())
+    assert invoke(payload).json() == {"refused": f"Round {round_id} is stopped"}
+    assert started == []
+
+
+def test_a_failed_run_stops_only_itself(monkeypatch):
+    failing, other = new_run(), new_run()
+
+    def dispatch(run_id, n, llm=None):
+        raise RuntimeError("the dispatch failed")
+
+    monkeypatch.setattr(dispatcher, "dispatch", dispatch)
+    assert invoke(work(failing)).json() == {"accepted": True}
     settle()
-    evaluation = client.get("/api/evaluations", headers=headers()).json()[0]
-    assert (evaluation["eval_set"], evaluation["n"]) == ("held_out", 2)
-    assert started == [("dispatch", evaluation["run_id"], 2)]
-
-
-def test_a_round_is_accepted_and_refuses_a_dispatch(waiting):
-    finish, started = waiting
-    assert invoke(ROUND).json() == {"accepted": True}
-    assert invoke(DISPATCH).json() == {"refused": "Round 3 is already running"}
-    finish.set()
-    settle()
-    assert started == [("round", 3)]
-
-
-def test_an_answer_is_recorded_then_carries_the_round_on(waiting, monkeypatch):
-    finish, started = waiting
-    sent = []
-    monkeypatch.setattr(
-        improver_api,
-        "record_decision",
-        lambda round_id, body: sent.append((round_id, body)) or recorded(200)(0, {}),
+    assert (run(failing)["status"], run(failing)["stopped_reason"]) == (
+        "stopped",
+        "The agent's work failed: RuntimeError: the dispatch failed",
     )
-    assert invoke(ANSWER).json() == {"accepted": True}
-    assert ping() == "HealthyBusy"
-    finish.set()
+    assert run(other)["status"] == "running"
+
+
+def test_a_failed_round_stops_only_itself(monkeypatch, the_app_starts):
+    round_id = a_round()
+
+    def work_round(round_id):
+        raise RuntimeError("the model is down")
+
+    monkeypatch.setattr(improver, "work_round", work_round)
+    invoke({"operation": "work_round", "round_id": round_id})
     settle()
-    assert sent == [(3, {"decision": "approve", "reason": "", "handler_id": "HND-01"})]
-    assert started == [("answer", 3, "approve", "")]
+    found = client.get(f"/api/rounds/{round_id}").json()
+    assert (found["stage"], found["stopped_reason"]) == (
+        "stopped",
+        "The agent's work failed: RuntimeError: the model is down",
+    )
 
 
-def test_an_answer_the_app_refuses_is_refused_and_lets_go(monkeypatch):
-    monkeypatch.setattr(improver_api, "record_decision", recorded(409, "No proposal"))
-    assert invoke(ANSWER).json() == {"refused": "No proposal"}
-    monkeypatch.setattr(improver_api, "record_decision", recorded(404, "No round 3"))
-    response = invoke(ANSWER)
-    assert (response.status_code, response.json()) == (404, {"error": "No round 3"})
-    assert not entrypoint.running.locked()
-    assert ping() == "Healthy"
+def test_the_agent_tells_the_app_every_minute_while_it_works(
+    waiting, the_app_starts, monkeypatch
+):
+    finish, _ = waiting
+    monkeypatch.setattr(entrypoint, "HEARD_EVERY", 0.01)
+    run_id = client.post("/api/dispatches", json={"n": 3}, headers=headers()).json()[
+        "run_id"
+    ]
+    long_ago = "2026-01-01T00:00:00+00:00"
+    with store.engine().begin() as db:
+        db.execute(update(store.agent_work).values(heard_at=long_ago))
+    invoke(work(run_id))
+    heard = long_ago
+    for _ in range(500):
+        with store.connect() as db:
+            heard = db.execute(store.agent_work.select()).mappings().one()["heard_at"]
+        if heard != long_ago:
+            break
+        time.sleep(0.01)
+    assert heard > long_ago
+    finish.set()
 
 
 @pytest.mark.parametrize("fails", [False, True])
@@ -326,12 +405,11 @@ def test_the_ping_is_healthy_once_work_has_finished_or_failed(monkeypatch, fails
             raise RuntimeError("the dispatch failed")
 
     monkeypatch.setattr(dispatcher, "dispatch", dispatch)
-    assert invoke(DISPATCH).json() == {"accepted": True}
+    assert invoke(work(new_run())).json() == {"accepted": True}
     assert ping() == "HealthyBusy"
     finish.set()
     settle()
     assert ping() == "Healthy"
-    assert not entrypoint.running.locked()
 
 
 # Resuming a claim
@@ -362,7 +440,7 @@ def test_a_resume_leaves_a_claim_that_is_not_in_progress(monkeypatch):
 def test_a_resume_runs_beside_a_dispatch(waiting, monkeypatch):
     resumed = []
     monkeypatch.setattr(entrypoint, "resume", resumed.append)
-    assert invoke(DISPATCH).json() == {"accepted": True}
+    assert invoke(work(new_run())).json() == {"accepted": True}
     response = invoke({"operation": "resume_claim", "claim_id": "CLM-1001"})
     assert response.json() == {"accepted": True}
     finish, _ = waiting

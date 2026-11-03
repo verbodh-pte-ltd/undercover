@@ -160,6 +160,8 @@ export interface Run {
   status: RunStatus;
   started_at: string;
   finished_at: string | null;
+  // Why a stopped run stopped, when the app or the agent said; null otherwise.
+  stopped_reason: string | null;
   claims: RunClaim[];
   cost: number;
   seconds: number;
@@ -193,6 +195,7 @@ export interface EvaluationSummary extends Measures {
   effort: string;
   status: RunStatus;
   started_at: string;
+  stopped_reason: string | null;
 }
 
 export interface EvaluationClaim {
@@ -444,6 +447,8 @@ export interface Round {
   started_at: string;
   stopped_by: string | null;
   finished_at: string | null;
+  // Why a round stopped when no handler stopped it, such as the agent going quiet.
+  stopped_reason: string | null;
 }
 
 export const listRounds = () => getJson<Round[]>("/api/rounds");

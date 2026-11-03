@@ -32,9 +32,7 @@ BAD_SIGN_INS = {
 
 @pytest.fixture(autouse=True)
 def no_agent(monkeypatch):
-    monkeypatch.setattr(
-        agent_service, "start", lambda path, body: {"status": "started"}
-    )
+    monkeypatch.setattr(agent_service, "send", lambda payload: None)
 
 
 def test_the_handlers_are_seeded_with_their_emails():

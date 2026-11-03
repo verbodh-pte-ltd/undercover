@@ -5,7 +5,7 @@ import json
 import os
 import secrets
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -34,7 +34,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
-from backend import agent_service, auth, judge, payout, rule, store
+from backend import agent_service, auth, judge, payout, rule, slot, store
 from backend.store import (
     answer_key,
     claims,
@@ -141,6 +141,15 @@ class WorkTime(BaseModel):
 
 class Release(BaseModel):
     error: str
+
+
+class Failure(BaseModel):
+    reason: str = Field(min_length=1)
+
+
+class Heard(BaseModel):
+    kind: slot.Kind
+    work_id: int
 
 
 class PayoutQuestion(BaseModel):
@@ -376,6 +385,7 @@ def run_view(db: Connection, row: RowMapping) -> dict[str, Any]:
     return {
         **{k: row[k] for k in ["run_id", "kind", "n", "eval_set", "tiny", "model"]},
         **{k: row[k] for k in ["effort", "status", "started_at", "finished_at"]},
+        "stopped_reason": row["stopped_reason"],
         "version": row["version"],
         "claims": worked,
         "cost": sum(c["cost"] for c in worked),
@@ -515,7 +525,8 @@ def evaluation_view(db: Connection, row: RowMapping) -> dict[str, Any]:
         "run_seconds": run_seconds(row),
     }
     keys = ["run_id", "eval_set", "tiny", "n", "model", "effort", "status", "version"]
-    return {**{k: row[k] for k in keys + ["started_at"]}, **measures, "claims": rows}
+    keys += ["started_at", "stopped_reason"]
+    return {**{k: row[k] for k in keys}, **measures, "claims": rows}
 
 
 def current_version(db: Connection) -> RowMapping:
@@ -889,42 +900,128 @@ def change_settings(changed: Settings, handler: Handler, db: Db) -> dict[str, An
     return settings_view(db)
 
 
+# The agent's work, one piece at a time: a dispatch, an evaluation, or a round while it
+# works. The app takes the slot and does the first part of the work in a transaction of
+# its own, committed before it asks the agent, and undoes it when the agent didn't
+# take it. A round's evaluations and resumed claims never touch the slot.
+QUIET_REASON = "The agent stopped answering"
+WHAT_RUNS = {"dispatch": "A dispatch", "evaluation": "An evaluation"}
+
+
+def going(db: Connection, row: RowMapping) -> str:
+    """The refusal while a run or round holds the slot, naming it."""
+    if row["kind"] == "run":
+        return f"{WHAT_RUNS[run_row(db, row['work_id'])['kind']]} is already running"
+    return f"Round {row['work_id']} is already running"
+
+
+def stop_run(db: Connection, run_id: int, why: str) -> None:
+    """Mark a running run stopped with the reason, and free its slot."""
+    query = update(runs).where(runs.c.run_id == run_id, runs.c.status == "running")
+    db.execute(
+        query.values(status="stopped", finished_at=store.now(), stopped_reason=why)
+    )
+    slot.free(db, "run", run_id)
+
+
+def take_slot(db: Connection, kind: slot.Kind, work_id: int) -> None:
+    """Take the slot for a run or round, or refuse with a 409 naming what holds it.
+
+    Work quiet for five minutes is marked stopped and gives the slot up.
+    """
+    before = slot.holder(db)
+    if not slot.free_or_quiet(before):
+        raise HTTPException(409, going(db, before))
+    if not slot.swap(db, before, kind, work_id):
+        # Another start took it first.
+        db.rollback()
+        raise HTTPException(409, going(db, slot.holder(db)))
+    if before["kind"] == "run":
+        stop_run(db, before["work_id"], QUIET_REASON)
+    elif before["kind"] == "round":
+        row = round_row(db, before["work_id"])
+        if row["stage"] not in CLOSED:
+            stop(db, row, None, QUIET_REASON)
+
+
+def ask(payload: dict[str, Any], undo: Callable[[str], None]) -> None:
+    """Ask the agent to take the work; undo the app's part if it didn't take it.
+
+    When nobody knows, as after a timeout, the work stays as it is.
+    """
+    try:
+        agent_service.send(payload)
+    except agent_service.NotTaken as exc:
+        undo(str(exc.detail))
+        raise
+
+
+def run_model(version: RowMapping) -> tuple[str, str]:
+    """A run's model and effort: the version's, or MODEL_NAME at its default."""
+    free = os.getenv("MODEL_NAME")
+    return (free, "default") if free else (version["model"], version["effort"])
+
+
+def start_run(
+    db: Connection,
+    kind: Literal["dispatch", "evaluation"],
+    n: int,
+    eval_set: Literal["evaluation", "held_out"] | None,
+    tiny: bool,
+) -> dict[str, Any]:
+    """Create a run on the current version, take the slot, then ask the agent."""
+    version = current_version(db)
+    model, effort = run_model(version)
+    create = RunCreate(
+        kind=kind,
+        n=n,
+        eval_set=eval_set,
+        tiny=tiny,
+        model=model,
+        effort=effort,
+        version=version["version"],
+    )
+    run_id = insert_run(db, create, None)
+    take_slot(db, "run", run_id)
+    db.commit()
+
+    def undo(why: str) -> None:
+        stop_run(db, run_id, why)
+        db.commit()
+
+    ask({"operation": "work_run", "run_id": run_id}, undo)
+    return run_view(db, run_row(db, run_id))
+
+
 @app.post("/api/dispatches", operation_id="start_dispatch")
-def start_dispatch(start: DispatchStart, _: Handler) -> dict[str, Any]:
-    """Ask the agent's service to work the queue with up to n claim agents at once."""
-    return agent_service.start("start_dispatch", start.model_dump())
+def start_dispatch(start: DispatchStart, _: Handler, db: Db) -> dict[str, Any]:
+    """Start a dispatch of the queue with up to n claim agents at once."""
+    return start_run(db, "dispatch", start.n, None, False)
 
 
 @app.post("/api/evaluations", operation_id="start_evaluation")
-def start_evaluation(start: EvaluationStart, _: Handler) -> dict[str, Any]:
-    """Ask the agent's service to evaluate the agent on a labelled set of claims."""
-    return agent_service.start("start_evaluation", start.model_dump())
+def start_evaluation(start: EvaluationStart, _: Handler, db: Db) -> dict[str, Any]:
+    """Start an evaluation of the agent on a labelled set of claims."""
+    return start_run(db, "evaluation", start.n, start.eval_set, start.tiny)
 
 
-def add_run(db: Connection, create: RunCreate, round_id: int | None) -> dict[str, Any]:
-    """Record a new run, in a round or none, unless another is running."""
-    running = select(runs.c.run_id).where(runs.c.status == "running")
-    if db.execute(running.with_for_update()).first() is not None:
-        raise HTTPException(409, "A dispatch or evaluation is already running")
-    if (create.kind == "evaluation") != (create.eval_set is not None):
-        raise HTTPException(422, "Only an evaluation has a set")
-    known = select(config_versions.c.version)
-    if db.scalar(known.where(config_versions.c.version == create.version)) is None:
-        raise HTTPException(404, f"Version {create.version} not found")
+def insert_run(db: Connection, create: RunCreate, round_id: int | None) -> int:
+    """Record a new run, in a round or none, with an evaluation's copies."""
     new_run = insert(runs).values(
         **create.model_dump(), round_id=round_id, started_at=store.now()
     )
     run_id = db.execute(new_run.returning(runs.c.run_id)).scalar_one()
     if create.eval_set is not None:
         make_copies(db, run_id, create.eval_set, create.tiny)
+    return run_id
+
+
+@app.post("/api/work/heard", operation_id="record_work_heard", dependencies=AGENT)
+def record_work_heard(work: Heard, db: Db) -> dict[str, bool]:
+    """Note that the agent is still working a run or a round."""
+    noted = slot.heard(db, work.kind, work.work_id)
     db.commit()
-    return run_view(db, run_row(db, run_id))
-
-
-@app.post("/api/runs", operation_id="create_run", dependencies=AGENT)
-def create_run(create: RunCreate, db: Db) -> dict[str, Any]:
-    """Record a new dispatch or evaluation; an evaluation's copies are made here."""
-    return add_run(db, create, None)
+    return {"heard": noted}
 
 
 @app.get("/api/runs/current", operation_id="get_current_run", dependencies=HANDLER)
@@ -933,6 +1030,12 @@ def get_current_run(db: Db) -> dict[str, Any] | None:
     query = select(runs).where(runs.c.kind == "dispatch")
     row = db.execute(query.order_by(runs.c.run_id.desc()).limit(1)).mappings().first()
     return None if row is None else run_view(db, row)
+
+
+@app.get("/api/runs/{run_id}", operation_id="get_run", dependencies=AGENT)
+def get_run(run_id: int, db: Db) -> dict[str, Any]:
+    """Get one run: its kind, n, status and claims."""
+    return run_view(db, run_row(db, run_id))
 
 
 @app.get(
@@ -962,6 +1065,7 @@ def finish_run(run_id: int, db: Db) -> dict[str, Any]:
     kind = run_row(db, run_id)["kind"]
     query = update(runs).where(runs.c.run_id == run_id, runs.c.status == "running")
     finished = db.execute(query.values(status="finished", finished_at=store.now()))
+    slot.free(db, "run", run_id)
     db.commit()
     # Only the call that finished the run grades it, so the judge is paid once, and a
     # run that was stopped isn't graded.
@@ -971,14 +1075,14 @@ def finish_run(run_id: int, db: Db) -> dict[str, Any]:
 
 
 @app.post(
-    "/api/runs/stop-running", operation_id="stop_running_runs", dependencies=AGENT
+    "/api/runs/{run_id}/failed", operation_id="stop_failed_run", dependencies=AGENT
 )
-def stop_running_runs(db: Db) -> dict[str, int]:
-    """Mark every run still running as stopped, when the agent's service starts."""
-    query = update(runs).where(runs.c.status == "running")
-    stopped = db.execute(query.values(status="stopped", finished_at=store.now()))
+def stop_failed_run(run_id: int, failure: Failure, db: Db) -> dict[str, Any]:
+    """Mark a run the agent's work on failed as stopped, with the reason."""
+    run_row(db, run_id, lock=True)
+    stop_run(db, run_id, failure.reason)
     db.commit()
-    return {"stopped": stopped.rowcount}
+    return run_view(db, run_row(db, run_id))
 
 
 @app.get("/api/evaluations", operation_id="list_evaluations", dependencies=HANDLER)
@@ -1256,11 +1360,9 @@ def sign_off(
 
 
 # The improver's rounds. The handler's actions need a handler who can sign off over
-# the limit; the agent's service records the rest of a round with the agent's API key,
-# as it does its runs.
+# the limit, and the app creates each round and records each review; the agent
+# records the rest of a round with the agent's API key, as it does its runs.
 CLOSED = {"finished", "stopped"}
-# The stages in which a round waits for a handler and does no work.
-WAITING = {"change_waiting", "recipe_waiting"}
 # A version's evaluations in a round: once on the evaluation set, twice on the held-out.
 NEEDED = {"evaluation": 1, "held_out": 2}
 # A check of the judge's at this probability or above counts as yes.
@@ -1281,12 +1383,6 @@ class ProposedChange(BaseModel):
 class ProposedRecipe(BaseModel):
     recipe: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-
-
-class RoundDecision(BaseModel):
-    decision: Literal["approve", "reject"]
-    handler_id: str
-    reason: str
 
 
 class Rejection(BaseModel):
@@ -1362,7 +1458,9 @@ def held_back_by_round(db: Connection, run_id: int) -> str | None:
     else:
         return None
     query = update(runs).where(runs.c.run_id == run_id, runs.c.status == "running")
-    db.execute(query.values(status="stopped", finished_at=store.now()))
+    db.execute(
+        query.values(status="stopped", finished_at=store.now(), stopped_reason=why)
+    )
     return why
 
 
@@ -1468,7 +1566,7 @@ def round_view(db: Connection, row: RowMapping) -> dict[str, Any]:
     spent = round_spent(db, round_id)
     simple = ["round_id", "stage", "recipe_version", "thread_id", "version_before"]
     simple += ["version", "reason", "kept", "why", "started_by", "started_at"]
-    simple += ["stopped_by", "finished_at"]
+    simple += ["stopped_by", "finished_at", "stopped_reason"]
     settings_ = json.loads(row["settings"])
     return {
         **{k: row[k] for k in simple},
@@ -1582,15 +1680,15 @@ def start_round(handler: Handler, db: Db) -> dict[str, Any]:
     }
     new_round = insert(rounds).values(**values).returning(rounds.c.round_id)
     round_id = db.execute(new_round).scalar_one()
+    take_slot(db, "round", round_id)
     db.commit()
-    body = {"round_id": round_id, "thread_id": values["thread_id"]}
-    try:
-        agent_service.start("start_round", body)
+
     # A round the agent didn't take must not stay open and block the next one.
-    except agent_service.NotTaken:
-        db.execute(delete(rounds).where(rounds.c.round_id == round_id))
+    def undo(why: str) -> None:
+        stop(db, round_row(db, round_id, lock=True), None, why)
         db.commit()
-        raise
+
+    ask({"operation": "work_round", "round_id": round_id}, undo)
     return round_view(db, round_row(db, round_id))
 
 
@@ -1611,58 +1709,121 @@ def get_round(round_id: int, db: Db) -> dict[str, Any]:
 def stop_round(round_id: int, handler: Handler, db: Db) -> dict[str, Any]:
     """Stop an open round; a version not yet judged is rolled back."""
     may_act(handler, "stop a round")
-    stop(db, open_round(db, round_id), handler["handler_id"])
+    stop(db, open_round(db, round_id), handler["handler_id"], None)
     db.commit()
     return round_view(db, round_row(db, round_id))
 
 
-def stop(db: Connection, row: RowMapping, by: str | None) -> None:
-    """Stop a round and its running runs; a version not yet judged is rolled back."""
+def stop(db: Connection, row: RowMapping, by: str | None, why: str | None) -> None:
+    """Stop a round, its running evaluation and its slot; a version not yet judged
+    is rolled back."""
     round_id = row["round_id"]
     db.execute(
         update(rounds)
         .where(rounds.c.round_id == round_id)
-        .values(stage="stopped", proposal=None, stopped_by=by, finished_at=store.now())
+        .values(
+            stage="stopped",
+            proposal=None,
+            stopped_by=by,
+            stopped_reason=why,
+            finished_at=store.now(),
+        )
     )
     if row["version"] is not None and row["kept"] is None:
         query = update(config_versions)
         query = query.where(config_versions.c.version == row["version"])
         db.execute(query.values(kept=False))
     query = update(runs).where(runs.c.round_id == round_id, runs.c.status == "running")
-    db.execute(query.values(status="stopped", finished_at=store.now()))
+    db.execute(
+        query.values(
+            status="stopped",
+            finished_at=store.now(),
+            stopped_reason=why or f"Round {round_id} was stopped",
+        )
+    )
+    slot.free(db, "round", round_id)
 
 
 @app.post(
-    "/api/rounds/stop-working", operation_id="stop_working_rounds", dependencies=AGENT
+    "/api/rounds/{round_id}/failed",
+    operation_id="stop_failed_round",
+    dependencies=AGENT,
 )
-def stop_working_rounds(db: Db) -> dict[str, int]:
-    """Stop any round at work, not waiting for a handler, when the service starts."""
-    query = select(rounds).where(rounds.c.stage.not_in(CLOSED | WAITING))
-    working = db.execute(query.with_for_update()).mappings().all()
-    for row in working:
-        stop(db, row, None)
+def stop_failed_round(round_id: int, failure: Failure, db: Db) -> dict[str, Any]:
+    """Stop an open round the agent's work on failed, with the reason."""
+    stop(db, open_round(db, round_id), None, failure.reason)
     db.commit()
-    return {"stopped": len(working)}
+    return round_view(db, round_row(db, round_id))
 
 
-def answer_proposal(
+def unreview(db: Connection, round_id: int, proposal_id: int) -> None:
+    """Clear a review the agent didn't take, so the proposal waits for one again."""
+    row = round_row(db, round_id, lock=True)
+    query = select(round_events).where(round_events.c.id == proposal_id)
+    event = db.execute(query).mappings().one()
+    values: dict[str, Any] = {
+        "stage": f"{event['kind']}_waiting",
+        "proposal": json.dumps(
+            {**json.loads(event["proposal"]), "proposal_id": proposal_id}
+        ),
+    }
+    if event["decision"] == "approve" and event["kind"] == "change":
+        query = delete(config_versions)
+        db.execute(query.where(config_versions.c.version == row["version"]))
+        values |= {"version": None, "reason": None}
+    elif event["decision"] == "approve":
+        newest = select(func.max(recipes.c.version)).scalar_subquery()
+        db.execute(delete(recipes).where(recipes.c.version == newest))
+    db.execute(
+        update(round_events)
+        .where(round_events.c.id == proposal_id)
+        .values(decision=None, handler_id=None, reason=None, decided_at=None)
+    )
+    db.execute(update(rounds).where(rounds.c.round_id == round_id).values(**values))
+    slot.free(db, "round", round_id)
+    db.commit()
+
+
+def review(
     db: Connection, round_id: int, handler: RowMapping, decision: str, reason: str
 ) -> dict[str, Any]:
-    """Pass a handler's answer on a proposal to the agent's service to record."""
+    """Record a handler's review of the proposal waiting, then ask the agent to carry
+    the round on from it."""
     row = open_round(db, round_id)
-    if row["proposal"] is None:
+    proposal = loaded(row["proposal"])
+    if proposal is None:
         raise HTTPException(409, f"Round {round_id} has no proposal waiting")
-    # End the read, so the service can record the answer while this waits.
+    take_slot(db, "round", round_id)
+    if decision == "approve":
+        approved(db, round_id, proposal, handler["handler_id"])
+    proposal_id = proposal["proposal_id"]
+    db.execute(
+        update(round_events)
+        .where(round_events.c.id == proposal_id)
+        .values(
+            decision=decision,
+            handler_id=handler["handler_id"],
+            reason=reason,
+            decided_at=store.now(),
+        )
+    )
+    query = update(rounds).where(rounds.c.round_id == round_id)
+    db.execute(query.values(stage="improving", proposal=None))
     db.commit()
-    body = {"decision": decision, "reason": reason, "handler_id": handler["handler_id"]}
-    return agent_service.start("answer_proposal", {"round_id": round_id, **body})
+    payload = {
+        "operation": "carry_round_on",
+        "round_id": round_id,
+        "proposal_id": proposal_id,
+    }
+    ask(payload, lambda _: unreview(db, round_id, proposal_id))
+    return round_view(db, round_row(db, round_id))
 
 
 @app.post("/api/rounds/{round_id}/approve", operation_id="approve_proposal")
 def approve_proposal(round_id: int, handler: Handler, db: Db) -> dict[str, Any]:
     """Approve a round's proposal, as a handler who can sign off over the limit."""
     may_act(handler, "approve the improver's proposals")
-    return answer_proposal(db, round_id, handler, "approve", "")
+    return review(db, round_id, handler, "approve", "")
 
 
 @app.post("/api/rounds/{round_id}/reject", operation_id="reject_proposal")
@@ -1671,7 +1832,26 @@ def reject_proposal(
 ) -> dict[str, Any]:
     """Reject a round's proposal with a reason that goes back to the improver."""
     may_act(handler, "reject the improver's proposals")
-    return answer_proposal(db, round_id, handler, "reject", rejection.reason)
+    return review(db, round_id, handler, "reject", rejection.reason)
+
+
+@app.get(
+    "/api/rounds/{round_id}/proposals/{proposal_id}",
+    operation_id="get_proposal_review",
+    dependencies=AGENT,
+)
+def get_proposal_review(round_id: int, proposal_id: int, db: Db) -> dict[str, Any]:
+    """Get a round's proposal with its review: approve or reject, and the reason."""
+    query = select(round_events).where(
+        round_events.c.id == proposal_id, round_events.c.round_id == round_id
+    )
+    event = db.execute(query).mappings().first()
+    if event is None:
+        raise HTTPException(
+            404, f"Proposal {proposal_id} not found in round {round_id}"
+        )
+    keep = ["kind", "decision", "handler_id", "reason", "decided_at"]
+    return {"proposal_id": proposal_id, **{k: event[k] for k in keep}}
 
 
 @app.get(
@@ -1714,16 +1894,22 @@ def record_round_stage(round_id: int, stage: RoundStage, db: Db) -> dict[str, An
     values: dict[str, Any] = {"stage": stage.stage}
     if stage.stage == "finished":
         values["finished_at"] = store.now()
+        slot.free(db, "round", round_id)
     db.execute(update(rounds).where(rounds.c.round_id == round_id).values(**values))
     db.commit()
     return round_view(db, round_row(db, round_id))
 
 
 def wait_for_handler(db: Connection, round_id: int, proposal: dict[str, Any]) -> None:
-    """Record a proposal waiting for a handler."""
-    stage = f"{proposal['kind']}_waiting"
+    """Record a proposal waiting for a handler, which frees the round's slot."""
+    new = insert(round_events).values(
+        round_id=round_id, kind=proposal["kind"], proposal=json.dumps(proposal)
+    )
+    proposal_id = db.execute(new.returning(round_events.c.id)).scalar_one()
+    waiting = json.dumps({**proposal, "proposal_id": proposal_id})
     query = update(rounds).where(rounds.c.round_id == round_id)
-    db.execute(query.values(stage=stage, proposal=json.dumps(proposal)))
+    db.execute(query.values(stage=f"{proposal['kind']}_waiting", proposal=waiting))
+    slot.free(db, "round", round_id)
     db.commit()
 
 
@@ -1791,42 +1977,6 @@ def approved(db: Connection, round_id: int, proposal: dict[str, Any], by: str) -
 
 
 @app.post(
-    "/api/rounds/{round_id}/decision",
-    operation_id="record_round_decision",
-    dependencies=AGENT,
-)
-def record_round_decision(
-    round_id: int, answer: RoundDecision, db: Db
-) -> dict[str, Any]:
-    """Record a handler's approval or rejection of a round's proposal."""
-    row = open_round(db, round_id)
-    proposal = loaded(row["proposal"])
-    if proposal is None:
-        raise HTTPException(409, f"Round {round_id} has no proposal waiting")
-    query = select(handlers).where(handlers.c.handler_id == answer.handler_id)
-    handler = db.execute(query).mappings().first()
-    if handler is None:
-        raise HTTPException(404, f"Handler {answer.handler_id} not found")
-    may_act(handler, "approve or reject the improver's proposals")
-    if answer.decision == "approve":
-        approved(db, round_id, proposal, answer.handler_id)
-    db.execute(
-        insert(round_events).values(
-            round_id=round_id,
-            kind=proposal["kind"],
-            decision=answer.decision,
-            handler_id=answer.handler_id,
-            reason=answer.reason,
-            decided_at=store.now(),
-        )
-    )
-    query = update(rounds).where(rounds.c.round_id == round_id)
-    db.execute(query.values(stage="improving", proposal=None))
-    db.commit()
-    return round_view(db, round_row(db, round_id))
-
-
-@app.post(
     "/api/rounds/{round_id}/model-calls",
     operation_id="record_improver_call",
     dependencies=AGENT,
@@ -1848,16 +1998,14 @@ def create_round_evaluation(
     round_id: int, wanted: RoundEvaluation, db: Db
 ) -> dict[str, Any]:
     """Record a round's whole-set evaluation, unless it would go over the limit."""
+    # It works under the round's slot, which the round holds while it works.
     row = open_round(db, round_id)
     if wanted.version not in {row["version_before"], row["version"]}:
         raise HTTPException(
             409, f"Version {wanted.version} isn't under test in round {round_id}"
         )
     query = select(config_versions).where(config_versions.c.version == wanted.version)
-    version = db.execute(query).mappings().one()
-    # On a free model, as the agent's service records a run: MODEL_NAME at `default`.
-    model = os.getenv("MODEL_NAME") or version["model"]
-    effort = "default" if os.getenv("MODEL_NAME") else version["effort"]
+    model, effort = run_model(db.execute(query).mappings().one())
     query = select(func.count()).select_from(answer_key)
     count = db.scalar(query.where(answer_key.c.eval_set == wanted.eval_set)) or 0
     likely, left = estimate(db, model, count), round_left(db, row)
@@ -1876,7 +2024,9 @@ def create_round_evaluation(
         effort=effort,
         version=wanted.version,
     )
-    return add_run(db, create, round_id)
+    run_id = insert_run(db, create, round_id)
+    db.commit()
+    return run_view(db, run_row(db, run_id))
 
 
 def verdict(db: Connection, row: RowMapping) -> tuple[bool, str]:

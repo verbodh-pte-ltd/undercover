@@ -40,6 +40,7 @@ const working: Round = {
   started_at: "2026-11-01T09:00:00+00:00",
   stopped_by: null,
   finished_at: null,
+  stopped_reason: null,
 };
 
 const finished: Round = {
@@ -242,6 +243,23 @@ it("shows a stopped round and who stopped it", async () => {
   render(<Improvement handler={dana} />);
   expect(await screen.findByText(/Stopped by Dana Whitfield on/)).toBeDefined();
   expect(screen.queryByRole("list", { name: /stages/ })).toBeNull();
+});
+
+it("shows why a round no handler stopped was stopped", async () => {
+  fakeBackend(
+    routes([
+      {
+        ...working,
+        stage: "stopped",
+        finished_at: "2026-11-01T09:30:00+00:00",
+        stopped_reason: "The agent stopped answering",
+      },
+    ]),
+  );
+  render(<Improvement handler={dana} />);
+  expect(
+    await screen.findByText(/Stopped on .*: The agent stopped answering\./),
+  ).toBeDefined();
 });
 
 it("shows a proposal's diff, model and effort, and approves it after confirming", async () => {

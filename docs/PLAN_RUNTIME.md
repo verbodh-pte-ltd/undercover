@@ -192,17 +192,24 @@ Done when:
 
 Done when:
 
-- [ ] A second start is refused (409, naming it) while a dispatch, an evaluation or a working round is going
-- [ ] Two starts at the same moment: one goes ahead
-- [ ] A start after five quiet minutes stops the old work with "The agent stopped answering" and goes ahead
-- [ ] A start the agent didn't take is undone; a timeout leaves it going
-- [ ] A review the agent didn't take is cleared and the proposal waits again
-- [ ] A failed run stops only itself; a resume runs beside a dispatch
-- [ ] `e2e/rounds.spec.ts` and the other end-to-end tests pass with the app creating runs, rounds and
+- [x] A second start is refused (409, naming it) while a dispatch, an evaluation or a working round is going
+- [x] Two starts at the same moment: one goes ahead
+- [x] A start after five quiet minutes stops the old work with "The agent stopped answering" and goes ahead
+- [x] A start the agent didn't take is undone; a timeout leaves it going
+- [x] A review the agent didn't take is cleared and the proposal waits again
+- [x] A failed run stops only itself; a resume runs beside a dispatch
+- [x] `e2e/rounds.spec.ts` and the other end-to-end tests pass with the app creating runs, rounds and
       reviews
 - [ ] With `npm run dev` running, a dispatch at N=25 works the queue, and starting another while it runs
-      is refused on the dashboard with the reason
-- [ ] `npm run check` passes; committed
+      is refused on the dashboard with the reason (not run yet: it calls the real model. The refusal on
+      the dashboard is covered by `e2e/queue.spec.ts` with the stand-in)
+- [x] `npm run check` passes; committed
+
+Built as planned, with these choices: a proposal's id is its `round_events` row, made when the
+improver proposes and filled in by the review, so clearing a review empties that row and puts the
+proposal back; the agent reads the review with `get_proposal_review`; the agent stops a failed run or
+round with `stop_failed_run` or `stop_failed_round`, which replace `stop_running_runs` and
+`stop_working_rounds`; `create_run` and `record_round_decision` are gone.
 
 ## Phase 5: the live checks and the documents
 
