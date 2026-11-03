@@ -1,78 +1,233 @@
 {
-  "name": "Agent template from the Copilot plan",
-  "source": "docs/PLAN_COPILOT.md",
-  "fits": "A chat agent that works for a signed-in user, with that user's permissions, and asks before it does anything risky.",
-  "reusable": [
+  "name": "Agent platform template, from UnderCover's plans",
+  "purpose": "A standard set of layers for building an agent product. Each layer names the UnderCover plan that built it, so a new project copies the pattern and replaces only what is specific to it.",
+  "reference_project": "UnderCover (this repo). Every plan path below is relative to its docs/ folder.",
+  "how_to_use": [
+    "Write the new project's SPEC.md: the business, its users, its rules and what an agent may and may not do.",
+    "Choose the layers it needs from 'layers'. Keep their order; a layer needs the layers in its 'depends_on'.",
+    "Answer 'before_first_edit' for the project, one line each.",
+    "For each layer, write a plan of its own, PLAN_<NAME>.md, from the reference plan, with 'replace' filled in for the project.",
+    "Build one layer at a time, phase by phase, as in 'every_plan'."
+  ],
+  "before_first_edit": {
+    "auth": "Who may call each route, tool and command, and where it is checked. Deny by default.",
+    "tenancy": "Whose data each call reads or changes, and the query clause that keeps it there.",
+    "isolation": "What the agent can reach beyond its own job: hosts, folders, other users' data.",
+    "secrets": "Which keys each part touches, the one host each key goes to, and that none is logged or returned."
+  },
+  "every_plan": [
+    "The brief goes in docs/ first; the plan is docs/PLAN_<NAME>.md, reviewed before any code.",
+    "A 'Choices for you' section lists the decisions the documents don't make.",
+    "Phases in order, each with a 'Done when' checklist and its own commit.",
+    "Tests never call a model: a stub model plays a script, and tools hit the real app in process.",
+    "The last phase is live checks with a real model, what they spent, and the documents brought up to date.",
+    "docs/STATUS.md records what is built and how to run it."
+  ],
+  "layers": [
     {
-      "part": "A hand-written LangGraph StateGraph: model and tools in a loop",
-      "gives": "A loop you control and can test with a stub model",
-      "in_the_copilot": "agent/copilot.py: remember, model, tools, confirm, save"
+      "order": 0,
+      "layer": "The pilot: a backend, an agent and a dashboard",
+      "plan": "PLAN.md",
+      "course_day": "Week 1 Day 3",
+      "gives": "A working product with the business rules in the backend",
+      "patterns": [
+        "The backend owns every rule, so a mistaken or misled agent still can't break one; the agent can only ask",
+        "One direction of calls: the dashboard and the agent call the backend over HTTP; the backend never imports the agent",
+        "Every route has an operation id and a one-line docstring, because they become the agent's tool names and descriptions",
+        "A human signs off what the rules say needs a human, such as a payment over a limit"
+      ],
+      "replace": [
+        "The data and its store",
+        "The business rule the backend enforces",
+        "What the dashboard shows"
+      ],
+      "depends_on": [],
+      "skip_when": "Never: every later layer builds on it"
     },
     {
-      "part": "A confirm node with interrupt(), resumed with Command(resume=...)",
-      "gives": "A human approves before any risky action, and the graph resumes cleanly",
-      "in_the_copilot": "confirm pauses before sign_off and checks in code that the handler may sign off"
+      "order": 1,
+      "layer": "The harness: tools, middleware and instructions",
+      "plan": "PLAN_HARNESS.md",
+      "course_day": "Week 1 Day 5",
+      "gives": "An agent that works a queue and recovers from a crash",
+      "patterns": [
+        "A queue agent with a to-do list, and a claim agent started fresh for each item",
+        "Runs recorded in the backend, so work left half done is found and recovered",
+        "Documents read by section, and instructions kept as files the backend serves"
+      ],
+      "replace": ["The work item", "The agent's tools", "The instructions"],
+      "depends_on": [0],
+      "skip_when": "The agent does one thing per request and never works a queue"
     },
     {
-      "part": "PostgresSaver checkpoints",
-      "gives": "A conversation survives restarts and new Runtime sessions",
-      "in_the_copilot": "PostgresSaver on the shared pool, with prepared statements off"
+      "order": 2,
+      "layer": "Durable state: approvals that wait, and work that survives a restart",
+      "plan": "PLAN_DURABLE.md",
+      "course_day": "Week 2 Day 3",
+      "gives": "An agent that can pause for a person for days and carry on after a restart",
+      "patterns": [
+        "The agent as a LangGraph StateGraph written by hand: a model node, a ToolNode, and the loop between them",
+        "A sign-off node of its own that calls interrupt(), resumed with Command(resume=...)",
+        "PostgresSaver checkpoints, with durability='sync'",
+        "Backend operations safe to repeat: the same decision or payment again returns the same result"
+      ],
+      "replace": [
+        "What needs a person's approval",
+        "The graph's nodes after the model decides"
+      ],
+      "depends_on": [0, 1],
+      "skip_when": "Nothing ever waits for a person and every run finishes in seconds"
     },
     {
-      "part": "The user's sign-in in the graph's context (context_schema, read through ToolRuntime), never in the config",
-      "gives": "Tokens are never saved in checkpoints",
-      "in_the_copilot": "CopilotContext: the token, the handler, the conversation, the turn"
+      "order": 3,
+      "layer": "A swarm and evaluations",
+      "plan": "PLAN_SWARM.md",
+      "course_day": "Week 2 Day 4",
+      "gives": "Many items worked at once, and a score of how well the agent agrees with people",
+      "patterns": [
+        "A dispatcher graph with one Send per item and max_concurrency N",
+        "Rate limits and timeouts retried up to 3 times; then the item is left with an error and the run goes on",
+        "Evaluations on labelled sets, worked on copies so the real data is untouched",
+        "A scoreboard with accuracy, cost and time; the agent can never read the answer key",
+        "One run at a time: a second start gets 409"
+      ],
+      "replace": [
+        "The labelled sets and what counts as agreeing",
+        "The measures on the scoreboard"
+      ],
+      "depends_on": [0, 1, 2],
+      "skip_when": "Items are worked one at a time and no one needs a measure of quality"
     },
     {
-      "part": "The app owns the conversations, turns and steps tables",
-      "gives": "The UI reads one trusted state, even after a reload",
-      "in_the_copilot": "conversations, turns and copilot_steps in backend/store.py"
+      "order": 4,
+      "layer": "Sign-in and self-improvement",
+      "plan": "PLAN_IMPROVE.md",
+      "course_day": "Week 2 Day 5",
+      "gives": "Signed-in users with their own permissions, and an agent whose configuration improves under review",
+      "patterns": [
+        "Users sign in; the backend checks each token against the provider's published keys (JWKS), with no shared secret",
+        "Who may do what is in a table, such as who may sign off over the limit",
+        "Settings stored in the database, with a page of their own",
+        "The agent's configuration (instructions, model, effort) in versions",
+        "An LLM judge grades each explanation",
+        "An improver agent proposes a new version; a person approves it; a rule in code keeps it or rolls it back; a spending limit caps each round"
+      ],
+      "replace": [
+        "The sign-in provider",
+        "The users and their permissions",
+        "The judge's rubric",
+        "The keep-or-roll-back rule"
+      ],
+      "depends_on": [0, 1, 2, 3],
+      "skip_when": "No users sign in, and the configuration is changed by hand"
     },
     {
-      "part": "The agent calls the app with the user's sign-in, never a service key",
-      "gives": "The agent can never do more than the user can",
-      "in_the_copilot": "agent/copilot_api.py; the app answers 401 to a request that carries the agent's key"
+      "order": 5,
+      "layer": "Security before the cloud",
+      "plan": "PLAN_SECURE.md",
+      "course_day": "Week 3 Day 2",
+      "gives": "An agent that proves who it is, and a backend ready for a serverless host",
+      "patterns": [
+        "An API key for the agent, so the backend knows a call came from the agent",
+        "A check for instructions hidden in the data the agent reads",
+        "The agent's own API: routes only the agent may call, apart from the users' routes",
+        "The payment, or other risky act, happens on a person's sign-off, not on the agent's word",
+        "The backend made ready for Lambda: a database connection per request, through a pooler"
+      ],
+      "replace": [
+        "Where hidden instructions could come from",
+        "The risky act",
+        "The host"
+      ],
+      "depends_on": [0, 1, 2, 3, 4],
+      "skip_when": "Never for a product that goes on the internet"
     },
     {
-      "part": "Waiting in code",
-      "gives": "Long jobs cost no model calls",
-      "in_the_copilot": "wait_for_run reads the run every 5 seconds, up to 15 minutes"
+      "order": 6,
+      "layer": "The context layer, memory and the Gateway",
+      "plan": "PLAN_CONTEXT.md",
+      "course_day": "Week 3 Day 3",
+      "gives": "Governed documents the agent can cite, memory of each customer, and tools behind a policy",
+      "patterns": [
+        "A context server over MCP that reads governed files and names each answer's file, owner and review date",
+        "The agent's tools through an AgentCore Gateway, where a Cedar policy can refuse a call before it reaches the app",
+        "A complete decision record: an approval must match a calculation on file",
+        "Memory per customer, searched only under that customer",
+        "Every step the agent takes shown on the item's page"
+      ],
+      "replace": [
+        "The governed documents and their owners",
+        "What the policy refuses",
+        "Whose memory is kept"
+      ],
+      "depends_on": [0, 1, 2, 3, 4, 5],
+      "skip_when": "The agent needs no documents beyond its own data, and nothing must be remembered"
     },
     {
-      "part": "Figures worked out in code",
-      "gives": "The model can't invent numbers",
-      "in_the_copilot": "check_success_criteria builds the three rows; the app fills the confirmation card from its records"
+      "order": 7,
+      "layer": "The agent on AgentCore Runtime, and sending work back",
+      "plan": "PLAN_RUNTIME.md",
+      "course_day": "Week 3 Day 4",
+      "gives": "The agent deployed as a managed app, and people able to send a decision back",
+      "patterns": [
+        "The answer lives in the app, not the request: signed off or sent back is read from the item's record",
+        "Every 'only once' is a conditional update of one row, checking the row count",
+        "One slot for the agent's work, in a one-row table",
+        "Each piece of work registered as an async task before the agent answers, completed in a finally",
+        "Nothing at import: the agent gets ready on its first request",
+        "Two routes to the agent, local and Runtime, behind one function in the app"
+      ],
+      "replace": ["What can be sent back", "The Runtime names and permissions"],
+      "depends_on": [0, 1, 2, 3, 4, 5, 6],
+      "skip_when": "The agent runs on your own servers"
     },
     {
-      "part": "An AgentCore app entrypoint, with each turn's work as an async task",
-      "gives": "The same deploy route as the claim agent",
-      "in_the_copilot": "agent/copilot_entrypoint.py, runtime/copilot.py"
-    },
-    {
-      "part": "Memory per user",
-      "gives": "The agent remembers each user across conversations",
-      "in_the_copilot": "AgentCoreMemoryStore under (\"handlers\", handler_id), saving only the message and the answer"
+      "order": 8,
+      "layer": "A copilot for the users",
+      "plan": "PLAN_COPILOT.md",
+      "course_day": "Week 3 Day 5",
+      "gives": "A chat agent that works for a signed-in user, with that user's permissions, and asks before anything risky",
+      "patterns": [
+        "A hand-written StateGraph: remember, model, tools, confirm, save",
+        "A confirm node with interrupt() before any risky act, which checks in code that the user may do it",
+        "PostgresSaver checkpoints, so a conversation survives restarts and new sessions",
+        "The user's sign-in in the graph's context (context_schema, read through ToolRuntime), never in its config",
+        "The app owns the conversations, turns and steps tables; the UI reads only the app",
+        "The copilot calls the app with the user's sign-in, never the agent's key; the app refuses a request that carries the key",
+        "Waiting in code: a tool reads a run every 5 seconds, up to 15 minutes, with no model calls",
+        "Figures worked out in code; the app fills the confirmation card from its records",
+        "A second AgentCore app beside the agent, one entrypoint, each turn as an async task",
+        "Memory per user, saving only the message and the answer"
+      ],
+      "replace": [
+        "The tools and the instructions",
+        "What the confirmation card shows",
+        "The success criteria",
+        "The data the copilot reads",
+        "Who may approve what"
+      ],
+      "fits_badly": [
+        {
+          "case": "Answers streamed word by word",
+          "why": "The plan polls about once a second while a turn is working"
+        },
+        {
+          "case": "No user in the loop, such as batch jobs",
+          "why": "Use layers 1 to 3 for those"
+        },
+        {
+          "case": "Several agents handing work to each other",
+          "why": "This is one agent with one graph"
+        }
+      ],
+      "depends_on": [0, 2, 3, 4, 5, 6, 7],
+      "skip_when": "Users never need to ask questions or act through chat"
     }
   ],
-  "replace_each_time": [
-    "The tools and the instructions",
-    "What the confirmation card shows",
-    "The success criteria",
-    "The data the agent reads (for the Copilot: claims, customers, runs)",
-    "Who may approve what (for the Copilot: Marcus can't sign off over the approval limit)"
-  ],
-  "fits_badly": [
+  "not_in_the_template": [
     {
-      "case": "Answers streamed word by word",
-      "why": "The plan polls about once a second while a turn is working"
-    },
-    {
-      "case": "No user in the loop, such as batch jobs",
-      "why": "Use the claim agent's pattern for those"
-    },
-    {
-      "case": "Several agents handing work to each other",
-      "why": "This is one agent with one graph"
+      "plan": "PLAN_EXTENDED.md",
+      "why": "A second plan for the pilot under docs/PROCESS_EXTENDED.md. It was never built, and no other plan builds on it."
     }
   ]
 }
