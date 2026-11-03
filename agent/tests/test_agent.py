@@ -314,12 +314,17 @@ def test_claim_agent_has_no_pay_tool():
     assert "pay_claim" not in current["instructions"]
 
 
+def paused(claim_id, thread_id=None):
+    """The interrupts waiting for an answer on the claim's thread."""
+    prepared = main.prepare(claim_id, thread_id or f"{claim_id}-1", stub(), None)
+    return prepared.graph.get_state(prepared.config).interrupts
+
+
 def test_claim_agent_pauses_before_a_payout_over_the_limit():
     assert hold() == "CLM-1001 is waiting for a handler's sign-off."
     result = claim("CLM-1001")
     assert (result["status"], result["paid_amount"]) == ("waiting_for_sign_off", None)
-    saved = main.saver().get_tuple({"configurable": {"thread_id": "CLM-1001-1"}})
-    assert saved is not None
+    assert [i.value for i in paused("CLM-1001")] == [{"claim_id": "CLM-1001"}]
 
 
 def recording(monkeypatch):
@@ -352,6 +357,7 @@ def test_a_claim_resumed_after_its_sign_off_finishes_without_paying(check, monke
     assert texts.count("Signed off by HND-01") == 1
     assert not [t for t in texts if t.startswith("pay_claim:")]
     assert check.runs == 1
+    assert paused("CLM-1001") == ()
 
 
 def test_a_claim_approved_within_the_limit_is_still_paid_by_the_graph(monkeypatch):
@@ -489,11 +495,13 @@ def test_a_failed_attempts_cost_and_time_count_toward_its_run():
 def test_an_evaluation_copy_held_for_sign_off_is_finished_and_cleared():
     run_id = new_run("evaluation", "evaluation", tiny=True)
     copy_id = client.get(f"/api/runs/{run_id}/claims").json()[0]
-    hold(copy_id, run_id=run_id)
+    reply = hold(copy_id, run_id=run_id)
+    assert reply == "Approved, $1,250.00."
     assert claim(copy_id)["status"] == "waiting_for_sign_off"
     thread = claim(copy_id)["thread_id"]
     assert main.saver().get_tuple({"configurable": {"thread_id": thread}}) is None
     assert "is waiting for a handler" not in " ".join(steps_of(copy_id))
+    assert main.resume_refusal(copy_id) == f"{copy_id} isn't paused"
 
 
 def test_agent_never_reads_data():
@@ -715,11 +723,29 @@ def test_the_service_finishes_a_signed_off_claim_without_paying(monkeypatch):
     assert TestClient(service.app).get("/health").json() == {"status": "ok"}
 
 
-def test_the_service_leaves_a_claim_that_is_not_in_progress(monkeypatch):
+def test_the_service_refuses_to_resume_a_claim_without_an_answer(monkeypatch):
     monkeypatch.setattr(main, "model", lambda version: stub())
     hold()
-    TestClient(service.app).post("/claims/CLM-1001/resume")
+    response = TestClient(service.app).post("/claims/CLM-1001/resume")
+    assert response.status_code == 409
+    assert response.json()["detail"] == ("CLM-1001 is waiting for a handler's sign-off")
     assert claim("CLM-1001")["status"] == "waiting_for_sign_off"
+
+
+def test_resume_refuses_a_claim_that_isnt_paused(monkeypatch):
+    monkeypatch.setattr(main, "model", lambda version: stub())
+    assert main.resume_refusal("CLM-1001") == "CLM-1001 isn't paused"
+    main.work("CLM-1002", None, stub(*decide("CLM-1002")))
+    assert main.resume_refusal("CLM-1002") == "CLM-1002 isn't paused"
+    assert main.resume_refusal("CLM-0000") == "Claim CLM-0000 not found"
+    hold()
+    assert main.resume_refusal("CLM-1001") == (
+        "CLM-1001 is waiting for a handler's sign-off"
+    )
+    client.post("/api/claims/CLM-1001/sign-off", headers=headers())
+    assert main.resume_refusal("CLM-1001") is None
+    assert main.resume_claim("CLM-1001") == "CLM-1001 is decided: approve"
+    assert main.resume_refusal("CLM-1001") == "CLM-1001 isn't paused"
 
 
 def test_the_service_starts_a_dispatch_and_refuses_a_second(monkeypatch):

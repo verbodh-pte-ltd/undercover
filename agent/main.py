@@ -565,9 +565,11 @@ def claim_graph(
     checkpointer: BaseCheckpointSaver,
     store: BaseStore | None = None,
 ) -> ClaimGraph:
-    """The claim agent: the check, the model and tools, then payment or sign-off.
+    """The claim agent: the check, the model and tools, payment or sign-off, then
+    memory.
 
-    With a memory store, the model can search it, and each decided claim is saved.
+    With a memory store, the model can search it, and each claim is saved once its
+    decision is final.
     """
     tools = [*MODEL_TOOLS, search_memory] if store is not None else MODEL_TOOLS
     model_with_tools = llm.bind_tools(tools)
@@ -582,11 +584,11 @@ def claim_graph(
         record_model_call(state["claim_id"], run_id, reply)
         return {"messages": [reply], "model_calls": state["model_calls"] + 1}
 
-    def after_agent(state: ClaimState) -> Literal["tools", "remember"]:
-        """Run the tools the model asked for, or remember and settle the claim."""
+    def after_agent(state: ClaimState) -> Literal["tools", "settle"]:
+        """Run the tools the model asked for, or settle the claim."""
         last = state["messages"][-1]
         asked = isinstance(last, AIMessage) and last.tool_calls
-        return "tools" if asked else "remember"
+        return "tools" if asked else "settle"
 
     builder = StateGraph(ClaimState, context_schema=ClaimContext)
     builder.add_node("check", check)
@@ -597,18 +599,18 @@ def claim_graph(
     builder.add_node("sign_off", sign_off)
     builder.add_node("pay", pay)
     builder.add_edge(START, "check")
-    builder.add_conditional_edges("agent", after_agent, ["tools", "remember"])
+    builder.add_conditional_edges("agent", after_agent, ["tools", "settle"])
     builder.add_edge("tools", "agent")
-    builder.add_edge("remember", "settle")
-    builder.add_edge("sign_off", END)
+    builder.add_edge("remember", END)
     return builder.compile(checkpointer=checkpointer, store=store)
 
 
 def remember(state: ClaimState, runtime: Runtime[ClaimContext]) -> dict[str, Any]:
-    """Save a claim the agent decided to the customer's memory, once, in code.
+    """Save a claim to the customer's memory once its decision is final, in code.
 
-    Nothing is saved without memory, for an evaluation's copy, or for a claim the
-    check referred, which never reaches this step.
+    The last step of the work, after any sign-off. Nothing is saved without memory,
+    for an evaluation's copy, or for a claim the check referred, which never reaches
+    this step.
     """
     if runtime.store is None or runtime.context.copy:
         return {}
@@ -621,27 +623,28 @@ def remember(state: ClaimState, runtime: Runtime[ClaimContext]) -> dict[str, Any
     return {}
 
 
-def settle(state: ClaimState) -> Command[Literal["sign_off", "pay", "__end__"]]:
-    """Follow the backend: wait for a sign-off, pay, or stop."""
+def settle(state: ClaimState) -> Command[Literal["sign_off", "pay", "remember"]]:
+    """Follow the backend: wait for a sign-off, pay, or finish."""
     claim = json.loads(call("GET", f"/api/claims/{state['claim_id']}"))
     if claim["decision"] != "approve" or claim["paid_amount"] is not None:
-        return Command(goto="__end__")
+        return Command(goto="remember")
     if claim["status"] == "waiting_for_sign_off":
         # Nobody signs off an evaluation's copy: held for sign-off, it's finished.
-        return Command(goto="__end__" if claim["run_id"] else "sign_off")
+        return Command(goto="remember" if claim["run_id"] else "sign_off")
     return Command(goto="pay")
 
 
-def sign_off(state: ClaimState) -> dict[str, Any]:
-    """Wait for a handler to sign off the payout, which the sign-off pays."""
+def sign_off(state: ClaimState) -> Command[Literal["remember"]]:
+    """Wait for a handler's answer: a sign-off, which pays the claim, ends the work."""
+    # A resume runs this node again from the top, so nothing goes before the pause.
     answer = interrupt({"claim_id": state["claim_id"]})
-    record_step(state["claim_id"], "reply", f"Signed off by {answer['handler_id']}")
-    return {}
+    record_step(state["claim_id"], "reply", f"Signed off by {answer['signed_off_by']}")
+    return Command(goto="remember")
 
 
 def pay(
     state: ClaimState, runtime: Runtime[ClaimContext]
-) -> Command[Literal["sign_off", "__end__"]]:
+) -> Command[Literal["sign_off", "remember"]]:
     """Pay the approved payout on the claim's route, or hold it for sign-off.
 
     The backend treats a repeat as done. A payment the Gateway refuses waits for a
@@ -658,9 +661,9 @@ def pay(
     else:
         record_step(claim_id, "tool_result", f"{name}: Paid ${payout:,.2f}")
     if answer.refused_by != "gateway":
-        return Command(goto="__end__")
+        return Command(goto="remember")
     call("POST", f"/api/claims/{claim_id}/hold")
-    return Command(goto="__end__" if claim.copy else "sign_off")
+    return Command(goto="remember" if claim.copy else "sign_off")
 
 
 def traced(
@@ -716,26 +719,29 @@ def steps(message: BaseMessage, route: Route) -> list[dict[str, Any]]:
     return found
 
 
-def run(
-    claim_id: str,
-    thread_id: str,
-    llm: BaseChatModel | None = None,
-    run_id: int | None = None,
-) -> str:
-    """Run the claim agent on its thread: start, carry on, or resume after sign-off."""
-    # A claim in a run works to the run's version; one in none, to the current one.
+@dataclass
+class Prepared:
+    """A claim's graph on its thread, ready to work, with the claim as it stands."""
+
+    claim: dict[str, Any]
+    graph: ClaimGraph
+    config: RunnableConfig
+    context: ClaimContext
+
+
+def prepare(
+    claim_id: str, thread_id: str, llm: BaseChatModel | None, run_id: int | None
+) -> Prepared:
+    """Build the claim's graph on its thread, to its run's version or the current."""
     path = "/api/configuration/current"
     if run_id is not None:
         path = f"/api/runs/{run_id}/configuration"
     with backend() as client:
         version = client.get(path).json()
         claim = client.get(f"/api/claims/{claim_id}").json()
-    checkpointer = saver()
     # An evaluation's copy works without memory, so its scores don't depend on it.
     store = None if claim["run_id"] is not None else customers.memory_store()
-    graph = claim_graph(
-        llm or model(version), version["instructions"], checkpointer, store
-    )
+    graph = claim_graph(llm or model(version), version["instructions"], saver(), store)
     context = ClaimContext(
         claim_id=claim_id,
         policy_id=claim["policy_id"],
@@ -747,6 +753,26 @@ def run(
     )
     config = traced(thread_id, run_id, version.get("round_id"))
     config["recursion_limit"] = RECURSION_LIMIT
+    return Prepared(claim, graph, config, context)
+
+
+def handlers_answer(claim: dict[str, Any]) -> dict[str, Any] | None:
+    """The answer a paused claim resumes with, from the app's record, or None yet."""
+    if claim["signed_off_by"] is not None:
+        return {"signed_off_by": claim["signed_off_by"]}
+    return None
+
+
+def run(
+    claim_id: str,
+    thread_id: str,
+    llm: BaseChatModel | None = None,
+    run_id: int | None = None,
+) -> str:
+    """Run the claim agent on its thread: start, carry on, or resume with an answer."""
+    # A claim in a run works to the run's version; one in none, to the current one.
+    prepared = prepare(claim_id, thread_id, llm, run_id)
+    claim, graph, config = prepared.claim, prepared.graph, prepared.config
     saved = graph.get_state(config)
     inputs: Any = {
         "messages": [HumanMessage(f"Decide claim {claim_id}.")],
@@ -754,9 +780,10 @@ def run(
         "model_calls": 0,
     }
     if saved.interrupts:
-        if claim["signed_off_by"] is None:
+        answer = handlers_answer(claim)
+        if answer is None:
             return f"{claim_id} is waiting for a handler's sign-off."
-        inputs = Command(resume={"handler_id": claim["signed_off_by"]})
+        inputs = Command(resume=answer)
     elif saved.next:
         inputs = None  # carry on from the last saved step
     elif saved.values:
@@ -765,15 +792,19 @@ def run(
     try:
         # A fresh context, so a claim worked inside another run (a dispatcher's
         # worker) starts its own trace in the claim's Langfuse session.
-        reply = contextvars.Context().run(stream_claim, graph, inputs, config, context)
+        reply = contextvars.Context().run(
+            stream_claim, graph, inputs, config, prepared.context
+        )
     finally:
         # The time spent working, which a wait for a sign-off falls outside of.
         seconds = clock() - started
         spent = {"run_id": run_id, "seconds": round(seconds, 3)}
         call("POST", f"/api/claims/{claim_id}/work-times", spent)
-    if claim["run_id"] is not None:
+    if claim["run_id"] is not None and isinstance(
+        graph.checkpointer, BaseCheckpointSaver
+    ):
         # An evaluation's copy held for sign-off is finished; its progress goes.
-        checkpointer.delete_thread(thread_id)
+        graph.checkpointer.delete_thread(thread_id)
     return reply
 
 
@@ -850,3 +881,32 @@ def work(claim_id: str, run_id: int | None, llm: BaseChatModel | None = None) ->
         if not reply.startswith("failed: "):
             return reply
     return reply
+
+
+def resume_refusal(claim_id: str) -> str | None:
+    """None when the claim is paused with a handler's answer to resume it; else why not.
+
+    A claim is paused when its thread has an interrupt waiting for an answer.
+    """
+    with backend() as client:
+        found = client.get(f"/api/claims/{claim_id}")
+    if not found.is_success:
+        return f"Claim {claim_id} not found"
+    claim = found.json()
+    if claim["thread_id"] is None:
+        return f"{claim_id} isn't paused"
+    prepared = prepare(claim_id, claim["thread_id"], None, None)
+    if not prepared.graph.get_state(prepared.config).interrupts:
+        return f"{claim_id} isn't paused"
+    if handlers_answer(claim) is None:
+        return f"{claim_id} is waiting for a handler's sign-off"
+    return None
+
+
+def resume_claim(claim_id: str) -> str:
+    """Resume a paused claim with the handler's answer from the app, outside any run.
+
+    It works on the current version's claim agent, beside any dispatch.
+    """
+    claim = json.loads(call("GET", f"/api/claims/{claim_id}"))
+    return carry_on(claim_id, claim["thread_id"])

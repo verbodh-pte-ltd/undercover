@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -159,6 +161,15 @@ def test_a_second_sign_off_is_refused_and_pays_nothing_more():
     assert sign_off("CLM-1001").status_code == 409
     assert pay("CLM-1001", 1250.0).status_code == 403
     assert client.get("/api/claims/CLM-1001").json() == first
+
+
+def test_two_sign_offs_at_once_pay_once():
+    decide("CLM-1001", LARGE)
+    with ThreadPoolExecutor(2) as pool:
+        answers = list(pool.map(sign_off, ["CLM-1001", "CLM-1001"]))
+    assert sorted(a.status_code for a in answers) == [200, 409]
+    paid = next(a.json() for a in answers if a.status_code == 200)
+    assert (paid["status"], paid["paid_amount"]) == ("decided", 1250.0)
 
 
 def test_a_signed_off_claim_cannot_be_released():

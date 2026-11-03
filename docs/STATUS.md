@@ -14,6 +14,21 @@ for the agent, a check for instructions hidden in a claim, the agent's own API a
 pays, ready for Lambda (`npm run build`, the backend serving the dashboard's build, a Lambda handler and
 connections for Lambda), and the live checks. Nothing is deployed.
 
+Sending claims back and the agent on AgentCore Runtime (`docs/PLAN_RUNTIME.md`, from
+`docs/RUNTIME.md`): phase 1 is built, the claim approval comes back.
+
+- The claim graph saves a claim to memory as its last step (`agent` → `settle` → `pay` or
+  `sign_off` → `remember`), so a payout over the limit, or a payment the Gateway refused, is saved
+  only once a handler has signed it off and the agent has resumed it. An evaluation's copy never
+  pauses and its thread is deleted.
+- A paused claim (its thread has an interrupt waiting) resumes with the handler's answer, read from
+  the app's record: `resume_refusal(claim_id)` in `agent/main.py` says why a claim can't be resumed
+  (not found, not paused, or still waiting for its sign-off), and `resume_claim(claim_id)` resumes it
+  on the current version, outside any run. The service's `resume_claim` route answers 409 with the
+  reason, or 202 and resumes it in the background.
+- A sign-off goes through only while the claim waits for sign-off, as one conditional update, so two
+  at once pay once and the other gets 409.
+
 The context layer, memory and the Gateway (`docs/PLAN_CONTEXT.md`, from `docs/CONTEXT.md`) are built
 on this machine, phases 1 to 6; phase 7 (the Gateway, the Policy and Memory on AWS, with RDS and
 Cognito) is not. What it adds:
@@ -316,7 +331,8 @@ What changed for it, in the look only:
     `.env` reaches it. The service refuses to start without the key and says it's missing.
   - The claim agent is a LangGraph graph (`claim_graph` in `agent/main.py`) with seven tools and no pay
     or sign-off tool. The graph pays a claim approved within the limit itself; one over it waits at
-    the `sign_off` node, and a resume after the sign-off goes straight to the end. It works to its run's configuration version (the current one for a claim in no
+    the `sign_off` node, and a resume after the sign-off records "Signed off by" and goes on to
+    `remember`, the last step. It works to its run's configuration version (the current one for a claim in no
     run): its instructions, model and reasoning effort, or `MODEL_NAME` at the model's default effort. At
     most 30 model calls a claim. Each model call's tokens and cost are recorded with its run.
   - The claim graph's first node, `check`, reads the claim as its customer filed it (without the
@@ -462,4 +478,7 @@ environment of its own, so `.venv` is left as it is.
 ## Not built yet
 
 - Rejecting a held payout. A handler can only sign off for now.
+- When the call to the agent after a sign-off fails or times out, the sign-off and the payment stand,
+  but the agent never resumes the claim, so it isn't saved to memory. Logging a warning for the
+  failed call comes with the app's new route to the agent (`docs/PLAN_RUNTIME.md`, phase 3).
 - Real payments and messages to customers, as `docs/SPEC.md` says.

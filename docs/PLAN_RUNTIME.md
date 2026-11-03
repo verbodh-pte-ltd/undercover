@@ -72,17 +72,18 @@ plan follows the brief's intent on our code:
 
 Done when:
 
-- [ ] A stand-in test pauses an approval over the limit with its interrupt on the thread
-- [ ] A stand-in test pauses a payment the Gateway refused
-- [ ] An evaluation's copy over the limit ends without pausing, and its thread is deleted
-- [ ] A resume after a sign-off records "Signed off by", ends, and saves the claim to a stand-in memory
+- [x] A stand-in test pauses an approval over the limit with its interrupt on the thread
+- [x] A stand-in test pauses a payment the Gateway refused
+- [x] An evaluation's copy over the limit ends without pausing, and its thread is deleted
+- [x] A resume after a sign-off records "Signed off by", ends, and saves the claim to a stand-in memory
       store exactly once; nothing was saved before the sign-off
-- [ ] `resume_claim` refuses a claim that isn't paused, with the reason
-- [ ] Two sign-offs at once: one pays, the other gets 409
-- [ ] A sign-off whose call to the agent fails answers with the paid claim and logs a warning
+- [x] `resume_claim` refuses a claim that isn't paused, with the reason
+- [x] Two sign-offs at once: one pays, the other gets 409
+- [ ] A sign-off whose call to the agent fails answers with the paid claim and logs a warning (the
+      answer is tested; the warning comes with phase 3's new `backend/agent_service.py`)
 - [ ] With `npm run dev` running, a claim over the limit pauses, and signing it off on the dashboard pays
-      it and adds "Signed off by" to its steps
-- [ ] `npm run check:python` passes; committed
+      it and adds "Signed off by" to its steps (not run: a live check, for phase 5)
+- [x] `npm run check:python` passes; committed
 
 ## Phase 2: sign off or send back (step 2)
 

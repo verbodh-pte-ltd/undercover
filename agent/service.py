@@ -57,16 +57,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="UnderCover Agent", lifespan=lifespan)
 
 
-def carry_on_claim(claim_id: str) -> None:
-    """Carry on a claim in progress or signed off, unless this process has it."""
+def resume_in_background(claim_id: str) -> None:
+    """Resume a paused claim with the handler's answer, unless this process has it."""
     if not dispatcher.take(claim_id):
         return
     try:
-        with main.backend() as client:
-            claim = client.get(f"/api/claims/{claim_id}").json()
-        # A sign-off pays and decides the claim; its paused thread still finishes.
-        if claim["status"] == "in_progress" or claim["signed_off_by"]:
-            print(f"{claim_id}: {main.carry_on(claim_id, claim['thread_id'])}")
+        print(f"{claim_id}: {main.resume_claim(claim_id)}")
     finally:
         dispatcher.let_go(claim_id)
 
@@ -119,8 +115,11 @@ def health() -> dict[str, str]:
 
 @app.post("/claims/{claim_id}/resume", operation_id="resume_claim", status_code=202)
 def resume_claim(claim_id: str, tasks: BackgroundTasks) -> dict[str, str]:
-    """Carry on a claim that a handler has signed off, after replying."""
-    tasks.add_task(carry_on_claim, claim_id)
+    """Resume a paused claim with the handler's answer, after replying."""
+    refused = main.resume_refusal(claim_id)
+    if refused:
+        raise HTTPException(409, refused)
+    tasks.add_task(resume_in_background, claim_id)
     return {"status": "accepted"}
 
 

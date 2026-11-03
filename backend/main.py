@@ -1235,22 +1235,28 @@ def sign_off(
         raise HTTPException(
             403, f"{handler['name']} can't sign off payouts over the approval limit"
         )
-    row = claim_row(db, claim_id, lock=True)
-    if row["run_id"] is not None:
+    if claim_row(db, claim_id)["run_id"] is not None:
         raise HTTPException(409, f"Claim {claim_id} is an evaluation's copy")
-    if row["status"] != "waiting_for_sign_off":
-        raise HTTPException(409, f"Claim {claim_id} is not waiting for sign-off")
     signed = store.now()
-    set_claim(
-        db,
-        claim_id,
-        status="decided",
-        signed_off_by=handler["handler_id"],
-        signed_off_at=signed,
-        paid_amount=row["payout"],
-        paid_at=signed,
+    # Only while it waits for sign-off, so a sign-off and a send back at the same
+    # moment can't both go through.
+    taken = db.execute(
+        update(claims)
+        .where(
+            claims.c.claim_id == claim_id,
+            claims.c.status == "waiting_for_sign_off",
+        )
+        .values(
+            status="decided",
+            signed_off_by=handler["handler_id"],
+            signed_off_at=signed,
+            paid_amount=claims.c.payout,
+            paid_at=signed,
+        )
     )
     db.commit()
+    if not taken.rowcount:
+        raise HTTPException(409, f"Claim {claim_id} is not waiting for sign-off")
     # The agent finishes its paused thread without paying; it may not be running.
     tasks.add_task(agent_service.resume_claim, claim_id)
     return get_claim(claim_id, db)
