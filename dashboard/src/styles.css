@@ -247,6 +247,7 @@ main {
 }
 
 .chip.waiting_for_sign_off,
+.chip.sent_back,
 .chip.approval {
   background: var(--coral);
 }
@@ -538,6 +539,16 @@ textarea {
 .amount input:disabled {
   opacity: 1;
   border-color: transparent;
+}
+
+/* A handler's note when they sent a decision back. */
+.sent-back-note {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--page);
+  font-family: var(--serif);
+  font-size: 1.1rem;
 }
 
 .actions {

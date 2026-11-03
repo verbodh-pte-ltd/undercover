@@ -78,6 +78,25 @@ claims = Table(
     Column("decided_by", String),
     Column("decided_at", String),
     Column("manual_version", String),
+    # When the app last heard from a resume working the claim after a send back.
+    Column("resume_heard_at", String),
+)
+# Each decision a handler sent back to the agent, with the note, who and when.
+sent_back = Table(
+    "sent_back",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("claim_id", String, nullable=False),
+    Column("decision", String, nullable=False),
+    Column("payout", Float, nullable=False),
+    Column("calculation", Text),
+    Column("policy_section", String, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("decided_by", String),
+    Column("decided_at", String),
+    Column("note", Text, nullable=False),
+    Column("sent_back_by", String, nullable=False),
+    Column("sent_back_at", String, nullable=False),
 )
 policies = Table(
     "policies",

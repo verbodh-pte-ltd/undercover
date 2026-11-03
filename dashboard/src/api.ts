@@ -4,6 +4,7 @@ export type Status =
   | "waiting"
   | "in_progress"
   | "waiting_for_sign_off"
+  | "sent_back"
   | "decided"
   | "needs_handler";
 
@@ -57,8 +58,24 @@ export interface Claim extends ClaimSummary {
   copied_from: string | null;
   // Set when the Gateway refused the agent's payment, so the claim waits for sign-off.
   held_by_gateway: boolean;
+  // The decisions handlers sent back to the agent, newest first.
+  sent_back: SentBack[];
   cost: number;
   seconds: number;
+}
+
+export interface SentBack {
+  decision: Decision;
+  payout: number;
+  calculation: Calculation | null;
+  reason: string;
+  policy_section: string;
+  decided_by: string;
+  decided_at: string;
+  note: string;
+  sent_back_by: string;
+  sent_back_by_name: string;
+  sent_back_at: string;
 }
 
 export interface Policy {
@@ -380,6 +397,20 @@ export async function signOff(claimId: string) {
     headers: await authorization(),
   });
   if (!response.ok) throw new Error(await refusal(response, "Sign-off"));
+  return (await response.json()) as Claim;
+}
+
+// Sends the decision back to the agent with a note, or throws the reason it was refused.
+export async function sendBack(claimId: string, note: string) {
+  const response = await fetch(`/api/claims/${claimId}/send-back`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authorization()),
+    },
+    body: JSON.stringify({ note }),
+  });
+  if (!response.ok) throw new Error(await refusal(response, "Send back"));
   return (await response.json()) as Claim;
 }
 

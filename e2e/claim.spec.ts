@@ -99,3 +99,41 @@ test("a handler's sign-off pays the claim and tells the agent", async ({
     expect(await calls.json()).toContain("POST /claims/CLM-1003/resume");
   }).toPass();
 });
+
+test("a handler sends a large approval back with a note", async ({
+  page,
+  request,
+}) => {
+  await recordDecision(request, "CLM-1004", {
+    decision: "approve",
+    payout: 1400,
+    reason: "The treatment is covered.",
+    policy_section: "7. Emergency Medical",
+  });
+  await page.goto("/#/claims/CLM-1004");
+  await expect(page.getByText("Waiting for sign-off")).toBeVisible();
+  const sendBack = page.getByRole("button", { name: "Send back" });
+  await expect(sendBack).toBeDisabled();
+  const note = "The bill includes a hotel night. Check section 7 again.";
+  await page.getByLabel(/Or send it back to the agent/).fill(note);
+  await expect(page.getByText("55 of 1,000 characters")).toBeVisible();
+  await sendBack.click();
+
+  await expect(page.locator(".chip", { hasText: "Sent back" })).toBeVisible();
+  await expect(
+    page.getByText("The agent has not decided this claim yet."),
+  ).toBeVisible();
+  await expect(page.getByText(/the next dispatch does/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sent back" })).toBeVisible();
+  await expect(page.locator(".sent-back-note")).toHaveText(note);
+  await expect(
+    page.getByText(/^Sent back by Dana Whitfield on /),
+  ).toBeVisible();
+  // The note is one of the claim's steps too.
+  await expect(
+    page.getByText(`Sent back by Dana Whitfield: ${note}`),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign off $1,400.00" }),
+  ).toHaveCount(0);
+});

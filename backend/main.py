@@ -7,7 +7,7 @@ import secrets
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -19,7 +19,7 @@ from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import (
     Connection,
     RowMapping,
@@ -53,6 +53,7 @@ from backend.store import (
     rounds,
     run_claims,
     runs,
+    sent_back,
     setting_changes,
     settings,
     steps,
@@ -106,6 +107,12 @@ class Step(BaseModel):
 
 class ClaimStart(BaseModel):
     run_id: int | None
+
+
+class SendBack(BaseModel):
+    note: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)
+    ]
 
 
 class DispatchStart(BaseModel):
@@ -329,7 +336,37 @@ def claim_view(db: Connection, row: RowMapping) -> dict[str, Any]:
         "customer_name": customer_name(db, claim["customer_id"]),
         **{f: row[f] for f in fields},
         **claim_totals(db, row["claim_id"], None),
+        "sent_back": sent_back_view(db, row["claim_id"]),
     }
+
+
+def sent_back_view(db: Connection, claim_id: str) -> list[dict[str, Any]]:
+    """The decisions handlers sent back on a claim, newest first, with their notes."""
+    query = (
+        select(sent_back, handlers.c.name.label("sent_back_by_name"))
+        .join(handlers, handlers.c.handler_id == sent_back.c.sent_back_by)
+        .where(sent_back.c.claim_id == claim_id)
+        .order_by(sent_back.c.id.desc())
+    )
+    return [
+        {
+            **{k: v for k, v in r.items() if k not in {"id", "claim_id"}},
+            "calculation": loaded(r["calculation"]),
+        }
+        for r in db.execute(query).mappings()
+    ]
+
+
+# A resume tells the app every minute; quiet for this long, it counts as stopped.
+QUIET = timedelta(minutes=5)
+
+
+def resumed_lately(row: RowMapping) -> bool:
+    """Whether a resume working the claim told the app in the last five minutes."""
+    heard = row["resume_heard_at"]
+    return heard is not None and (
+        datetime.now(UTC) - datetime.fromisoformat(heard) < QUIET
+    )
 
 
 def claim_totals(db: Connection, claim_id: str, run_id: int | None) -> dict[str, float]:
@@ -940,7 +977,7 @@ def get_current_run(db: Db) -> dict[str, Any] | None:
     "/api/runs/{run_id}/claims", operation_id="list_run_claims", dependencies=AGENT
 )
 def list_run_claims(run_id: int, db: Db) -> list[str]:
-    """List the claims a run should work: in progress first, then oldest submitted."""
+    """List the claims a run should work: in progress, sent back, then waiting."""
     row = run_row(db, run_id)
     if row["kind"] == "evaluation":
         query = select(claims).where(
@@ -951,9 +988,14 @@ def list_run_claims(run_id: int, db: Db) -> list[str]:
             for r in db.execute(query.order_by(claims.c.position)).mappings()
         ]
     queue = select(claims).where(claims.c.run_id.is_(None))
-    stopped = db.execute(queue.where(claims.c.status == "in_progress")).mappings().all()
-    waiting = db.execute(queue.where(claims.c.status == "waiting")).mappings().all()
-    ordered = sorted(stopped, key=submitted) + sorted(waiting, key=submitted)
+
+    def having(status: str) -> list[RowMapping]:
+        found = db.execute(queue.where(claims.c.status == status)).mappings()
+        return sorted(found, key=submitted)
+
+    # A claim a resume is working, heard from in the last five minutes, is left alone.
+    stopped = [r for r in having("in_progress") if not resumed_lately(r)]
+    ordered = stopped + having("sent_back") + having("waiting")
     return [r["claim_id"] for r in ordered]
 
 
@@ -1009,8 +1051,10 @@ def get_evaluation(run_id: int, db: Db) -> dict[str, Any]:
 def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
     """Start a claim in a run, or none, on its thread; a first try clears old steps."""
     row = claim_row(db, claim_id, lock=True)
-    if row["status"] not in {"waiting", "in_progress"}:
+    if row["status"] not in {"waiting", "in_progress", "sent_back"}:
         raise HTTPException(409, f"Claim {claim_id} is not waiting")
+    if row["status"] == "in_progress" and resumed_lately(row):
+        raise HTTPException(409, f"Claim {claim_id} is being resumed")
     if start.run_id is not None:
         held_back = held_back_by_round(db, start.run_id)
         if held_back:
@@ -1022,11 +1066,23 @@ def start_claim(claim_id: str, start: ClaimStart, db: Db) -> dict[str, Any]:
             )
     # A new try gets a new thread; a claim already in progress keeps its own.
     thread_id = row["thread_id"] or f"{claim_id}-{row['attempts'] + 1}"
-    values: dict[str, Any] = {"status": "in_progress", "thread_id": thread_id}
+    values: dict[str, Any] = {
+        "status": "in_progress",
+        "thread_id": thread_id,
+        "resume_heard_at": None,
+    }
     if row["thread_id"] is None:
         # A new attempt starts with no calculation on file.
         values["latest_calculation"] = None
-    set_claim(db, claim_id, **values)
+    # From the status it was read in, so a sent-back claim is taken only once.
+    taken = db.execute(
+        update(claims)
+        .where(claims.c.claim_id == claim_id, claims.c.status == row["status"])
+        .values(**values)
+    )
+    if not taken.rowcount:
+        db.rollback()
+        raise HTTPException(409, f"Claim {claim_id} was taken by another")
     if row["attempts"] == 0 and row["thread_id"] is None:
         db.execute(delete(steps).where(steps.c.claim_id == claim_id))
     db.commit()
@@ -1235,25 +1291,126 @@ def sign_off(
         raise HTTPException(
             403, f"{handler['name']} can't sign off payouts over the approval limit"
         )
-    row = claim_row(db, claim_id, lock=True)
-    if row["run_id"] is not None:
+    if claim_row(db, claim_id)["run_id"] is not None:
         raise HTTPException(409, f"Claim {claim_id} is an evaluation's copy")
-    if row["status"] != "waiting_for_sign_off":
-        raise HTTPException(409, f"Claim {claim_id} is not waiting for sign-off")
     signed = store.now()
-    set_claim(
-        db,
-        claim_id,
-        status="decided",
-        signed_off_by=handler["handler_id"],
-        signed_off_at=signed,
-        paid_amount=row["payout"],
-        paid_at=signed,
+    # Only while it waits for sign-off, so a sign-off and a send back at the same
+    # moment can't both go through.
+    taken = db.execute(
+        update(claims)
+        .where(
+            claims.c.claim_id == claim_id,
+            claims.c.status == "waiting_for_sign_off",
+        )
+        .values(
+            status="decided",
+            signed_off_by=handler["handler_id"],
+            signed_off_at=signed,
+            paid_amount=claims.c.payout,
+            paid_at=signed,
+        )
     )
     db.commit()
+    if not taken.rowcount:
+        raise HTTPException(409, f"Claim {claim_id} is not waiting for sign-off")
     # The agent finishes its paused thread without paying; it may not be running.
     tasks.add_task(agent_service.resume_claim, claim_id)
     return get_claim(claim_id, db)
+
+
+# What a send back clears, so nothing can pay the decision sent back.
+CLEARED = {
+    "decision": None,
+    "payout": None,
+    "reason": None,
+    "policy_section": None,
+    "calculation": None,
+    "latest_calculation": None,
+    "decided_by": None,
+    "decided_at": None,
+    "manual_version": None,
+    "needs_sign_off": False,
+    "held_by_gateway": False,
+    "signed_off_by": None,
+    "signed_off_at": None,
+    "resume_heard_at": None,
+}
+
+
+@app.post("/api/claims/{claim_id}/send-back", operation_id="send_back_claim")
+def send_back_claim(
+    claim_id: str, sent: SendBack, handler: Handler, db: Db, tasks: BackgroundTasks
+) -> dict[str, Any]:
+    """Send a payout waiting for sign-off back to the agent with the handler's note."""
+    if not handler["can_approve_over_limit"]:
+        raise HTTPException(
+            403, f"{handler['name']} can't send back payouts over the approval limit"
+        )
+    row = claim_row(db, claim_id, lock=True)
+    if row["run_id"] is not None:
+        raise HTTPException(409, f"Claim {claim_id} is an evaluation's copy")
+    # Only while it waits for sign-off, so a sign-off and a send back at the same
+    # moment can't both go through.
+    taken = db.execute(
+        update(claims)
+        .where(
+            claims.c.claim_id == claim_id,
+            claims.c.status == "waiting_for_sign_off",
+        )
+        .values(status="sent_back", **CLEARED)
+    )
+    if not taken.rowcount:
+        db.rollback()
+        raise HTTPException(409, f"Claim {claim_id} is not waiting for sign-off")
+    kept = ["decision", "payout", "calculation", "policy_section", "reason"]
+    db.execute(
+        insert(sent_back).values(
+            claim_id=claim_id,
+            **{k: row[k] for k in [*kept, "decided_by", "decided_at"]},
+            note=sent.note,
+            sent_back_by=handler["handler_id"],
+            sent_back_at=store.now(),
+        )
+    )
+    add_step_row(
+        db, claim_id, "sent_back", f"Sent back by {handler['name']}: {sent.note}"
+    )
+    db.commit()
+    # The agent decides it again; if it can't be reached, the next dispatch does.
+    tasks.add_task(agent_service.resume_claim, claim_id)
+    return get_claim(claim_id, db)
+
+
+@app.post(
+    "/api/claims/{claim_id}/take",
+    operation_id="take_sent_back_claim",
+    dependencies=AGENT,
+)
+def take_sent_back_claim(claim_id: str, db: Db) -> dict[str, Any]:
+    """Take a sent-back claim to work, once; it answers with the claim and its note."""
+    claim_row(db, claim_id)
+    taken = db.execute(
+        update(claims)
+        .where(claims.c.claim_id == claim_id, claims.c.status == "sent_back")
+        .values(status="in_progress", resume_heard_at=store.now())
+    )
+    db.commit()
+    if not taken.rowcount:
+        raise HTTPException(409, f"Claim {claim_id} is not sent back")
+    return get_claim(claim_id, db)
+
+
+@app.post(
+    "/api/claims/{claim_id}/resume-heard",
+    operation_id="record_resume_heard",
+    dependencies=AGENT,
+)
+def record_resume_heard(claim_id: str, db: Db) -> dict[str, str]:
+    """Record that a resume working the claim is still going."""
+    claim_row(db, claim_id)
+    set_claim(db, claim_id, resume_heard_at=store.now())
+    db.commit()
+    return {"status": "recorded"}
 
 
 # The improver's rounds. The handler's actions need a handler who can sign off over

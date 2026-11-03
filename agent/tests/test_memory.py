@@ -15,6 +15,7 @@ from agent.tests.test_agent import (  # noqa: F401 (check and in_process_backend
     check,
     claim,
     decide,
+    hold,
     in_process_backend,
     new_run,
     screening,
@@ -102,22 +103,39 @@ def test_a_decided_claim_saves_two_events_without_its_story(monkeypatch):
     assert any(t.startswith("remember: Claim CLM-1001") for t in steps_of("CLM-1001"))
 
 
-def test_work_carried_on_past_remember_saves_nothing_twice(monkeypatch):
+def test_work_stopped_before_remember_saves_once_when_carried_on(monkeypatch):
     store = memory_on(monkeypatch, FakeStore())
-    real = main.settle
+    real = main.remember
     stops = [KeyboardInterrupt()]
 
-    def settle(state):
+    def remember(state, runtime):
         if stops:
             raise stops.pop()
-        return real(state)
+        return real(state, runtime)
 
-    monkeypatch.setattr(main, "settle", settle)
+    monkeypatch.setattr(main, "remember", remember)
     with pytest.raises(KeyboardInterrupt):
         main.work("CLM-1001", None, stub(*decide("CLM-1001")))
-    assert len(store.puts) == 2
-    main.work("CLM-1001", None, stub())
     assert claim("CLM-1001")["status"] == "decided"
+    assert store.puts == []
+    for _ in range(2):
+        main.run("CLM-1001", "CLM-1001-1", stub())
+        assert len(store.puts) == 2
+
+
+def test_a_claim_over_the_limit_is_saved_once_after_its_sign_off(monkeypatch):
+    store = memory_on(monkeypatch, FakeStore())
+    monkeypatch.setattr(main, "model", lambda version: stub())
+    assert hold() == "CLM-1001 is waiting for a handler's sign-off."
+    assert store.puts == []
+    client.post("/api/claims/CLM-1001/sign-off", headers=headers())
+    assert main.resume_claim("CLM-1001") == "CLM-1001 is decided: approve"
+    assert [k for _, k, _ in store.puts] == ["claim", "decision"]
+    texts = steps_of("CLM-1001")
+    assert texts.index("Signed off by HND-01") < texts.index(
+        next(t for t in texts if t.startswith("remember: "))
+    )
+    main.run("CLM-1001", "CLM-1001-1", stub())
     assert len(store.puts) == 2
 
 

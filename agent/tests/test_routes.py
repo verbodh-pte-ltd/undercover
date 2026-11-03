@@ -16,6 +16,7 @@ from agent.tests.test_agent import (  # noqa: F401 (check and in_process_backend
     claim,
     decision,
     in_process_backend,
+    paused,
     recording,
     steps_of,
     stub,
@@ -248,6 +249,7 @@ def test_a_payment_the_gateway_refuses_waits_for_a_sign_off_that_pays_it(
     ]
     reply = main.work("CLM-1001", None, stub(*replies))
     assert reply == "CLM-1001 is waiting for a handler's sign-off."
+    assert len(paused("CLM-1001")) == 1
     held = claim("CLM-1001")
     assert (held["status"], held["held_by_gateway"], held["paid_amount"]) == (
         "waiting_for_sign_off",

@@ -72,17 +72,18 @@ plan follows the brief's intent on our code:
 
 Done when:
 
-- [ ] A stand-in test pauses an approval over the limit with its interrupt on the thread
-- [ ] A stand-in test pauses a payment the Gateway refused
-- [ ] An evaluation's copy over the limit ends without pausing, and its thread is deleted
-- [ ] A resume after a sign-off records "Signed off by", ends, and saves the claim to a stand-in memory
+- [x] A stand-in test pauses an approval over the limit with its interrupt on the thread
+- [x] A stand-in test pauses a payment the Gateway refused
+- [x] An evaluation's copy over the limit ends without pausing, and its thread is deleted
+- [x] A resume after a sign-off records "Signed off by", ends, and saves the claim to a stand-in memory
       store exactly once; nothing was saved before the sign-off
-- [ ] `resume_claim` refuses a claim that isn't paused, with the reason
-- [ ] Two sign-offs at once: one pays, the other gets 409
-- [ ] A sign-off whose call to the agent fails answers with the paid claim and logs a warning
+- [x] `resume_claim` refuses a claim that isn't paused, with the reason
+- [x] Two sign-offs at once: one pays, the other gets 409
+- [ ] A sign-off whose call to the agent fails answers with the paid claim and logs a warning (the
+      answer is tested; the warning comes with phase 3's new `backend/agent_service.py`)
 - [ ] With `npm run dev` running, a claim over the limit pauses, and signing it off on the dashboard pays
-      it and adds "Signed off by" to its steps
-- [ ] `npm run check:python` passes; committed
+      it and adds "Signed off by" to its steps (not run: a live check, for phase 5)
+- [x] `npm run check:python` passes; committed
 
 ## Phase 2: sign off or send back (step 2)
 
@@ -113,19 +114,20 @@ Done when:
 
 Done when:
 
-- [ ] Tests: send back refused for a handler who can't sign off over the limit (403), for an evaluation's
+- [x] Tests: send back refused for a handler who can't sign off over the limit (403), for an evaluation's
       copy and for a claim not waiting for sign-off (409), and for an empty or 1,001-character note (422)
-- [ ] A sign-off and a send back at the same moment: exactly one goes through
-- [ ] The decision is kept with its note, who and when, and the claim's own decision is cleared
-- [ ] A sent-back claim asked for by a resume and a dispatch at once is taken once
-- [ ] A dispatch started during a resume leaves its claim alone; one after five quiet minutes takes it
-- [ ] A stand-in-model test: the new decision within the limit is paid; one over the limit pauses again
-- [ ] A send back the agent never received is worked by the next dispatch, which resumes the paused
+- [x] A sign-off and a send back at the same moment: exactly one goes through
+- [x] The decision is kept with its note, who and when, and the claim's own decision is cleared
+- [x] A sent-back claim asked for by a resume and a dispatch at once is taken once
+- [x] A dispatch started during a resume leaves its claim alone; one after five quiet minutes takes it
+- [x] A stand-in-model test: the new decision within the limit is paid; one over the limit pauses again
+- [x] A send back the agent never received is worked by the next dispatch, which resumes the paused
       thread with the note
-- [ ] Vitest covers the Send back form, its required note and the sent-back history on the claim page
+- [x] Vitest covers the Send back form, its required note and the sent-back history on the claim page
 - [ ] With `npm run dev` running, a claim sent back with a note is decided again, and the claim page shows
-      both decisions and the note, checked through the Playwright MCP server
-- [ ] `npm run check:python` and `npm run check:ts` pass; committed
+      both decisions and the note, checked through the Playwright MCP server (not run: a live check, for
+      phase 5; `e2e/claim.spec.ts` sends a claim back on the page against the stand-in)
+- [x] `npm run check:python` and `npm run check:ts` pass; committed
 
 ## Phase 3: the agent as an AgentCore app (step 3)
 

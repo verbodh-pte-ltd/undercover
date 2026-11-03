@@ -86,6 +86,7 @@ export const claim: Claim = {
   run_id: null,
   copied_from: null,
   held_by_gateway: false,
+  sent_back: [],
   cost: 0,
   seconds: 0,
   attempts: 0,
