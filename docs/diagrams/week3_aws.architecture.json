@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "UnderCover on AWS, Week 3 Day 1 to Day 2",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "handler-path", "label": "A handler's request", "focus": ["handler", "cognito", "app", "rds", "logs"], "note": "The deployed dashboard signs in through Cognito and reads claims from RDS." },
+      { "id": "gateway-path", "label": "The agent's tools", "focus": ["notebook", "gateway", "policy", "apikey", "app"], "note": "Lab 2: the Gateway turns the agent's routes into MCP tools, checks the Cedar policy and sends the API key." },
+      { "id": "setup", "label": "Account and models", "focus": ["notebook", "iam", "openrouter"], "note": "Day 1 sets up the account and the course role; Lab 1 calls the models from the laptop." }
+    ]
+  },
+  "components": [
+    { "id": "handler", "type": "external", "label": "Handler's browser", "sublabel": "Dana, Marcus, Priya", "pos": [40, 180], "size": [150, 64] },
+    { "id": "notebook", "type": "frontend", "label": "Lab notebooks", "sublabel": "your laptop, boto3", "pos": [40, 340], "size": [150, 64] },
+    { "id": "openrouter", "type": "external", "label": "OpenRouter", "sublabel": "GPT-6 Luna, model check", "pos": [40, 480], "size": [150, 64], "tag": "Lab 1" },
+    { "id": "cognito", "type": "security", "label": "Cognito user pool", "sublabel": "undercover-handlers", "pos": [300, 50], "size": [160, 64], "tag": "RDS+Cognito nb" },
+    { "id": "app", "type": "backend", "label": "undercover-app", "sublabel": "Lambda + Function URL", "pos": [560, 180], "size": [160, 64], "tag": "Lab 2" },
+    { "id": "rds", "type": "database", "label": "RDS PostgreSQL 17", "sublabel": "undercover-db, t4g.micro", "pos": [840, 180], "size": [170, 64], "tag": "RDS+Cognito nb" },
+    { "id": "logs", "type": "cloud", "label": "CloudWatch Logs", "sublabel": "kept 7 days", "pos": [840, 50], "size": [170, 64] },
+    { "id": "gateway", "type": "cloud", "label": "AgentCore Gateway", "sublabel": "MCP, AWS_IAM", "pos": [300, 340], "size": [160, 64], "tag": "Lab 2" },
+    { "id": "policy", "type": "security", "label": "Cedar policy engine", "sublabel": "pay_claim over $1,000", "pos": [560, 340], "size": [160, 64], "tag": "Lab 2" },
+    { "id": "apikey", "type": "security", "label": "AgentCore Identity", "sublabel": "API key in Secrets Manager", "pos": [560, 480], "size": [180, 64], "tag": "Lab 2" },
+    { "id": "iam", "type": "security", "label": "IAM", "sublabel": "course, app and gateway roles", "pos": [840, 340], "size": [170, 64], "tag": "Day 1 + Lab 2" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "AWS us-east-1", "wraps": ["cognito", "app", "rds", "logs", "gateway", "policy", "apikey", "iam"] }
+  ],
+  "connections": [
+    { "id": "browser-app", "from": "handler", "to": "app", "label": "HTTPS + ID token", "variant": "emphasis" },
+    { "id": "browser-signin", "from": "handler", "to": "cognito", "label": "USER_PASSWORD_AUTH", "variant": "security", "fromSide": "top", "toSide": "left" },
+    { "id": "app-db", "from": "app", "to": "rds", "label": "SQL, TLS :5432", "variant": "emphasis" },
+    { "id": "app-logs", "from": "app", "to": "logs", "label": "logs", "variant": "dashed", "fromSide": "top", "toSide": "left" },
+    { "id": "nb-gateway", "from": "notebook", "to": "gateway", "label": "MCP, SigV4" },
+    { "id": "gateway-app", "from": "gateway", "to": "app", "label": "X-API-Key", "fromSide": "top", "toSide": "left" },
+    { "id": "gateway-policy", "from": "gateway", "to": "policy", "label": "authorize", "variant": "security" },
+    { "id": "gateway-key", "from": "gateway", "to": "apikey", "label": "fetch key", "variant": "security", "fromSide": "bottom", "toSide": "left" },
+    { "id": "nb-openrouter", "from": "notebook", "to": "openrouter", "label": "Lab 1 calls", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelAt": [115, 432] },
+    { "id": "iam-app", "from": "iam", "to": "app", "label": "runs as app-role", "variant": "dashed", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Day 1: the account", "items": ["MFA on root, a budget, us-east-1", "undercover-course role via IAM Identity Center", "AWS_ADMIN_PROFILE for admin steps"] },
+    { "dot": "emerald", "title": "Day 2 Lab 1 and Lab 2", "items": ["Lab 1: a model check before the agent", "Lab 2: app on Lambda behind a Gateway", "Cedar refuses payments over $1,000"] },
+    { "dot": "rose", "title": "RDS and Cognito notebook", "items": ["Run before Lab 2; writes AWS_* to .env", "About $0.60 a day while RDS exists", "Part 3 deletes it all, tagged FDE-lab"] }
+  ]
+}
