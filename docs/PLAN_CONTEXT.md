@@ -459,6 +459,13 @@ deleted by code in notebook cells, not by the build agent's own commands. The ce
 cell is safe to run again, and each create cell has a matching delete cell in the teardown. The student
 runs the cells, or asks for them to be run; each box below is ticked from the cell's output.
 
+Moved on 2026-11-03: the course policy, the RDS database, its seeding and the Cognito user pool, with
+their teardown, now live in their own notebook, `labs/week3/week3day2_rds_cognito.ipynb`, run before
+Week 3 Day 2 Lab 2. It writes `AWS_DATABASE_URL`, `AWS_COGNITO_USER_POOL_ID` and `AWS_COGNITO_CLIENT_ID`
+to `.env`. `labs/week3/week3day2_lab2.ipynb` deploys the app with them when all three are set, and
+`labs/week3/week3day3.ipynb` keeps only its Cognito build of the dashboard, the app's settings, the
+reseed, the FDE-lab tags, the functions' teardown and the final listing.
+
 - [x] The new cells are in the notebook, `ruff check` passes on their code, and the lab's own cells are
       unchanged (`git diff` shows only added cells).
 
