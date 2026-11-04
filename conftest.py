@@ -13,6 +13,9 @@ FROM_DOT_ENV = [
     "UNDERCOVER_MEMORY_ID",
     # The agent's runtime on AgentCore Runtime: never called from a test.
     "UNDERCOVER_AGENT_RUNTIME",
+    # The Copilot's runtime and its memory on AWS: never reached from a test.
+    "UNDERCOVER_COPILOT_RUNTIME",
+    "UNDERCOVER_COPILOT_MEMORY_ID",
     "AWS_PROFILE",
     "AWS_SESSION_TOKEN",
 ]

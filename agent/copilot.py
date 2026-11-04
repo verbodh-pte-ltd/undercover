@@ -410,10 +410,9 @@ def measured(token: str, run_id: int) -> tuple[dict[str, float] | None, str]:
     if run["status"] != "finished":
         why = run.get("stopped_reason") or "no reason given"
         return None, f"Evaluation {run_id} {run['status']} partway: {why}"
-    evaluation = app.get(token, f"/api/evaluations/{run_id}")
-    evaluation.raise_for_status()
-    # Only the measures: the handlers' decisions on the labeled set stay out.
-    measures = {k: evaluation.json()[k] for k in ["straight_through", "accuracy"]}
+    # The run's measures only: the handlers' decisions on the labeled set, which the
+    # evaluation's own page shows, are never fetched.
+    measures = {k: run["measures"][k] for k in ["straight_through", "accuracy"]}
     return measures, f"Evaluation {run_id} of the whole held-out set finished"
 
 

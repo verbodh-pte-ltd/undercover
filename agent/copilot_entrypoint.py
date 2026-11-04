@@ -12,6 +12,7 @@ import threading
 from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
+import httpx
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from pydantic import (
     BaseModel,
@@ -23,7 +24,7 @@ from pydantic import (
 )
 from starlette.exceptions import HTTPException
 
-from agent import copilot, entrypoint, main
+from agent import copilot, copilot_api, entrypoint, main
 
 # The only credentials the Copilot fetches on Runtime.
 NEEDED = {"OPENROUTER_API_KEY", "DATABASE_URL"}
@@ -97,9 +98,29 @@ def in_background(work: Callable[..., None], *args: Any) -> dict:
     return ACCEPTED
 
 
+def sign_in_refused(token: str) -> str | None:
+    """Why the app won't take this sign-in, asked before a turn is accepted; or None.
+
+    A refused sign-in can't report its own failure, since the app refuses that too, so
+    the refusal is the answer and the app fails the turn with it.
+    """
+    try:
+        found = copilot_api.signed_in_handler(token)
+    except httpx.HTTPError as exc:
+        return copilot.scrub(f"The Copilot couldn't reach the app: {exc}", token)
+    if found.is_success:
+        return None
+    reason = f"The app didn't accept the sign-in: {copilot_api.reason(found)}"
+    return copilot.scrub(reason, token)
+
+
 def operate(operation: Payload) -> dict:
     """Do what the operation asks: answer at once, and work the turn in the
-    background."""
+    background, once the app has accepted the sign-in."""
+    if isinstance(operation, StartTurn | AnswerConfirmation):
+        why = sign_in_refused(operation.token)
+        if why is not None:
+            return {"refused": why}
     match operation:
         case Health():
             return {"healthy": True}
