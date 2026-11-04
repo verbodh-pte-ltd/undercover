@@ -250,6 +250,10 @@ def tear_down() -> None:
     if runtime:
         control.delete_agent_runtime(agentRuntimeId=runtime["agentRuntimeId"])
         print(f"Deleted runtime {NAME}")
+    logs = session.client("logs")
+    for group in logs.describe_log_groups(logGroupNamePrefix=f"/aws/bedrock-agentcore/runtimes/{NAME}")["logGroups"]:
+        logs.delete_log_group(logGroupName=group["logGroupName"])
+        print(f"Deleted log group {group['logGroupName']}")
     memory_id = find_memory()
     if memory_id:
         control.delete_memory(memoryId=memory_id)
