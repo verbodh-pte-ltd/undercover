@@ -111,6 +111,7 @@ class StandIn:
             "stopped_reason": self.stopped_reason,
             "summary": {"waiting_for_sign_off": [{"claim_id": "CLM-1001"}]},
             "claims": [],
+            "measures": None if kind == "dispatch" else self.measures,
         }
 
     def routes(self) -> None:  # noqa: C901, PLR0915 (one route each, as the contract lists)
@@ -207,7 +208,7 @@ class StandIn:
         @app.get("/api/evaluations/{run_id}")
         def get_evaluation(run_id: int, request: Request) -> dict[str, Any]:
             self.handler(request)
-            # The handlers' decisions, which the Copilot must never pass on.
+            # The handlers' decisions, which the Copilot must never fetch.
             labeled = [{"claim_id": "EVL-1", "handler": "approve", "handler_payout": 1}]
             return {"run_id": run_id, **self.measures, "claims": labeled}
 

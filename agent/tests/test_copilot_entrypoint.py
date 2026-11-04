@@ -3,6 +3,7 @@ import os
 import threading
 import time
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
@@ -22,6 +23,19 @@ def fresh_process(monkeypatch):
     for name in CREDENTIALS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def standin(monkeypatch):
+    """The app's routes in process, which the sign-in check asks first."""
+    found = StandIn()
+    found.turn(1)
+    monkeypatch.setattr(
+        copilot_api,
+        "client",
+        lambda token: TestClient(found.app, headers=copilot_api.headers(token)),
+    )
+    return found
 
 
 def invoke(payload):
@@ -160,33 +174,40 @@ def test_the_ping_is_healthy_after_a_turn_that_raised(monkeypatch):
     settle()
 
 
-def test_a_refused_sign_in_ends_the_turn_before_any_model_call(monkeypatch):
-    standin = StandIn()
-    standin.turn(1)
-    monkeypatch.setattr(
-        copilot_api,
-        "client",
-        lambda token: TestClient(standin.app, headers=copilot_api.headers(token)),
-    )
+@pytest.mark.parametrize(
+    ("operation", "extra"),
+    [("start_turn", {}), ("answer_confirmation", {"answer": "sign_off"})],
+)
+def test_a_refused_sign_in_is_refused_at_once_with_nothing_started(
+    standin, monkeypatch, operation, extra
+):
     built = []
     monkeypatch.setattr(copilot, "model", lambda configuration: built.append(1))
-    assert invoke(start(token=EXPIRED)).json() == {"accepted": True}
-    settle()
+    monkeypatch.setattr(copilot, operation, lambda *args: built.append(args))
+    payload = {**start(token=EXPIRED), "operation": operation, **extra}
+    if extra:
+        del payload["message"]
+    assert invoke(payload).json() == {
+        "refused": "The app didn't accept the sign-in: Your sign-in has expired."
+        " Sign in again."
+    }
+    assert ping() == "Healthy"
     assert built == []
-    assert [r["path"] for r in standin.requests] == [
-        "/api/handlers/me",
-        "/api/copilot/turns/1/fail",
-    ]
+    assert [r["path"] for r in standin.requests] == ["/api/handlers/me"]
 
 
-def test_a_turn_through_the_app_finishes(monkeypatch):
-    standin = StandIn()
-    standin.turn(1)
-    monkeypatch.setattr(
-        copilot_api,
-        "client",
-        lambda token: TestClient(standin.app, headers=copilot_api.headers(token)),
-    )
+def test_an_app_that_cant_be_reached_refuses_the_turn(monkeypatch):
+    def unreachable(token):
+        raise httpx.ConnectError(f"no app for {token}")
+
+    monkeypatch.setattr(copilot_api, "signed_in_handler", unreachable)
+    monkeypatch.setattr(copilot, "start_turn", lambda *args: None)
+    refused = invoke(start()).json()["refused"]
+    assert refused == "The Copilot couldn't reach the app: no app for [the sign-in]"
+    assert ping() == "Healthy"
+
+
+def test_a_turn_through_the_app_finishes(standin, monkeypatch):
     monkeypatch.setattr(copilot, "memory_store", lambda: None)
     model = stub(AIMessage(content="Nothing needs you."))
     monkeypatch.setattr(copilot, "model", lambda configuration: model)

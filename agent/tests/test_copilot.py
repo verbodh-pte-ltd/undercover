@@ -552,6 +552,7 @@ def test_the_success_criteria_come_from_the_measures_settings_and_counts(
     assert rows[1]["target"] == "at least 80.0%, the accuracy objective in Settings"
     assert checked["all_met"] is True
     assert "handler" not in json.dumps(checked)
+    assert the_app.sent("/api/evaluations/8") == []
     assert found["steps"]["1-call-0"]["kind"] == "action"
 
 
