@@ -247,15 +247,16 @@ Run with `npm run dev`, on the default model, on the direct route and with memor
 `UNDERCOVER_GATEWAY_URL`, `UNDERCOVER_MEMORY_ID` and `UNDERCOVER_COPILOT_MEMORY_ID` in the shell for the
 run. Stop Lab 1's `agentcore dev` first. Reseed once.
 
-- [ ] Signed in as Dana Whitfield, in one conversation, the five handover questions, each answered in one
-      turn
-- [ ] Every figure in the last answer checked against the Scoreboard and the claims' pages
-- [ ] The same conversation picked up after restarting `npm run dev`
-- [ ] Signed in as Marcus Oyelaran, a request to sign off declined with the reason
-- [ ] The sidebar checked in light and dark mode through the Playwright MCP server
-- [ ] What the runs spent, from the costs in the database
-- [ ] The Copilot answers its health check through `runtime/copilot.py` with only the `runtime` group
-- [ ] Memory is checked on AWS by `week3day5_lab1.ipynb`, not here; `docs/STATUS.md` says so; committed
+- [x] Signed in as Dana Whitfield, in one conversation, the handover questions, each answered in one
+      turn (at most 5 claims a batch: the tiny evaluation in place of a dispatch, and the success
+      criteria, which run all 25 held-out claims, left to the tests)
+- [x] Every figure in the last answer checked against the Scoreboard and the claims' pages
+- [x] The same conversation picked up after restarting `npm run dev`
+- [x] Signed in as Marcus Oyelaran, a request to sign off declined with the reason
+- [x] The sidebar checked in light and dark mode through the Playwright MCP server
+- [x] What the runs spent, from the costs in the database
+- [x] The Copilot answers its health check through `runtime/copilot.py` with only the `runtime` group
+- [x] Memory is checked on AWS by `week3day5_lab1.ipynb`, not here; `docs/STATUS.md` says so; committed
 
 ## Not for now
 

@@ -256,8 +256,8 @@ What changed for it, in the look only:
 
 ## The Copilot
 
-The UnderCover Copilot (`docs/PLAN_COPILOT.md`, from `docs/COPILOT.md`) is built, phases 1 to 5; phase 6,
-the live checks, is pending. Nothing is deployed. After pulling this, run `npm run seed` once: there are
+The UnderCover Copilot (`docs/PLAN_COPILOT.md`, from `docs/COPILOT.md`) is built and checked live, phases 1 to
+6. Nothing is deployed. After pulling this, run `npm run seed` once: there are
 new `conversations`, `turns` and `copilot_steps` tables.
 
 - **In the app:** a handler's conversations, their turns (working, waiting for a confirmation, done,
@@ -286,13 +286,37 @@ uv run --env-file .env --isolated --only-group runtime python -m runtime.copilot
 ```
 
 Posting `{"operation": "health"}` to `http://127.0.0.1:8080/invocations` should then answer
-`{"healthy": true}`; this is one of the pending live checks.
+`{"healthy": true}`, as it did with only the `runtime` group installed.
 
-Pending (phase 6): the five handover questions as Dana Whitfield on the default model, the direct route
-and memory off, with the last answer's figures checked against the Scoreboard and the claims' pages; the
-same conversation after restarting `npm run dev`; Marcus Oyelaran's sign-off declined; the sidebar in
-light and dark mode; and what the runs spent. The Copilot's memory isn't checked here: the deployment
-notebook, `labs/week3/week3day5_lab1.ipynb`, checks it on AWS.
+**The live checks (phase 6), on 4 November 2026.** On the laptop, with the backend, the agent, the Copilot
+and the context layer on the direct route, memory off and the default model (`openai/gpt-6-luna`), after
+one reseed. To keep every batch to 5 claims at most, the agent first worked three queue claims on their own
+(CLM-1003, CLM-1008 and CLM-1011, each held for sign-off) and the first question ran the held-out set's
+five tiny claims in place of a dispatch of the whole queue.
+
+- **Dana Whitfield, one conversation, each question answered in one turn:**
+  - "Run an evaluation of the held-out set's five tiny claims, and tell me what needs me": it started
+    the evaluation, waited for it in code, then read the queue: CLM-1003 ($3,750), CLM-1008 ($2,240) and
+    CLM-1011 ($1,150) held for sign-off.
+  - "Why does CLM-1003 need me?": the $3,750 payout is over the $1,000 limit.
+  - "Send it back with a note" about a payment by the airline or a third party: sent back. The agent
+    took it and referred CLM-1003, saying the file doesn't show whether anyone else paid.
+  - "Sign off on another one": it picked CLM-1008 and paused on the card, filled from the records (Dorothy
+    Gale, $2,240). After Sign off and pay, CLM-1008 was decided and paid $2,240.
+- **After restarting the servers**, the same conversation carried on: "I signed off CLM-1008. It paid
+  $2,240."
+- **Marcus Oyelaran**, asking to sign off CLM-1011 ($1,150), was declined with the reason: over the
+  limit, and his permissions don't allow it. No card showed.
+- **The sidebar**, checked in light and dark mode with Playwright, showing the conversation's steps,
+  the action cards and the small print.
+- **Spent:** the claim agent and the judge, 55 model calls, $0.0144; the Copilot, 6 turns, 16 model
+  calls, $0.0024.
+- **Not run live:** "Are we meeting the success criteria?", which evaluates all 25 held-out claims. Its
+  tests cover it. A first run found two answers that missed the brief ("what needs me" read only the
+  evaluation's summary, and "sign off on another one" asked which claim), so the Copilot's instructions
+  now say to read the queue and to pick a claim and go to the card.
+- **Memory** isn't checked here: the deployment notebook, `labs/week3/week3day5_lab1.ipynb`, checks it
+  on AWS.
 
 ## The parts
 
