@@ -220,10 +220,10 @@ Done when:
 
 Done when:
 
-- [ ] Vitest covers sending, the cards' three states, opening a card, the confirmation's two buttons, the
+- [x] Vitest covers sending, the cards' three states, opening a card, the confirmation's two buttons, the
       blocked message box, collapsing and remembering, polling only while working, and the renewal
 - [ ] The existing end-to-end tests pass with the sidebar open
-- [ ] `npm run check:ts` passes; committed
+- [x] `npm run check:ts` passes; committed
 
 ## Phase 5: the end-to-end tests and the documents
 

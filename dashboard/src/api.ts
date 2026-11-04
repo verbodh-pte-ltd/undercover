@@ -311,19 +311,20 @@ export interface Settings {
   >;
 }
 
-// The signed-in handler's access token, which goes with every read and action.
-async function authorization() {
-  return { Authorization: `Bearer ${await auth.token()}` };
+// The signed-in handler's access token, which goes with every read and action, renewed first
+// when less than renewWithinMs is left on it.
+export async function authorization(renewWithinMs?: number) {
+  return { Authorization: `Bearer ${await auth.token(renewWithinMs)}` };
 }
 
-async function refusal(response: Response, fallback: string) {
+export async function refusal(response: Response, fallback: string) {
   const { detail } = (await response.json()) as { detail: unknown };
   return typeof detail === "string"
     ? detail
     : `${fallback} returned ${String(response.status)}`;
 }
 
-async function getJson<T>(path: string): Promise<T> {
+export async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { headers: await authorization() });
   if (!response.ok)
     throw new Error(`${path} returned ${String(response.status)}`);

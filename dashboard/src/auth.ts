@@ -6,8 +6,9 @@ export interface Auth {
   // Resolves to a message for the handler when the sign-in is refused, otherwise null.
   signIn(email: string, password: string): Promise<string | null>;
   signOut(): Promise<void>;
-  // The token that goes with every read and action, or "" when signed out.
-  token(): Promise<string>;
+  // The token that goes with every read and action, or "" when signed out. With renewWithinMs,
+  // the sign-in is renewed first when less than that is left on it.
+  token(renewWithinMs?: number): Promise<string>;
   // Calls back now and on every change with the signed-in user, or null; returns the stop.
   onChange(listener: (user: string | null) => void): () => void;
 }
@@ -29,8 +30,12 @@ export const supabaseAuth: Auth = {
   async signOut() {
     await supabase().auth.signOut();
   },
-  async token() {
-    const { data } = await supabase().auth.getSession();
+  async token(renewWithinMs = 0) {
+    const { session } = (await supabase().auth.getSession()).data;
+    // expires_at is in seconds.
+    const left = (session?.expires_at ?? Infinity) * 1000 - Date.now();
+    if (!session || left >= renewWithinMs) return session?.access_token ?? "";
+    const { data } = await supabase().auth.refreshSession();
     return data.session?.access_token ?? "";
   },
   onChange(listener) {
@@ -129,10 +134,11 @@ export function cognitoAuth(userPoolId: string, clientId: string): Auth {
       save(null);
       return Promise.resolve();
     },
-    async token() {
+    async token(renewWithinMs = MARGIN_MS) {
       const tokens = saved();
       if (!tokens) return "";
-      if (tokens.expiresAt - MARGIN_MS > Date.now()) return tokens.idToken;
+      const margin = Math.max(renewWithinMs, MARGIN_MS);
+      if (tokens.expiresAt - margin > Date.now()) return tokens.idToken;
       const result = (
         await initiateAuth("REFRESH_TOKEN_AUTH", {
           REFRESH_TOKEN: tokens.refreshToken,
