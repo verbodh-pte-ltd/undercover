@@ -117,19 +117,19 @@ the same package, as the brief says. Start Phase 1 only once all five runtime ph
 
 Done when:
 
-- [ ] Tests: a conversation's routes refuse another handler (404) and a request with only the agent's key
+- [x] Tests: a conversation's routes refuse another handler (404) and a request with only the agent's key
       (401)
-- [ ] Every handler's route refuses a valid sign-in sent with the agent's key (401); the existing
+- [x] Every handler's route refuses a valid sign-in sent with the agent's key (401); the existing
       dashboard tests still pass
-- [ ] One turn at a time (409); a message refused while a confirmation waits
-- [ ] A turn shown as stopped after 20 minutes working; a waiting turn never is
-- [ ] The card is filled from the records, whatever the Copilot sends
-- [ ] `find_customers`, `get_customer`, `get_run` and `get_success_counts` return what the brief lists, with
+- [x] One turn at a time (409); a message refused while a confirmation waits
+- [x] A turn shown as stopped after 20 minutes working; a waiting turn never is
+- [x] The card is filled from the records, whatever the Copilot sends
+- [x] `find_customers`, `get_customer`, `get_run` and `get_success_counts` return what the brief lists, with
       no labeled decisions
-- [ ] `copilot_service` sends the session id and retries a conflict; a Copilot that didn't take a turn
+- [x] `copilot_service` sends the session id and retries a conflict; a Copilot that didn't take a turn
       marks it failed
-- [ ] `npm run seed` empties the conversations
-- [ ] `npm run check:python` passes; committed
+- [x] `npm run seed` empties the conversations
+- [x] `npm run check:python` passes; committed
 
 ## Phase 2: the Copilot's graph and tools
 

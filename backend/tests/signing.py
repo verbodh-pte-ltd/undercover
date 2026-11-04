@@ -25,5 +25,6 @@ def token(
 
 
 def headers(email: str = DANA) -> dict[str, str]:
-    """The Authorization header for a handler's sign-in."""
-    return {"Authorization": f"Bearer {token(email)}"}
+    """A handler's sign-in, with no key: the blank key overrides a client's default
+    key, since the app refuses a handler's request that carries the agent's key."""
+    return {"Authorization": f"Bearer {token(email)}", "X-API-Key": ""}

@@ -49,7 +49,9 @@ def cognito(monkeypatch):
 
 
 def me(token: str):
-    return client.get("/api/handlers/me", headers={"Authorization": f"Bearer {token}"})
+    """Ask who is signed in with the token alone, without the client's key."""
+    sign_in = {"Authorization": f"Bearer {token}", "X-API-Key": ""}
+    return client.get("/api/handlers/me", headers=sign_in)
 
 
 def test_without_auth_settings_it_uses_local_supabase():

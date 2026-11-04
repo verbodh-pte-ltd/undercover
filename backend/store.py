@@ -321,6 +321,49 @@ agent_work = Table(
     Column("started_at", String),
     Column("heard_at", String),
 )
+# The Copilot's conversations, each a handler's own, and its turns and their steps as
+# the sidebar shows them. Where the Copilot's graph stands is in its checkpoints.
+conversations = Table(
+    "conversations",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("handler_id", String, nullable=False),
+    Column("title", String, nullable=False),
+    Column("created_at", String, nullable=False),
+)
+# A turn's state is working, waiting_for_confirmation, done or failed; card is the
+# confirmation card as JSON while it waits, and kept after.
+turns = Table(
+    "turns",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("conversation_id", String, nullable=False),
+    Column("message", Text, nullable=False),
+    Column("state", String, nullable=False),
+    Column("answer", Text),
+    Column("model_calls", Integer, nullable=False, default=0),
+    Column("cost", Float, nullable=False, default=0.0),
+    Column("seconds", Float),
+    Column("card", Text),
+    Column("error", Text),
+    Column("started_at", String, nullable=False),
+    Column("answered_at", String),
+)
+# key is the Copilot's own id for a step, unique in its turn; detail is JSON.
+copilot_steps = Table(
+    "copilot_steps",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("turn_id", Integer, nullable=False),
+    Column("key", String, nullable=False),
+    Column("kind", String, nullable=False),
+    Column("tool", String, nullable=False),
+    Column("input", Text, nullable=False),
+    Column("state", String, nullable=False),
+    Column("seconds", Float),
+    Column("detail", Text),
+    Column("started_at", String, nullable=False),
+)
 EVAL_SETS = {
     "evaluation": ("claims.json", "evals/decisions.json"),
     "held_out": ("evals/held_out_claims.json", "evals/held_out_decisions.json"),
