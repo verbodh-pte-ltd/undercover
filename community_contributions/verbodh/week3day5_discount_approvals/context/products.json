@@ -1,0 +1,5 @@
+[
+  {"sku": "ANALYTICS", "name": "Northwind Analytics", "list_price_per_seat": 480, "floor_percent": 25},
+  {"sku": "SUPPORT", "name": "Northwind Support Desk", "list_price_per_seat": 240, "floor_percent": 18},
+  {"sku": "SECURITY", "name": "Northwind Security Suite", "list_price_per_seat": 900, "floor_percent": 30}
+]

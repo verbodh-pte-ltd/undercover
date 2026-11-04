@@ -1,0 +1,7 @@
+[
+  {"customer_id": "ACME", "name": "Acme Logistics", "annual_revenue": 2400000, "tier": "strategic", "on_hold": false, "notes": "Renewal due in March; evaluating a competitor."},
+  {"customer_id": "BLUEFIN", "name": "Bluefin Retail", "annual_revenue": 420000, "tier": "growth", "on_hold": false, "notes": "Expanding to three new regions this year."},
+  {"customer_id": "CEDAR", "name": "Cedar Dental Group", "annual_revenue": 65000, "tier": "standard", "on_hold": false, "notes": "Small practice group, pays on time."},
+  {"customer_id": "DUNMORE", "name": "Dunmore Freight", "annual_revenue": 310000, "tier": "growth", "on_hold": true, "notes": "Two invoices over 90 days unpaid."},
+  {"customer_id": "EVERGREEN", "name": "Evergreen Health", "annual_revenue": 1350000, "tier": "strategic", "on_hold": false, "notes": "Five-year framework agreement in negotiation."}
+]

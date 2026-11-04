@@ -1,0 +1,5 @@
+[
+  {"person_id": "REP-01", "name": "Priya Nair", "role": "rep"},
+  {"person_id": "REP-02", "name": "Tom Becker", "role": "rep"},
+  {"person_id": "DIR-01", "name": "Grace Okafor", "role": "director"}
+]
