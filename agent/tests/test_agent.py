@@ -837,8 +837,10 @@ def test_everything_in_the_agent_calls_the_backend_through_one_client():
     sources = {
         f.name: f.read_text(encoding="utf-8") for f in Path("agent").glob("*.py")
     }
-    assert sum(s.count("httpx.Client(") for s in sources.values()) == 1
+    # The claim agent's, with the key, and the Copilot's own, with the sign-in.
+    assert sum(s.count("httpx.Client(") for s in sources.values()) == 2
     assert "httpx.Client(" in inspect.getsource(REAL_BACKEND)
+    assert sources["copilot_api.py"].count("httpx.Client(") == 1
     for name in ["dispatcher.py", "improver_api.py", "entrypoint.py"]:
         assert "main.backend()" in sources[name]
     for source in sources.values():
