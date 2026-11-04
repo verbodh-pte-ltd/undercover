@@ -264,3 +264,56 @@ run. Stop Lab 1's `agentcore dev` first. Reseed once.
 - Changing settings, the configuration or improvement rounds through the Copilot.
 - Langfuse tracing for the Copilot.
 - Deploying: nothing here creates anything on AWS. `week3day5_lab1.ipynb` does that.
+
+## The contract between the parts
+
+Fixed before the build starts, so the backend, the dashboard and the Copilot can be built side by side.
+All JSON. Times are ISO 8601 strings, money is a number of US dollars.
+
+**Shapes**
+
+- `Conversation`: `{id, title, created_at}`. The id is a UUID made by the app (36 characters).
+- `ConversationDetail`: `Conversation` plus `turns: Turn[]`, oldest first.
+- `Turn`: `{id, message, state, answer, model_calls, cost, seconds, card, error, started_at, answered_at,
+  steps: Step[]}`. `id` is a number. `state` is `working`, `waiting_for_confirmation`, `done`, `failed`
+  or `stopped` (shown, never stored). `answer`, `seconds`, `card`, `error` and `answered_at` may be null.
+- `Card`: `{claim_id, customer_name, amount, reason}`, filled by the app from its records.
+- `Step`: `{key, kind, tool, input, state, seconds, detail, started_at}`. `key` is the Copilot's own id for
+  the step, unique in its turn. `kind` is `claims`, `customers`, `context`, `work`, `memory` or `action`.
+  `state` is `working`, `done`, `refused` or `failed`. `detail` is null or `{asked, answer, file, owner}`,
+  each a string or null, already trimmed by the Copilot to 2,000 characters.
+
+**The handler's routes** (a signed-in handler; another handler's conversation is 404)
+
+- `POST /api/conversations` `create_conversation`, no body → `Conversation`
+- `GET /api/conversations` `list_conversations` → `Conversation[]`, newest first
+- `GET /api/conversations/{conversation_id}` `get_conversation` → `ConversationDetail`
+- `POST /api/conversations/{conversation_id}/messages` `send_message`, `{message}` → `Turn` (409 while a
+  turn is working or a confirmation waits; the reason in `detail`)
+- `POST /api/conversations/{conversation_id}/confirmation` `answer_confirmation`, `{answer}` with
+  `sign_off` or `cancel` → `Turn` (409 when nothing waits)
+
+**The Copilot's routes** (the handler's sign-in, never the key; only the handler's own turn, 409 unless
+it is working)
+
+- `POST /api/copilot/turns/{turn_id}/steps` `record_copilot_step`, a `Step` without `started_at` → `Step`.
+  Recording a key again updates that step.
+- `POST /api/copilot/turns/{turn_id}/pause` `pause_turn`, `{claim_id}` → `Turn`
+- `POST /api/copilot/turns/{turn_id}/finish` `finish_turn`, `{answer, model_calls, cost, seconds}` → `Turn`
+- `POST /api/copilot/turns/{turn_id}/fail` `fail_turn`, `{error, model_calls, cost, seconds}` → `Turn`
+
+**The reads** (a signed-in handler, or the key where it says so)
+
+- `GET /api/customers?name=` `find_customers` → `[{customer_id, name, email}]`
+- `GET /api/customers/{customer_id}` `get_customer` → `{customer_id, name, email, policies, claims}`, the
+  claims each `{claim_id, status, submitted_at, payout}`, earlier and in the queue
+- `GET /api/runs/{run_id}` `get_run`: the key or a handler (it was the key's only)
+- `GET /api/success-counts` `get_success_counts` → `{approval_limit, paid_over_limit, signed_off}`
+- `GET /api/copilot/configuration` `get_copilot_configuration` → `{model, reasoning_effort, instructions}`
+- `POST /api/dispatches` and `POST /api/evaluations` reply with `run_id` in their body.
+
+**The app to the Copilot** (`backend/copilot_service.py`), each payload with its `operation`:
+
+- `{operation: "start_turn", conversation_id, turn_id, message, token}`
+- `{operation: "answer_confirmation", conversation_id, turn_id, answer, token}`
+- `{operation: "health"}` → `{"healthy": true}`
