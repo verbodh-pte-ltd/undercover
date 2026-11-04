@@ -4,7 +4,8 @@ import { DANA, MARCUS, signIn } from "./sign-in";
 
 test("a handler signs in, sees their name and signs out", async ({ page }) => {
   await signIn(page);
-  await expect(page.getByText("Dana Whitfield")).toBeVisible();
+  // Exactly, as the Copilot's sidebar also says who is signed in.
+  await expect(page.getByText("Dana Whitfield", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Claims queue" }),
   ).toBeVisible();
