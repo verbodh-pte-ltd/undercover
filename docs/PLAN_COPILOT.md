@@ -163,19 +163,19 @@ Done when:
 
 Done when:
 
-- [ ] A sign-in the app refuses ends the turn and its confirmation answer before any model call (the stub
+- [x] A sign-in the app refuses ends the turn and its confirmation answer before any model call (the stub
       model records no calls), with the app's reason on the turn
 - [ ] A stub-model test runs a lookup turn end to end through `TestClient(app)`, recording its steps
-- [ ] The pause answered by a freshly built Copilot on the same saved state pays once and repeats nothing
-- [ ] Cancel leaves the claim unpaid and asks what's next
-- [ ] Marcus asking to sign off gets the reason, with no card
-- [ ] A refusal from the app is passed on; the agent's key is never sent (a test checks the headers)
-- [ ] The token isn't in the checkpoints, config, steps, turns, card, memory events, a failed turn's
+- [x] The pause answered by a freshly built Copilot on the same saved state pays once and repeats nothing
+- [x] Cancel leaves the claim unpaid and asks what's next
+- [x] Marcus asking to sign off gets the reason, with no card
+- [x] A refusal from the app is passed on; the agent's key is never sent (a test checks the headers)
+- [x] The token isn't in the checkpoints, config, steps, turns, card, memory events, a failed turn's
       reason or the captured logs, after a turn, a pause and a failure
-- [ ] `wait_for_run` makes no model call while it waits, and gives up at 15 minutes (with a stand-in clock)
-- [ ] The success criteria from an evaluation's measures, from a failed evaluation, and with nothing paid
+- [x] `wait_for_run` makes no model call while it waits, and gives up at 15 minutes (with a stand-in clock)
+- [x] The success criteria from an evaluation's measures, from a failed evaluation, and with nothing paid
       over the limit yet
-- [ ] The memory lookup and save use the signed-in handler's id as the actor and the conversation's id as
+- [x] The memory lookup and save use the signed-in handler's id as the actor and the conversation's id as
       the session, store only the message and answer, and do nothing without the setting
 - [ ] `npm run check:python` passes; committed
 
@@ -194,9 +194,9 @@ Done when:
 
 Done when:
 
-- [ ] `TestClient` tests: nothing opens at import; a refused sign-in ends the turn before any model call;
+- [x] `TestClient` tests: nothing opens at import; a refused sign-in ends the turn before any model call;
       the ping is busy during a turn and healthy after; `health` answers `{"healthy": true}`
-- [ ] `npm run check:runtime` passes for both files
+- [x] `npm run check:runtime` passes for both files
 - [ ] With `npm run dev` stopped, `uv run --env-file .env --isolated --only-group runtime python -m
       runtime.copilot` serves, and `{"operation": "health"}` answers `{"healthy": true}`
 - [ ] `npm run check` passes; committed
