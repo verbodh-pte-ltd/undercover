@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parents[2]
 CLI_VERSION = "1.0.0-rc.5"
 DB_INSTANCE = "undercover-db"
 REGION = "us-east-1"
-COUNT_CLAIMS = "SELECT status, count(*) FROM undercover.claims WHERE evaluation_id IS NULL GROUP BY status ORDER BY status"
+COUNT_CLAIMS = "SELECT status, count(*) FROM undercover.claims WHERE run_id IS NULL GROUP BY status ORDER BY status"
 
 
 def ready(label, ok, detail):
