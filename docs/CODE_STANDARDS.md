@@ -53,3 +53,32 @@ The agent has six parts:
     that token with each action to the backend, and never reads data from Supabase. It is made on
     first use, through `dashboard/src/auth.ts`, which signs in through Cognito instead when the
     build has `VITE_COGNITO_USER_POOL_ID` and `VITE_COGNITO_CLIENT_ID`.
+
+## The Copilot
+
+The Copilot is a part of its own, with the same rules as the others. Its code lives in the `agent`
+package beside the claim agent's, and reuses the claim agent's code where it fits: OpenRouter, the
+route to the context layer, the shared pool and fetching its credentials from AgentCore Identity.
+
+17. **The graph and its tools** (`agent/copilot.py`): a LangGraph graph written by hand, `remember`,
+    `model`, `tools`, `confirm` and `save`, saved after every step. The handler's sign-in reaches the
+    graph and its tools only in its context, never in the config, the saved state, a step, the memory,
+    an error or a log. Each turn and each answer to a confirmation starts by asking the app who is
+    signed in, and the handler is whoever the app says, never a name from the model or the message.
+    Every figure the Copilot gives, the confirmation card and the success criteria included, is worked
+    out in code or read from the app, never by the model. Only the sign-off pauses, in `confirm`, a
+    node of its own that only reads before its `interrupt()`.
+18. **The Copilot's client** (`agent/copilot_api.py`): the only way to the app, with the handler's
+    sign-in. It never uses `backend()` in `agent/main.py` and never reads `UNDERCOVER_API_KEY`, so it
+    can't send the agent's key, and a test checks it. A refusal from the app goes back to the model as
+    text, with the app's reason.
+19. **The Copilot's AgentCore app** (`agent/copilot_entrypoint.py`): one entrypoint that checks each
+    payload from the app, answers at once and works the turn on a thread registered with the app.
+    Nothing happens when it's imported; it gets ready on its first request. The same app runs on the
+    laptop and, through `runtime/copilot.py`, on AgentCore Runtime.
+20. **The app's side** (`backend/copilot_service.py` and the conversation routes in `backend/main.py`):
+    the only calls from the app to the Copilot. The app owns each turn's state, its steps and a
+    waiting card, which the Copilot writes only through the app's routes, and the sidebar reads only
+    the app. Neither the payload nor the sign-in is ever logged or put in an error.
+21. **The sidebar** (`dashboard/src/Copilot.tsx` and its parts): reads and writes only through the app,
+    with the handler's sign-in, like every other page.
