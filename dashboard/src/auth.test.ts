@@ -105,6 +105,15 @@ it("renews the Cognito ID token when it is about to expire", async () => {
   expect(await auth.token()).toBe("new");
 });
 
+it("renews the Cognito ID token early when asked to", async () => {
+  cognitoReplies(signedIn("old", 600), signedIn("new"));
+  const auth = cognitoAuth(POOL, CLIENT);
+  await auth.signIn(EMAIL, "secret");
+  // Ten minutes left: enough for a read, not for a Copilot message.
+  expect(await auth.token()).toBe("old");
+  expect(await auth.token(20 * 60_000)).toBe("new");
+});
+
 it("signs out of Cognito when the token can't be renewed", async () => {
   cognitoReplies(signedIn("old", 30), {
     __type: "NotAuthorizedException",

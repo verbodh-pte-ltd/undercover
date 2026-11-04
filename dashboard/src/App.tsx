@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getSignedInHandler, type Handler } from "./api";
 import { auth } from "./auth";
 import { ClaimView } from "./ClaimView";
+import { Copilot } from "./Copilot";
 import { Configuration } from "./Configuration";
 import { Improvement } from "./Improvement";
 import { Queue } from "./Queue";
@@ -75,36 +76,39 @@ function SignedIn() {
   }, []);
 
   return (
-    <>
-      <nav className="topbar">
-        <a className="brand" href="#/">
-          UnderCover <span className="tagline">claims desk</span>
-        </a>
-        {NAV.map(([href, text]) => (
-          <a
-            key={href}
-            href={href}
-            aria-current={here(hash) === href ? "page" : undefined}
-          >
-            {text}
+    <div className="shell">
+      <div className="shell-page">
+        <nav className="topbar">
+          <a className="brand" href="#/">
+            UnderCover <span className="tagline">claims desk</span>
           </a>
-        ))}
-        <span className="who">
-          {handler && <span>{handler.name}</span>}
-          <button type="button" className="quiet" onClick={signOut}>
-            Sign out
-          </button>
-        </span>
-      </nav>
-      <main>
-        {refused && (
-          <p className="refusal" role="alert">
-            {refused}
-          </p>
-        )}
-        {handler && <Page hash={hash} handler={handler} />}
-      </main>
-    </>
+          {NAV.map(([href, text]) => (
+            <a
+              key={href}
+              href={href}
+              aria-current={here(hash) === href ? "page" : undefined}
+            >
+              {text}
+            </a>
+          ))}
+          <span className="who">
+            {handler && <span>{handler.name}</span>}
+            <button type="button" className="quiet" onClick={signOut}>
+              Sign out
+            </button>
+          </span>
+        </nav>
+        <main>
+          {refused && (
+            <p className="refusal" role="alert">
+              {refused}
+            </p>
+          )}
+          {handler && <Page hash={hash} handler={handler} />}
+        </main>
+      </div>
+      {handler && <Copilot handler={handler} />}
+    </div>
   );
 }
 

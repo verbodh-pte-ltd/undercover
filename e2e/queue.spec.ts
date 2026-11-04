@@ -30,7 +30,8 @@ test("the Configuration page shows version 1, read only", async ({ page }) => {
   await expect(page.getByRole("row", { name: /^1 Current/ })).toContainText(
     "Not scored yet",
   );
-  await expect(page.getByRole("textbox")).toHaveCount(0);
+  // The page itself; the Copilot's message box sits beside it.
+  await expect(page.getByRole("main").getByRole("textbox")).toHaveCount(0);
 });
 
 // The app creates the run, then asks the agent to work it by its id; the stand-in finishes it.
