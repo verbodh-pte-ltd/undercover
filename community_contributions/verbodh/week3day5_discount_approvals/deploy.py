@@ -87,7 +87,7 @@ def put_credential(name: str, value: str) -> None:
 
 def find_memory() -> str | None:
     for memory in control.list_memories()["memories"]:
-        if memory["id"].startswith(MEMORY):
+        if memory["id"].startswith(MEMORY) and memory["status"] != "DELETING":
             return memory["id"]
     return None
 
