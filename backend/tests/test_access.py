@@ -31,6 +31,7 @@ SHARED = {
     "get_claim_history",
     "list_recipes",
     "get_agent_openapi",
+    "get_run",
 }
 HANDLER = {
     "list_claims",
@@ -52,6 +53,19 @@ HANDLER = {
     "stop_round",
     "approve_proposal",
     "reject_proposal",
+    "find_customers",
+    "get_customer",
+    "get_success_counts",
+    "get_copilot_configuration",
+    "create_conversation",
+    "list_conversations",
+    "get_conversation",
+    "send_message",
+    "answer_confirmation",
+    "record_copilot_step",
+    "pause_turn",
+    "finish_turn",
+    "fail_turn",
 }
 KEY = {
     "calculate_payout",
@@ -67,7 +81,6 @@ KEY = {
     "record_work_time",
     "get_current_configuration",
     "get_run_configuration",
-    "get_run",
     "list_run_claims",
     "finish_run",
     "stop_failed_run",
@@ -168,6 +181,25 @@ def test_the_key_never_stands_in_for_a_handler(method, path, body):
     assert response.status_code == 401
     claim = client.get("/api/claims/CLM-1001", headers=AGENT).json()
     assert claim["signed_off_by"] is None
+
+
+def test_every_handler_route_refuses_a_sign_in_sent_with_the_key():
+    both = {**headers(), **AGENT}
+    for route in routes():
+        if groups(route) != ["handler"]:
+            continue
+        path = re.sub(r"\{[^}]+\}", "1", route.path)
+        for method in route.methods or []:
+            response = client.request(method, path, headers=both)
+            assert response.status_code == 401, route.path
+            assert response.json()["detail"] == (
+                "A request with the agent's API key is the agent's, not a handler's"
+            )
+
+
+def test_a_shared_read_with_the_key_and_a_sign_in_is_the_agents():
+    both = {**headers(), **AGENT}
+    assert client.get("/api/claims/CLM-1001", headers=both).status_code == 200
 
 
 def test_every_route_is_in_exactly_one_group():

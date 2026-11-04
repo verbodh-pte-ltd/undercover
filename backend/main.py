@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import jwt
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -34,11 +34,22 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 from starlette.types import Scope
 
-from backend import agent_service, auth, judge, payout, rule, slot, store
+from backend import (
+    agent_service,
+    auth,
+    copilot_service,
+    judge,
+    payout,
+    rule,
+    slot,
+    store,
+)
 from backend.store import (
     answer_key,
     claims,
     config_versions,
+    conversations,
+    copilot_steps,
     customers,
     documents,
     grades,
@@ -56,6 +67,7 @@ from backend.store import (
     setting_changes,
     settings,
     steps,
+    turns,
     work_times,
 )
 
@@ -241,9 +253,19 @@ def handler_for(token: str, db: Connection) -> RowMapping:
 
 
 def signed_in_handler(
-    token: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())], db: Db
+    request: Request,
+    token: Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer())],
+    db: Db,
 ) -> RowMapping:
-    """The handler whose Supabase access token came with the request, or raise 401."""
+    """The handler whose access token came with the request, or raise 401.
+
+    A request that carries the agent's key is the agent's, whatever else it carries,
+    so the key can never stand in for a handler or be added to one.
+    """
+    if has_key(request):
+        raise HTTPException(
+            401, "A request with the agent's API key is the agent's, not a handler's"
+        )
     return handler_for(token.credentials, db)
 
 
@@ -1069,10 +1091,20 @@ def get_current_run(db: Db) -> dict[str, Any] | None:
     return None if row is None else run_view(db, row)
 
 
-@app.get("/api/runs/{run_id}", operation_id="get_run", dependencies=AGENT)
+# An evaluation's measures, without its claims beside the handlers' decisions.
+MEASURES = ["decision_accuracy", "accuracy", "cost_of_mistakes", "straight_through"]
+MEASURES += ["grade", "judge_cost", "cost_per_claim", "seconds_per_claim"]
+
+
+@app.get("/api/runs/{run_id}", operation_id="get_run", dependencies=SHARED)
 def get_run(run_id: int, db: Db) -> dict[str, Any]:
-    """Get one run: its kind, n, status and claims."""
-    return run_view(db, run_row(db, run_id))
+    """Get one run: its kind, status, claims, summary and an evaluation's measures."""
+    row = run_row(db, run_id)
+    measures = None
+    if row["kind"] == "evaluation":
+        found = evaluation_view(db, row)
+        measures = {m: found[m] for m in MEASURES}
+    return {**run_view(db, row), "measures": measures}
 
 
 @app.get(
@@ -2235,6 +2267,400 @@ def apply_verdict(round_id: int, db: Db) -> dict[str, Any]:
     )
     db.commit()
     return round_view(db, round_row(db, round_id))
+
+
+@app.get("/api/customers", operation_id="find_customers", dependencies=HANDLER)
+def find_customers(
+    name: Annotated[str, Query(min_length=1)], db: Db
+) -> list[dict[str, Any]]:
+    """Find the customers whose name contains the text given, in any case."""
+    wanted = name.strip().casefold()
+    found = [json.loads(d) for d in db.scalars(select(customers.c.data))]
+    return [
+        {k: c[k] for k in ["customer_id", "name", "email"]}
+        for c in found
+        if wanted in c["name"].casefold()
+    ]
+
+
+@app.get(
+    "/api/customers/{customer_id}", operation_id="get_customer", dependencies=HANDLER
+)
+def get_customer(customer_id: str, db: Db) -> dict[str, Any]:
+    """Get a customer: who they are, their policies, earlier claims and queue claims."""
+    customer = record(db, "customers", customer_id)
+    held = [json.loads(d) for d in db.scalars(select(policies.c.data))]
+    earlier = [
+        {
+            "claim_id": c["claim_id"],
+            "status": c["outcome"],
+            "submitted_at": c["filed_on"],
+            "payout": c["amount_paid"],
+        }
+        for c in customer["previous_claims"]
+    ]
+    queue = db.execute(
+        select(claims).where(claims.c.run_id.is_(None)).order_by(claims.c.position)
+    ).mappings()
+    in_queue = [
+        {
+            "claim_id": r["claim_id"],
+            "status": r["status"],
+            "submitted_at": json.loads(r["data"])["submitted_on"],
+            "payout": r["payout"],
+        }
+        for r in queue
+        if json.loads(r["data"])["customer_id"] == customer_id
+    ]
+    return {
+        **{k: customer[k] for k in ["customer_id", "name", "email"]},
+        "policies": [p for p in held if p["customer_id"] == customer_id],
+        "claims": earlier + in_queue,
+    }
+
+
+@app.get("/api/success-counts", operation_id="get_success_counts", dependencies=HANDLER)
+def get_success_counts(db: Db) -> dict[str, Any]:
+    """Count the queue's claims paid over the approval limit, and those signed off."""
+    limit = setting(db, "approval_limit")
+    over = select(func.count()).where(
+        claims.c.run_id.is_(None), claims.c.paid_amount > limit
+    )
+    return {
+        "approval_limit": limit,
+        "paid_over_limit": db.scalar(over) or 0,
+        "signed_off": db.scalar(over.where(claims.c.signed_off_by.is_not(None))) or 0,
+    }
+
+
+# The Copilot's conversations. The app keeps each turn's state, its steps and its card;
+# the Copilot reports them with the handler's sign-in, and the sidebar reads only these.
+COPILOT_MODEL = "openai/gpt-6-luna"
+COPILOT_EFFORT = "low"
+NEW_TITLE = "New conversation"
+TITLE_LENGTH = 80
+# A turn working this long after it started, or after its confirmation was answered,
+# is shown as stopped.
+STOPPED_AFTER = timedelta(minutes=20)
+
+
+class Message(BaseModel):
+    message: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
+    ]
+
+
+class ConfirmationAnswer(BaseModel):
+    answer: Literal["sign_off", "cancel"]
+
+
+class StepDetail(BaseModel):
+    asked: str | None
+    answer: str | None
+    file: str | None
+    owner: str | None
+
+
+class CopilotStep(BaseModel):
+    key: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+    kind: Literal["claims", "customers", "context", "work", "memory", "action"]
+    tool: str = Field(min_length=1)
+    input: str
+    state: Literal["working", "done", "refused", "failed"]
+    seconds: float | None = Field(ge=0)
+    detail: StepDetail | None
+
+
+class Pause(BaseModel):
+    claim_id: str
+
+
+class TurnEnd(BaseModel):
+    answer: str = Field(min_length=1)
+    model_calls: int = Field(ge=0)
+    cost: float = Field(ge=0)
+    seconds: float = Field(ge=0)
+
+
+class TurnFailure(BaseModel):
+    error: str = Field(min_length=1)
+    model_calls: int = Field(ge=0)
+    cost: float = Field(ge=0)
+    seconds: float = Field(ge=0)
+
+
+def sign_in(request: Request) -> str:
+    """The handler's token from the request, which signed_in_handler has checked."""
+    return request.headers["Authorization"].partition(" ")[2]
+
+
+def shown_state(row: RowMapping) -> str:
+    """A turn's state, with one working 20 minutes since it started or was answered
+    shown as stopped; a waiting turn isn't working, so it never is."""
+    since = datetime.fromisoformat(row["answered_at"] or row["started_at"])
+    if row["state"] == "working" and datetime.now(UTC) - since >= STOPPED_AFTER:
+        return "stopped"
+    return row["state"]
+
+
+def step_view(row: RowMapping) -> dict[str, Any]:
+    """A step of a turn, as the sidebar shows it."""
+    keep = ["key", "kind", "tool", "input", "state", "seconds", "started_at"]
+    return {**{k: row[k] for k in keep}, "detail": loaded(row["detail"])}
+
+
+def turn_view(db: Connection, turn_id: int) -> dict[str, Any]:
+    """A turn with its steps, its card and the state it is shown in."""
+    row = db.execute(select(turns).where(turns.c.id == turn_id)).mappings().one()
+    query = select(copilot_steps).where(copilot_steps.c.turn_id == turn_id)
+    found = db.execute(query.order_by(copilot_steps.c.id)).mappings()
+    keep = ["id", "message", "answer", "model_calls", "cost", "seconds", "error"]
+    keep += ["started_at", "answered_at"]
+    return {
+        **{k: row[k] for k in keep},
+        "state": shown_state(row),
+        "card": loaded(row["card"]),
+        "steps": [step_view(s) for s in found],
+    }
+
+
+def conversation_view(row: RowMapping) -> dict[str, Any]:
+    """A conversation as the sidebar lists it."""
+    return {k: row[k] for k in ["id", "title", "created_at"]}
+
+
+def own_conversation(
+    db: Connection, conversation_id: str, handler: RowMapping, lock: bool = False
+) -> RowMapping:
+    """The handler's own conversation, or 404, locked for the transaction if asked."""
+    query = select(conversations).where(
+        conversations.c.id == conversation_id,
+        conversations.c.handler_id == handler["handler_id"],
+    )
+    row = db.execute(query.with_for_update() if lock else query).mappings().first()
+    if row is None:
+        raise HTTPException(404, f"Conversation {conversation_id} not found")
+    return row
+
+
+def latest_turn(db: Connection, conversation_id: str) -> RowMapping | None:
+    """The conversation's latest turn, or None before its first message."""
+    query = select(turns).where(turns.c.conversation_id == conversation_id)
+    return db.execute(query.order_by(turns.c.id.desc()).limit(1)).mappings().first()
+
+
+def end_turn(db: Connection, turn_id: int, **values: Any) -> None:
+    """Change a turn's columns and commit."""
+    db.execute(update(turns).where(turns.c.id == turn_id).values(**values))
+    db.commit()
+
+
+def hand_over(db: Connection, turn_id: int, ask_copilot: Callable[[], None]) -> None:
+    """Ask the Copilot to take the turn; one that didn't take it fails the turn.
+
+    When nobody knows, as after a timeout, the turn stays working, and shows as
+    stopped after 20 minutes if the Copilot never reports on it.
+    """
+    try:
+        ask_copilot()
+    except copilot_service.NotTaken as exc:
+        end_turn(db, turn_id, state="failed", error=str(exc.detail))
+    except HTTPException:
+        pass
+
+
+@app.post("/api/conversations", operation_id="create_conversation")
+def create_conversation(handler: Handler, db: Db) -> dict[str, Any]:
+    """Start a new conversation with the Copilot for the signed-in handler."""
+    values = {
+        "id": str(uuid.uuid4()),
+        "handler_id": handler["handler_id"],
+        "title": NEW_TITLE,
+        "created_at": datetime.now(UTC).isoformat(timespec="microseconds"),
+    }
+    db.execute(insert(conversations).values(**values))
+    db.commit()
+    return conversation_view(own_conversation(db, values["id"], handler))
+
+
+@app.get("/api/conversations", operation_id="list_conversations")
+def list_conversations(handler: Handler, db: Db) -> list[dict[str, Any]]:
+    """List the signed-in handler's conversations with the Copilot, newest first."""
+    query = select(conversations).where(
+        conversations.c.handler_id == handler["handler_id"]
+    )
+    rows = db.execute(query.order_by(conversations.c.created_at.desc())).mappings()
+    return [conversation_view(r) for r in rows]
+
+
+@app.get("/api/conversations/{conversation_id}", operation_id="get_conversation")
+def get_conversation(conversation_id: str, handler: Handler, db: Db) -> dict[str, Any]:
+    """Get one of the handler's conversations with its turns and their steps."""
+    row = own_conversation(db, conversation_id, handler)
+    query = select(turns.c.id).where(turns.c.conversation_id == conversation_id)
+    turn_ids = db.scalars(query.order_by(turns.c.id)).all()
+    return {**conversation_view(row), "turns": [turn_view(db, t) for t in turn_ids]}
+
+
+@app.post("/api/conversations/{conversation_id}/messages", operation_id="send_message")
+def send_message(
+    conversation_id: str, sent: Message, handler: Handler, request: Request, db: Db
+) -> dict[str, Any]:
+    """Send the Copilot a message, once the conversation's last turn has ended."""
+    own_conversation(db, conversation_id, handler, lock=True)
+    latest = latest_turn(db, conversation_id)
+    if latest is None:
+        query = update(conversations).where(conversations.c.id == conversation_id)
+        db.execute(query.values(title=sent.message[:TITLE_LENGTH]))
+    elif shown_state(latest) == "working":
+        raise HTTPException(409, "The Copilot is still working on your last message")
+    elif latest["state"] == "waiting_for_confirmation":
+        raise HTTPException(
+            409, "Answer the confirmation first: sign off and pay, or cancel"
+        )
+    new_turn = insert(turns).values(
+        conversation_id=conversation_id,
+        message=sent.message,
+        state="working",
+        model_calls=0,
+        cost=0.0,
+        started_at=store.now(),
+    )
+    turn_id = db.execute(new_turn.returning(turns.c.id)).scalar_one()
+    db.commit()
+    hand_over(
+        db,
+        turn_id,
+        lambda: copilot_service.start_turn(
+            conversation_id, turn_id, sent.message, sign_in(request)
+        ),
+    )
+    return turn_view(db, turn_id)
+
+
+@app.post(
+    "/api/conversations/{conversation_id}/confirmation",
+    operation_id="answer_confirmation",
+)
+def answer_confirmation(
+    conversation_id: str,
+    answered: ConfirmationAnswer,
+    handler: Handler,
+    request: Request,
+    db: Db,
+) -> dict[str, Any]:
+    """Answer the confirmation waiting in a conversation: sign off, or cancel."""
+    own_conversation(db, conversation_id, handler, lock=True)
+    latest = latest_turn(db, conversation_id)
+    if latest is None or latest["state"] != "waiting_for_confirmation":
+        raise HTTPException(409, "Nothing in this conversation waits for an answer")
+    turn_id = latest["id"]
+    end_turn(db, turn_id, state="working", answered_at=store.now())
+    hand_over(
+        db,
+        turn_id,
+        lambda: copilot_service.answer_confirmation(
+            conversation_id, turn_id, answered.answer, sign_in(request)
+        ),
+    )
+    return turn_view(db, turn_id)
+
+
+def own_working_turn(db: Connection, turn_id: int, handler: RowMapping) -> RowMapping:
+    """The handler's own turn, locked, or 404; or 409 unless it is working."""
+    query = select(turns).where(turns.c.id == turn_id)
+    row = db.execute(query.with_for_update()).mappings().first()
+    if row is None:
+        raise HTTPException(404, f"Turn {turn_id} not found")
+    own = select(conversations.c.id).where(
+        conversations.c.id == row["conversation_id"],
+        conversations.c.handler_id == handler["handler_id"],
+    )
+    if db.scalar(own) is None:
+        raise HTTPException(404, f"Turn {turn_id} not found")
+    state = shown_state(row)
+    if state != "working":
+        raise HTTPException(409, f"Turn {turn_id} is {state}, not working")
+    return row
+
+
+@app.post("/api/copilot/turns/{turn_id}/steps", operation_id="record_copilot_step")
+def record_copilot_step(
+    turn_id: int, step: CopilotStep, handler: Handler, db: Db
+) -> dict[str, Any]:
+    """Record a step of the Copilot's working turn; the same key again updates it."""
+    own_working_turn(db, turn_id, handler)
+    values = {
+        **step.model_dump(exclude={"detail"}),
+        "detail": None if step.detail is None else step.detail.model_dump_json(),
+    }
+    mine = (copilot_steps.c.turn_id == turn_id, copilot_steps.c.key == step.key)
+    changed = db.execute(update(copilot_steps).where(*mine).values(**values))
+    if not changed.rowcount:
+        db.execute(
+            insert(copilot_steps).values(
+                turn_id=turn_id, started_at=store.now(), **values
+            )
+        )
+    db.commit()
+    return step_view(db.execute(select(copilot_steps).where(*mine)).mappings().one())
+
+
+@app.post("/api/copilot/turns/{turn_id}/pause", operation_id="pause_turn")
+def pause_turn(turn_id: int, paused: Pause, handler: Handler, db: Db) -> dict[str, Any]:
+    """Pause the Copilot's turn for the handler to confirm a sign-off, with its card."""
+    own_working_turn(db, turn_id, handler)
+    if not handler["can_approve_over_limit"]:
+        raise HTTPException(
+            403, f"{handler['name']} can't sign off payouts over the approval limit"
+        )
+    claim = claim_row(db, paused.claim_id)
+    if claim["run_id"] is not None or claim["status"] != "waiting_for_sign_off":
+        raise HTTPException(409, f"Claim {paused.claim_id} is not waiting for sign-off")
+    # Filled from the records, never from what the Copilot sends.
+    card = {
+        "claim_id": claim["claim_id"],
+        "customer_name": customer_name(db, json.loads(claim["data"])["customer_id"]),
+        "amount": claim["payout"],
+        "reason": claim["reason"],
+    }
+    end_turn(db, turn_id, state="waiting_for_confirmation", card=json.dumps(card))
+    return turn_view(db, turn_id)
+
+
+@app.post("/api/copilot/turns/{turn_id}/finish", operation_id="finish_turn")
+def finish_turn(
+    turn_id: int, ended: TurnEnd, handler: Handler, db: Db
+) -> dict[str, Any]:
+    """Finish the Copilot's working turn with its answer, model calls, cost and time."""
+    own_working_turn(db, turn_id, handler)
+    end_turn(db, turn_id, state="done", **ended.model_dump())
+    return turn_view(db, turn_id)
+
+
+@app.post("/api/copilot/turns/{turn_id}/fail", operation_id="fail_turn")
+def fail_turn(
+    turn_id: int, failed: TurnFailure, handler: Handler, db: Db
+) -> dict[str, Any]:
+    """Mark the Copilot's working turn failed, with why, its model calls and cost."""
+    own_working_turn(db, turn_id, handler)
+    end_turn(db, turn_id, state="failed", **failed.model_dump())
+    return turn_view(db, turn_id)
+
+
+@app.get(
+    "/api/copilot/configuration",
+    operation_id="get_copilot_configuration",
+    dependencies=HANDLER,
+)
+def get_copilot_configuration() -> dict[str, str]:
+    """Get the Copilot's model, its reasoning effort and its instructions."""
+    free = os.getenv("MODEL_NAME")
+    return {
+        "model": free or COPILOT_MODEL,
+        "reasoning_effort": "default" if free else COPILOT_EFFORT,
+        "instructions": (store.INSTRUCTIONS / "copilot.md").read_text(encoding="utf-8"),
+    }
 
 
 DASHBOARD = Path(__file__).parent.parent / "dashboard" / "dist"

@@ -279,8 +279,8 @@ def test_the_backend_reads_only_these_environment_variables():
         found |= set(re.findall(r"environ\[['\"](\w+)['\"]\]", text))
     # The ones a Lambda function sets (the sign-in's either Supabase's URL or the three
     # AUTH_ settings for Cognito), Lambda's own name, and the rest, each with a default
-    # or needed only by work that can't start on Lambda (the agent's service and the
-    # judge, which an evaluation needs).
+    # or needed only by work that can't start on Lambda (the agent's service, the
+    # Copilot's, and the judge, which an evaluation needs).
     assert found == {
         "DATABASE_URL",
         "VITE_SUPABASE_URL",
@@ -292,6 +292,8 @@ def test_the_backend_reads_only_these_environment_variables():
         "UNDERCOVER_DB",
         "UNDERCOVER_AGENT",
         "UNDERCOVER_AGENT_RUNTIME",
+        "UNDERCOVER_COPILOT",
+        "UNDERCOVER_COPILOT_RUNTIME",
         "MODEL_NAME",
         "JUDGE_URL",
         "OPENROUTER_API_KEY",
