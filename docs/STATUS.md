@@ -254,6 +254,46 @@ What changed for it, in the look only:
   "Jun 27, 2026" and folds each tool result to one line that opens on a click; links in dark mode are a
   lighter Cerulean, 5.6:1 on the page.
 
+## The Copilot
+
+The UnderCover Copilot (`docs/PLAN_COPILOT.md`, from `docs/COPILOT.md`) is built, phases 1 to 5; phase 6,
+the live checks, is pending. Nothing is deployed. After pulling this, run `npm run seed` once: there are
+new `conversations`, `turns` and `copilot_steps` tables.
+
+- **In the app:** a handler's conversations, their turns (working, waiting for a confirmation, done,
+  failed, or shown as stopped after 20 minutes working) and their steps, one turn at a time, each
+  conversation its handler's own. The Copilot's routes take the handler's sign-in, never the key, and the
+  app fills the confirmation card from its records. New reads: customers by name and by id, a run by id,
+  the counts for the success criteria, and the Copilot's model and instructions. A request that carries
+  the agent's key is refused as a handler's, even with a sign-in. `backend/copilot_service.py` sends each
+  turn to the Copilot on the laptop or on Runtime, in the conversation's session.
+- **The Copilot** (`agent/copilot.py`, `agent/copilot_api.py`): the graph with its 23 tools, the gate
+  that asks the app who is signed in before anything else, the pause before a sign-off, the wait for a
+  run in code, the success criteria worked out in code, and the handler's memory when
+  `UNDERCOVER_COPILOT_MEMORY_ID` is set.
+- **Its AgentCore app** (`agent/copilot_entrypoint.py`), served on :8081 by `npm run dev` and started on
+  Runtime by `runtime/copilot.py`; `agentcore/agentcore.json` has the second runtime, `copilot`, with
+  `runtime/copilot_policy.json`.
+- **The sidebar** (`dashboard/src/Copilot.tsx`) on every signed-in page, with its step cards, the
+  confirmation card, earlier conversations and the sign-in renewed before each message.
+- **The end-to-end tests** drive the sidebar against a stand-in Copilot (`e2e/copilot-stand-in.mjs`).
+
+To use it, run `npm run dev` and open the sidebar on any page. To serve it the way Runtime starts it,
+with `npm run dev` stopped:
+
+```bash
+uv run --env-file .env --isolated --only-group runtime python -m runtime.copilot   # the Copilot on :8080
+```
+
+Posting `{"operation": "health"}` to `http://127.0.0.1:8080/invocations` should then answer
+`{"healthy": true}`; this is one of the pending live checks.
+
+Pending (phase 6): the five handover questions as Dana Whitfield on the default model, the direct route
+and memory off, with the last answer's figures checked against the Scoreboard and the claims' pages; the
+same conversation after restarting `npm run dev`; Marcus Oyelaran's sign-off declined; the sidebar in
+light and dark mode; and what the runs spent. The Copilot's memory isn't checked here: the deployment
+notebook, `labs/week3/week3day5_lab1.ipynb`, checks it on AWS.
+
 ## The parts
 
 - `backend/`: FastAPI with SQLAlchemy Core. With `DATABASE_URL` set (as `npm run dev` does from `.env`)
@@ -541,7 +581,7 @@ What changed for it, in the look only:
 ## Run it
 
 ```bash
-npm run dev      # backend on :8000, dashboard on :5173, the agent on :8080, context layer on :8006
+npm run dev      # backend on :8000, dashboard on :5173, the agent on :8080, the Copilot on :8081, context layer on :8006
 ```
 
 Lab 1's `agentcore dev` also serves on port 8080, so stop it before `npm run dev`. To serve the agent
@@ -595,7 +635,7 @@ npm run check    # Python checks, the server, context and runtime group checks, 
 
 `npm run check:server` imports `backend.main` with only the `server` dependency group, in a temporary
 environment of its own, so `.venv` is left as it is. `npm run check:runtime` does the same for
-`runtime.main` with only the `runtime` group, which is what the deployment installs on Runtime.
+`runtime.main` and `runtime.copilot` with only the `runtime` group, which is what the deployment installs on Runtime.
 
 `npm run check` needs no `.env`: the tests run on SQLite, with no Postgres, Langfuse or OpenRouter.
 

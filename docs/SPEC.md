@@ -49,6 +49,21 @@ work, its model calls count in the claim's cost, and the improver can't change i
 CLM-1901, a claim with such an instruction in its story, is seeded at the end of the queue, without its
 handler's decision, so it is in neither evaluation set.
 
+## The success criteria we agreed
+
+When we started the pilot we agreed three success criteria:
+
+1. **Straight through:** at least 70% of claims handled straight through on the whole held-out set,
+   measured by the straight-through share our evaluations already record.
+2. **Accuracy:** at least as accurate as we agreed, with the accuracy our evaluations already record on
+   the whole held-out set at or above our accuracy objective in Settings.
+3. **Over the limit:** every payout over the approval limit approved by a person. Every claim in our
+   queue paid more than the approval limit has a handler's sign-off on its payment. When none has been
+   paid over the limit yet, this one is met.
+
+The Copilot checks them when asked (below). Every figure comes from our records, worked out in code,
+never by a model.
+
 ## Handlers sign in
 
 Our handlers sign in to the dashboard with their email address and password. There's no sign-up. Every
@@ -63,7 +78,8 @@ The agent's side identifies itself to the backend with an API key. Every route o
 such as recording a decision, a payment, its steps and its costs, refuses a request without the key.
 The reads both use, a claim, a policy, a claim history, the recipes and the agent's own API document,
 take the key or a signed-in handler, and everything else the dashboard calls needs a signed-in handler:
-the key never stands in for one. Only the health check is open.
+the key never stands in for one, and a request that carries the key is the agent's, whatever else it
+carries. Only the health check is open.
 
 ## What the agent works from
 
@@ -141,6 +157,49 @@ If the agent is stopped partway through a claim, it carries on with that claim f
 next time it runs. A claim that fails with an error goes back in the queue and starts afresh. No claim
 is ever decided or paid twice.
 
+## The Copilot
+
+The UnderCover Copilot is an agent for our handlers, in a sidebar on the right of every signed-in page.
+A handler asks in plain English and gets the answer, with the work done when they ask for it. It shows
+each step as it takes it, as a card, and its answer once the turn is done, with the turn's model calls,
+their cost and the time it took.
+
+- **What it looks up:** the queue, a claim in full with its decision, its payout and any decision sent
+  back, the agent's steps on a claim, policies, customers by name or by id, the latest dispatch, the
+  evaluations with their measures, our settings, and the context layer's seven lookups, on the same
+  route the claim agent takes. It never sees our handlers' decisions on the labeled sets.
+- **What it does:** starts a dispatch, starts an evaluation on either labeled set, whole or its five
+  tiny claims, sends a held decision back with a note, and signs off a held payout. For anything else,
+  such as changing a setting or starting a round, it says it can't do that yet and where on the
+  dashboard to do it.
+- **It acts as the handler who asked.** Every call it makes to our app carries that handler's sign-in,
+  so it can see and do exactly what they can, and our records name them. Each turn starts by asking our
+  app who is signed in, and ends there if our app refuses. It never sends the agent's key. The sign-in
+  is never saved: not in the conversation, its steps, the memory or any log.
+- **It asks before it pays.** Before a sign-off it checks that the handler may sign off that claim, then
+  pauses and shows a card with the claim, the customer, the amount and the agent's reason, all read from
+  our records. Nothing is paid until the handler presses Sign off and pay. The pause is saved, so they
+  can answer it later. After Cancel it says it hasn't signed off. Only the sign-off pauses.
+- **It waits in code.** When a handler starts a dispatch or an evaluation and wants to know how it went,
+  it checks our app every few seconds, without calling the model, for up to 15 minutes, then says the
+  work is still going and where to follow it. A refusal to start, such as a dispatch already running,
+  is passed on.
+- **Conversations are kept.** Each conversation belongs to the handler who started it; nobody else can
+  see it or carry it on. Its state is saved in our database after every step, and its turns and steps in
+  our app, so a handler can pick up any earlier conversation, a waiting card included. One turn at a
+  time: a failed turn ends with a short message, and a turn still working after 20 minutes shows as
+  stopped. Either way the handler can carry on.
+- **It remembers each handler** in a memory of its own, apart from the claim agent's, kept for each
+  handler: their preferences and facts they tell it. It looks up what bears on each message, shown as a
+  card, and after each turn saves only the message and its answer. Notes take about a minute and a half
+  to form, so they show in the next conversation. The memory is on only when it is set up.
+- **The success criteria:** asked "Are we meeting the success criteria we agreed?", it starts an
+  evaluation of the whole held-out set, waits for it, and answers with a small table of each criterion,
+  its target, its figure and whether it's met, and one line on whether all three are. The first two
+  come from that evaluation's measures and Settings; for the third our app counts the claims paid over
+  the limit and how many carry a sign-off. If the evaluation fails, stops or is still going after 15
+  minutes, it gives no figures for the first two, and still reports the third.
+
 ## What the team needs to see
 
 - The queue, with where each claim stands: waiting, in progress, waiting for sign-off or decided.
@@ -162,6 +221,7 @@ is ever decided or paid twice.
   approved or rejected what and what each round cost, a chart of each version's held-out accuracy and
   grade, and the recipe's versions.
 - The settings, with who last changed each.
+- The Copilot on every page, with the handler's earlier conversations, newest first.
 
 ## Rules
 
