@@ -165,7 +165,7 @@ Done when:
 
 - [x] A sign-in the app refuses ends the turn and its confirmation answer before any model call (the stub
       model records no calls), with the app's reason on the turn
-- [ ] A stub-model test runs a lookup turn end to end through `TestClient(app)`, recording its steps
+- [x] A stub-model test runs a lookup turn end to end through `TestClient(app)`, recording its steps
 - [x] The pause answered by a freshly built Copilot on the same saved state pays once and repeats nothing
 - [x] Cancel leaves the claim unpaid and asks what's next
 - [x] Marcus asking to sign off gets the reason, with no card
@@ -177,7 +177,7 @@ Done when:
       over the limit yet
 - [x] The memory lookup and save use the signed-in handler's id as the actor and the conversation's id as
       the session, store only the message and answer, and do nothing without the setting
-- [ ] `npm run check:python` passes; committed
+- [x] `npm run check:python` passes; committed
 
 ## Phase 3: the Copilot as an AgentCore app
 
@@ -197,9 +197,10 @@ Done when:
 - [x] `TestClient` tests: nothing opens at import; a refused sign-in ends the turn before any model call;
       the ping is busy during a turn and healthy after; `health` answers `{"healthy": true}`
 - [x] `npm run check:runtime` passes for both files
-- [ ] With `npm run dev` stopped, `uv run --env-file .env --isolated --only-group runtime python -m
+- [x] With `npm run dev` stopped, `uv run --env-file .env --isolated --only-group runtime python -m
       runtime.copilot` serves, and `{"operation": "health"}` answers `{"healthy": true}`
-- [ ] `npm run check` passes; committed
+- [ ] `npm run check` passes; committed (its parts passed separately: `check:python` 544 tests, `check:ts`, and all 20
+      end-to-end tests; the whole command in one run is still to do)
 
 ## Phase 4: the sidebar
 
@@ -222,7 +223,7 @@ Done when:
 
 - [x] Vitest covers sending, the cards' three states, opening a card, the confirmation's two buttons, the
       blocked message box, collapsing and remembering, polling only while working, and the renewal
-- [ ] The existing end-to-end tests pass with the sidebar open
+- [x] The existing end-to-end tests pass with the sidebar open
 - [x] `npm run check:ts` passes; committed
 
 ## Phase 5: the end-to-end tests and the documents
@@ -238,7 +239,7 @@ Done when:
 Done when:
 
 - [ ] `npm run check` is green with `.env` moved out of the way
-- [ ] The documents describe the product as it now is; committed
+- [x] The documents describe the product as it now is; committed
 
 ## Phase 6: the live checks
 
