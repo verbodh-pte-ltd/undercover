@@ -4,12 +4,12 @@ import { API_KEY } from "./e2e/agent";
 // The end-to-end tests run their own backend and dashboard on their own ports and database,
 // so they never change the data behind `npm run dev`. A stand-in on port 8003 takes the
 // payloads meant for the agent's AgentCore app, so they never reach the agent that `npm run dev` starts, one on port 8004
-// takes Supabase Auth's, one on port 8005 takes the judge's, and one on port 8006 plays the
+// takes Supabase Auth's, one on port 8005 takes the judge's, and one on port 8007 plays the
 // Copilot, so no turn reaches the Copilot on port 8081 that a developer may be running.
 const AUTH = "http://127.0.0.1:8004";
 const JUDGE = "http://127.0.0.1:8005";
 const BACKEND = "http://127.0.0.1:8001";
-const COPILOT = "http://127.0.0.1:8006";
+const COPILOT = "http://127.0.0.1:8007";
 
 export default defineConfig({
   testDir: "e2e",

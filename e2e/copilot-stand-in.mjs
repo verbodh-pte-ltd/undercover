@@ -1,4 +1,4 @@
-// A stand-in for the Copilot's AgentCore app in the end-to-end tests, on port 8006. It takes each
+// A stand-in for the Copilot's AgentCore app in the end-to-end tests, on port 8007. It takes each
 // payload the backend posts to /invocations, answers at once that it took the turn, then plays a
 // scripted turn through the app's Copilot routes at UNDERCOVER_API with the handler's sign-in from
 // the payload, as the Copilot does. It never calls a model. GET /ping answers as an AgentCore app
@@ -227,4 +227,4 @@ createServer((request, response) => {
     )
       play(payload);
   });
-}).listen(8006, "127.0.0.1");
+}).listen(8007, "127.0.0.1");
